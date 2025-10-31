@@ -17,7 +17,7 @@ A userscript that adds an enhanced sidebar to OpenFront, providing a wide range 
 
 ## 🚀 Installation
 1. Install a userscript manager like **Tampermonkey** or **Violentmonkey**.
-2. [Click](https://raw.githubusercontent.com/DataFront/main/dist/datafront.user.js) to open the userscript in the extension.
+2. [Click](https://github.com/Ezbaze/DataFront/raw/refs/heads/main/dist/datafront.user.js) to open the userscript in the extension.
 3. Navigate to [OpenFront](https://openfront.app) (You might have to refresh the page.)
 
 ## 📝 License

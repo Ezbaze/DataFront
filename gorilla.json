@@ -7,6 +7,6 @@
   "match": ["https://*.openfront.io/*", "https://openfront.io/*"],
   "grant": [],
   "license": "MIT",
-  "updateURL": "https://raw.githubusercontent.com/DataFront/main/datafront.user.js",
-  "downloadURL": "https://raw.githubusercontent.com/DataFront/main/datafront.user.js"
+  "updateURL": "https://github.com/Ezbaze/DataFront/raw/refs/heads/main/dist/datafront.user.js",
+  "downloadURL": "https://github.com/Ezbaze/DataFront/raw/refs/heads/main/dist/datafront.user.js"
 }
