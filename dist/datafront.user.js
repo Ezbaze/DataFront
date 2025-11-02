@@ -1,6 +1,6 @@
 
 // ==UserScript==
-// @name			OpenFront Strategic Sidebar
+// @name			DataFront
 // @namespace		https://openfront.io/
 // @version			0.1.0
 // @description		Adds a resizable, splittable strategic sidebar for OpenFront players, clans, and teams.
