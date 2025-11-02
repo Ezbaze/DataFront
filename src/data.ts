@@ -9,6 +9,8 @@ import {
   MissileFlightSummary,
   MissileSiloSummary,
   MissileTrajectoryOverlay,
+  TradeRouteOverlay,
+  TradeRoutePortSummary,
   TransformHandlerLike,
   TroopDonationOverlay,
   TroopDonationOverlayPlayerSnapshot,
@@ -59,6 +61,7 @@ const HISTORICAL_MISSILE_OVERLAY_ID = "historical-missiles";
 const DONATION_DEDUP_TICK_WINDOW = 5;
 const TROOP_DONATION_OVERLAY_ID = "troop-donations";
 const GOLD_DONATION_OVERLAY_ID = "gold-donations";
+const TRADE_ROUTE_OVERLAY_ID = "trade-routes";
 
 // These constants mirror the values defined in src/core/game/GameUpdates.ts and Game.ts.
 const GAME_UPDATE_TYPE_DISPLAY_EVENT = 3;
@@ -326,6 +329,7 @@ interface PlayerViewLike {
 
 interface GameConfigLike {
   allianceDuration(): number;
+  tradeShipGold?(distance: number, numPorts: number): number | bigint;
 }
 
 interface UnitViewLike {
@@ -357,6 +361,8 @@ interface GameViewLike {
   ownerID(ref: number): number;
   neighbors(ref: number): number[];
   isWater(ref: number): boolean;
+  cost?(ref: number): number;
+  manhattanDist?(a: number, b: number): number;
   forEachTile(fn: (ref: number) => void): void;
   myPlayer?(): PlayerViewLike | null;
   updatesSinceLastTick?(): GameUpdatesLike;
@@ -427,6 +433,7 @@ export class DataStore {
   private historicalMissileOverlay?: HistoricalMissileTrajectoryOverlay;
   private troopDonationOverlay?: TroopDonationOverlay;
   private goldDonationOverlay?: GoldDonationOverlay;
+  private tradeRouteOverlay?: TradeRouteOverlay;
   private displayEventPollingHandle: number | undefined;
   private displayEventPollingActive = false;
   private displayEventPollingLastTimestamp = 0;
@@ -464,6 +471,13 @@ export class DataStore {
         label: "Gold donations",
         description:
           "Shows temporary arrows and labels across the map when players send gold to each other.",
+        enabled: false,
+      },
+      {
+        id: TRADE_ROUTE_OVERLAY_ID,
+        label: "Trade ship routes",
+        description:
+          "Displays projected trade ship paths, distances, and base gold when placing a new port.",
         enabled: false,
       },
     ];
@@ -552,6 +566,18 @@ export class DataStore {
         resolveTransform: () => this.resolveTransformHandler(),
       });
     return this.goldDonationOverlay;
+  }
+
+  private ensureTradeRouteOverlay(): TradeRouteOverlay {
+    this.tradeRouteOverlay =
+      this.tradeRouteOverlay ??
+      new TradeRouteOverlay({
+        resolveTransform: () => this.resolveTransformHandler(),
+        resolveUiState: () => this.resolveUiState(),
+        resolveGame: () => this.game,
+        resolveLocalPlayerSmallId: () => this.resolveLocalPlayerSmallId(),
+      });
+    return this.tradeRouteOverlay;
   }
 
   private collectMissileSiloPositions(): MissileSiloSummary[] {
@@ -808,6 +834,89 @@ export class DataStore {
     return flights;
   }
 
+  private collectTradeRoutePorts(
+    players: PlayerViewLike[],
+    recordLookup: Map<string, PlayerRecord>,
+  ): TradeRoutePortSummary[] {
+    if (!this.game) {
+      return [];
+    }
+
+    let units: UnitViewLike[];
+    try {
+      units = this.game.units("Port");
+    } catch (error) {
+      console.warn("Failed to enumerate ports for trade overlay", error);
+      return [];
+    }
+
+    const localPlayer = this.resolveLocalPlayer();
+    const localId = localPlayer ? this.safePlayerId(localPlayer) : null;
+
+    const eligibility = new Map<
+      string,
+      { includeFromLocal: boolean; includeToLocal: boolean }
+    >();
+    for (const player of players) {
+      const ownerId = this.safePlayerId(player);
+      if (!ownerId) {
+        continue;
+      }
+      const status = this.determineTradeStatus(localPlayer, player);
+      eligibility.set(ownerId, {
+        includeFromLocal: !status.stoppedBySelf,
+        includeToLocal: !status.stoppedByOther,
+      });
+    }
+
+    const ports: TradeRoutePortSummary[] = [];
+    for (const unit of units) {
+      let owner: PlayerViewLike;
+      try {
+        owner = unit.owner();
+      } catch (error) {
+        console.warn("Failed to resolve port owner", error);
+        continue;
+      }
+
+      const ownerId = this.safePlayerId(owner);
+      if (!ownerId) {
+        continue;
+      }
+
+      const status = eligibility.get(ownerId);
+      const includeFromLocal =
+        ownerId === localId ? true : status?.includeFromLocal ?? false;
+      const includeToLocal =
+        ownerId === localId ? true : status?.includeToLocal ?? false;
+
+      if (!includeFromLocal || !includeToLocal) {
+        continue;
+      }
+
+      const tile = this.describeTile(unit.tile());
+      if (!tile || typeof tile.ref !== "number") {
+        continue;
+      }
+
+      const record = recordLookup.get(ownerId);
+      ports.push({
+        id: String(unit.id()),
+        tileRef: tile.ref,
+        x: tile.x,
+        y: tile.y,
+        ownerId,
+        ownerSmallId: this.safePlayerSmallId(owner) ?? undefined,
+        ownerName: record?.name ?? this.safePlayerName(owner),
+        ownerColor: record?.color ?? this.resolvePlayerColor(owner),
+        includeFromLocal,
+        includeToLocal,
+      });
+    }
+
+    return ports;
+  }
+
   private findMirvLaunchSite(
     fallbackOrigin: TileSummary,
     target: TileSummary,
@@ -967,6 +1076,39 @@ export class DataStore {
 
   private syncGoldDonationOverlay(players?: PlayerViewLike[]): void {
     this.syncDonationOverlay(this.goldDonationOverlay, players);
+  }
+
+  private syncTradeRouteOverlay(
+    players?: PlayerViewLike[],
+    recordLookup?: Map<string, PlayerRecord>,
+  ): void {
+    if (!this.tradeRouteOverlay) {
+      return;
+    }
+
+    let sourcePlayers = players;
+    if (!sourcePlayers && this.game) {
+      try {
+        sourcePlayers = this.game.playerViews();
+      } catch (error) {
+        console.warn("Failed to refresh players for trade overlay", error);
+        sourcePlayers = [];
+      }
+    }
+    sourcePlayers = sourcePlayers ?? [];
+
+    let lookup = recordLookup;
+    if (!lookup) {
+      lookup = new Map<string, PlayerRecord>();
+      for (const record of this.snapshot.players) {
+        lookup.set(record.id, record);
+      }
+    }
+
+    const ports = this.collectTradeRoutePorts(sourcePlayers, lookup);
+    const localSmallId = this.resolveLocalPlayerSmallId();
+    this.tradeRouteOverlay.setLocalPlayerSmallId(localSmallId);
+    this.tradeRouteOverlay.setPortSummaries(ports);
   }
 
   private resolveTransformHandler(): TransformHandlerLike | null {
@@ -1529,6 +1671,14 @@ export class DataStore {
         effect.enable();
       } else if (this.goldDonationOverlay) {
         this.goldDonationOverlay.disable();
+      }
+    } else if (overlayId === TRADE_ROUTE_OVERLAY_ID) {
+      if (enabled) {
+        const effect = this.ensureTradeRouteOverlay();
+        this.syncTradeRouteOverlay();
+        effect.enable();
+      } else if (this.tradeRouteOverlay) {
+        this.tradeRouteOverlay.disable();
       }
     }
   }
@@ -2545,6 +2695,7 @@ export class DataStore {
       this.syncHistoricalMissileOverlay();
       this.syncTroopDonationOverlay(players);
       this.syncGoldDonationOverlay(players);
+      this.syncTradeRouteOverlay(players, recordLookup);
       this.notify();
     } catch (error) {
       // If the game context changes while we're reading from it, try attaching again.
@@ -2553,6 +2704,7 @@ export class DataStore {
       this.resetLiveGameTracking();
       this.troopDonationOverlay?.clear();
       this.goldDonationOverlay?.clear();
+      this.tradeRouteOverlay?.clear();
       if (this.refreshHandle !== undefined) {
         window.clearInterval(this.refreshHandle);
         this.refreshHandle = undefined;
@@ -3787,6 +3939,14 @@ export class DataStore {
       console.warn("Failed to resolve local player", error);
       return null;
     }
+  }
+
+  private resolveLocalPlayerSmallId(): number | null {
+    const local = this.resolveLocalPlayer();
+    if (!local) {
+      return null;
+    }
+    return this.safePlayerSmallId(local);
   }
 
   private determineTradeStatus(

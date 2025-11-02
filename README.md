@@ -6,7 +6,7 @@ A userscript that adds an enhanced sidebar to OpenFront, providing a wide range 
 
 *   **Dynamic Panel Layout**: Customize your workspace with a fully resizable and splittable panel layout. Arrange multiple data views (Players, Ships, Logs, etc.) to suit your strategy.
 *   **Comprehensive Data Views**: Get a real-time overview of all players, clans, teams, and ships with sortable tables. Instantly see key stats, status indicators for attacks and traitors, and right-click players to manage trade.
-*   **Live Map Overlays**: Visualize key events directly on the game map. Track troop/gold donations as they happen, plan missile strikes with a trajectory predictor, and see all active missiles in flight.
+**Live Map Overlays**: Visualize key events directly on the game map. Track troop/gold donations as they happen, plan missile strikes with a trajectory predictor, see all active missiles in flight, and map profitable trade routes between ports.
 *   **Powerful Scripting & Automation**: Automate tasks and create custom alerts with a built-in JavaScript action editor. Comes with pre-built actions for trade management and event logging.
 
 ## 🎹 Hotkeys
