@@ -3468,6 +3468,18 @@
       { value: "logs", label: "Logs" },
       { value: "overlays", label: "Overlays" },
   ];
+  const PANEL_ACTION_BUTTON_BASE_CLASS = [
+      "flex h-7 w-7 items-center justify-center",
+      "rounded-md border border-slate-700/70",
+      "bg-slate-800/70 text-slate-300 transition-colors",
+      "hover:border-sky-500/60 hover:text-sky-200",
+      "focus:outline-none focus:ring-2 focus:ring-sky-500/50",
+  ].join(" ");
+  function getPanelActionButtonClass(extra) {
+      return extra
+          ? `${PANEL_ACTION_BUTTON_BASE_CLASS} ${extra}`
+          : PANEL_ACTION_BUTTON_BASE_CLASS;
+  }
   const SIDEBAR_STYLE_ID = "openfront-strategic-sidebar-styles";
   function ensureSidebarStyles() {
       if (document.getElementById(SIDEBAR_STYLE_ID)) {
@@ -3946,7 +3958,7 @@
           }
           select.value = leaf.view;
           headerControls.appendChild(select);
-          const columnVisibilityButton = createElement("button", "flex h-7 w-7 items-center justify-center rounded-md border border-slate-700 bg-slate-900/60 text-slate-100 transition-colors hover:border-sky-500/70 hover:text-sky-200 focus:outline-none focus:ring-2 focus:ring-sky-500/70");
+          const columnVisibilityButton = createElement("button", getPanelActionButtonClass());
           columnVisibilityButton.type = "button";
           columnVisibilityButton.setAttribute("aria-label", "Choose visible columns");
           columnVisibilityButton.appendChild(renderIcon("columns", "h-4 w-4"));
@@ -3965,7 +3977,7 @@
               });
           });
           headerControls.appendChild(columnVisibilityButton);
-          const newActionButton = createElement("button", "flex h-7 w-7 items-center justify-center rounded-md border border-slate-700 bg-slate-900/60 text-slate-100 transition-colors hover:border-sky-500/70 hover:text-sky-200 focus:outline-none focus:ring-2 focus:ring-sky-500/70");
+          const newActionButton = createElement("button", getPanelActionButtonClass());
           newActionButton.type = "button";
           newActionButton.setAttribute("aria-label", "New action");
           newActionButton.appendChild(renderIcon("plus", "h-4 w-4"));
@@ -3973,7 +3985,7 @@
               this.store.createAction();
           });
           headerControls.appendChild(newActionButton);
-          const clearLogsButton = createElement("button", "flex h-7 w-7 items-center justify-center rounded-md border border-slate-700 bg-slate-900/60 text-slate-100 transition-colors hover:border-rose-500/70 hover:text-rose-200 focus:outline-none focus:ring-2 focus:ring-sky-500/70");
+          const clearLogsButton = createElement("button", getPanelActionButtonClass("hover:!border-rose-500/70 hover:!text-rose-200"));
           clearLogsButton.type = "button";
           clearLogsButton.setAttribute("aria-label", "Clear logs");
           clearLogsButton.appendChild(renderIcon("trash", "h-4 w-4"));
@@ -3981,7 +3993,7 @@
               this.store.clearLogs();
           });
           headerControls.appendChild(clearLogsButton);
-          const followLogsButton = createElement("button", "flex h-7 w-7 items-center justify-center rounded-md border border-slate-700 bg-slate-900/60 text-slate-100 transition-colors hover:border-sky-500/70 hover:text-sky-200 focus:outline-none focus:ring-2 focus:ring-sky-500/70");
+          const followLogsButton = createElement("button", getPanelActionButtonClass());
           followLogsButton.type = "button";
           followLogsButton.setAttribute("aria-label", "Toggle log auto-scroll");
           followLogsButton.appendChild(renderIcon("arrow-down", "h-4 w-4"));
@@ -4031,7 +4043,7 @@
           return wrapper;
       }
       createActionButton(label, icon, handler) {
-          const button = createElement("button", "flex h-7 w-7 items-center justify-center rounded-md border border-slate-700/70 bg-slate-800/70 text-slate-300 transition-colors hover:border-sky-500/60 hover:text-sky-200 focus:outline-none focus:ring-2 focus:ring-sky-500/50");
+          const button = createElement("button", getPanelActionButtonClass());
           button.type = "button";
           button.title = label;
           button.appendChild(renderIcon(icon, "h-4 w-4"));
@@ -4292,9 +4304,9 @@
               followLogsButton.tabIndex = 0;
               const followEnabled = leaf.logFollowEnabled !== false;
               followLogsButton.setAttribute("aria-pressed", followEnabled ? "true" : "false");
-              followLogsButton.classList.toggle("border-slate-700", !followEnabled);
-              followLogsButton.classList.toggle("bg-slate-900/60", !followEnabled);
-              followLogsButton.classList.toggle("text-slate-100", !followEnabled);
+              followLogsButton.classList.toggle("border-slate-700/70", !followEnabled);
+              followLogsButton.classList.toggle("bg-slate-800/70", !followEnabled);
+              followLogsButton.classList.toggle("text-slate-300", !followEnabled);
               followLogsButton.classList.toggle("border-sky-500/70", followEnabled);
               followLogsButton.classList.toggle("bg-sky-500/20", followEnabled);
               followLogsButton.classList.toggle("text-sky-100", followEnabled);

@@ -35,6 +35,20 @@ const VIEW_OPTIONS: { value: ViewType; label: string }[] = [
   { value: "overlays", label: "Overlays" },
 ];
 
+const PANEL_ACTION_BUTTON_BASE_CLASS = [
+  "flex h-7 w-7 items-center justify-center",
+  "rounded-md border border-slate-700/70",
+  "bg-slate-800/70 text-slate-300 transition-colors",
+  "hover:border-sky-500/60 hover:text-sky-200",
+  "focus:outline-none focus:ring-2 focus:ring-sky-500/50",
+].join(" ");
+
+function getPanelActionButtonClass(extra?: string): string {
+  return extra
+    ? `${PANEL_ACTION_BUTTON_BASE_CLASS} ${extra}`
+    : PANEL_ACTION_BUTTON_BASE_CLASS;
+}
+
 const SIDEBAR_STYLE_ID = "openfront-strategic-sidebar-styles";
 
 function ensureSidebarStyles(): void {
@@ -646,7 +660,7 @@ export class SidebarApp {
 
     const columnVisibilityButton = createElement(
       "button",
-      "flex h-7 w-7 items-center justify-center rounded-md border border-slate-700 bg-slate-900/60 text-slate-100 transition-colors hover:border-sky-500/70 hover:text-sky-200 focus:outline-none focus:ring-2 focus:ring-sky-500/70",
+      getPanelActionButtonClass(),
     );
     columnVisibilityButton.type = "button";
     columnVisibilityButton.setAttribute("aria-label", "Choose visible columns");
@@ -670,7 +684,7 @@ export class SidebarApp {
 
     const newActionButton = createElement(
       "button",
-      "flex h-7 w-7 items-center justify-center rounded-md border border-slate-700 bg-slate-900/60 text-slate-100 transition-colors hover:border-sky-500/70 hover:text-sky-200 focus:outline-none focus:ring-2 focus:ring-sky-500/70",
+      getPanelActionButtonClass(),
     );
     newActionButton.type = "button";
     newActionButton.setAttribute("aria-label", "New action");
@@ -683,7 +697,9 @@ export class SidebarApp {
 
     const clearLogsButton = createElement(
       "button",
-      "flex h-7 w-7 items-center justify-center rounded-md border border-slate-700 bg-slate-900/60 text-slate-100 transition-colors hover:border-rose-500/70 hover:text-rose-200 focus:outline-none focus:ring-2 focus:ring-sky-500/70",
+      getPanelActionButtonClass(
+        "hover:!border-rose-500/70 hover:!text-rose-200",
+      ),
     );
     clearLogsButton.type = "button";
     clearLogsButton.setAttribute("aria-label", "Clear logs");
@@ -696,7 +712,7 @@ export class SidebarApp {
 
     const followLogsButton = createElement(
       "button",
-      "flex h-7 w-7 items-center justify-center rounded-md border border-slate-700 bg-slate-900/60 text-slate-100 transition-colors hover:border-sky-500/70 hover:text-sky-200 focus:outline-none focus:ring-2 focus:ring-sky-500/70",
+      getPanelActionButtonClass(),
     );
     followLogsButton.type = "button";
     followLogsButton.setAttribute("aria-label", "Toggle log auto-scroll");
@@ -772,10 +788,7 @@ export class SidebarApp {
     icon: "split-horizontal" | "split-vertical" | "close",
     handler: () => void,
   ) {
-    const button = createElement(
-      "button",
-      "flex h-7 w-7 items-center justify-center rounded-md border border-slate-700/70 bg-slate-800/70 text-slate-300 transition-colors hover:border-sky-500/60 hover:text-sky-200 focus:outline-none focus:ring-2 focus:ring-sky-500/50",
-    );
+    const button = createElement("button", getPanelActionButtonClass());
     button.type = "button";
     button.title = label;
     button.appendChild(renderIcon(icon, "h-4 w-4"));
@@ -1094,9 +1107,9 @@ export class SidebarApp {
         "aria-pressed",
         followEnabled ? "true" : "false",
       );
-      followLogsButton.classList.toggle("border-slate-700", !followEnabled);
-      followLogsButton.classList.toggle("bg-slate-900/60", !followEnabled);
-      followLogsButton.classList.toggle("text-slate-100", !followEnabled);
+      followLogsButton.classList.toggle("border-slate-700/70", !followEnabled);
+      followLogsButton.classList.toggle("bg-slate-800/70", !followEnabled);
+      followLogsButton.classList.toggle("text-slate-300", !followEnabled);
       followLogsButton.classList.toggle("border-sky-500/70", followEnabled);
       followLogsButton.classList.toggle("bg-sky-500/20", followEnabled);
       followLogsButton.classList.toggle("text-sky-100", followEnabled);
