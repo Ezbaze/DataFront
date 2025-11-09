@@ -3945,7 +3945,7 @@
           return this.buildGroupElement(node);
       }
       buildLeafElement(leaf) {
-          const wrapper = createElement("div", "flex min-h-[200px] flex-1 flex-col overflow-hidden rounded-lg border border-slate-800/70 bg-slate-900/70 shadow-inner");
+          const wrapper = createElement("div", "flex min-h-[200px] min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-slate-800/70 bg-slate-900/70 shadow-inner");
           wrapper.dataset.nodeId = leaf.id;
           const header = createElement("div", "flex items-center justify-between gap-2 border-b border-slate-800/70 bg-slate-900/80 px-3 py-2");
           const headerControls = createElement("div", "flex items-center gap-2");
@@ -4056,8 +4056,8 @@
       }
       buildGroupElement(group) {
           const wrapper = createElement("div", group.orientation === "horizontal"
-              ? "flex min-h-0 flex-1 flex-col"
-              : "flex min-h-0 flex-1 flex-row");
+              ? "flex min-h-0 min-w-0 flex-1 flex-col"
+              : "flex min-h-0 min-w-0 flex-1 flex-row");
           wrapper.dataset.groupId = group.id;
           group.element = { wrapper };
           const count = group.children.length;
@@ -4066,7 +4066,7 @@
           }
           for (let i = 0; i < count; i++) {
               const child = group.children[i];
-              const childWrapper = createElement("div", "flex min-h-0 flex-1");
+              const childWrapper = createElement("div", "flex min-h-0 min-w-0 flex-1");
               childWrapper.dataset.panelChild = String(i);
               childWrapper.style.flex = `${group.sizes[i] ?? 1} 1 0%`;
               childWrapper.appendChild(this.buildNodeElement(child));

@@ -634,7 +634,7 @@ export class SidebarApp {
   private buildLeafElement(leaf: PanelLeafNode): HTMLElement {
     const wrapper = createElement(
       "div",
-      "flex min-h-[200px] flex-1 flex-col overflow-hidden rounded-lg border border-slate-800/70 bg-slate-900/70 shadow-inner",
+      "flex min-h-[200px] min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-slate-800/70 bg-slate-900/70 shadow-inner",
     );
     wrapper.dataset.nodeId = leaf.id;
 
@@ -804,8 +804,8 @@ export class SidebarApp {
     const wrapper = createElement(
       "div",
       group.orientation === "horizontal"
-        ? "flex min-h-0 flex-1 flex-col"
-        : "flex min-h-0 flex-1 flex-row",
+        ? "flex min-h-0 min-w-0 flex-1 flex-col"
+        : "flex min-h-0 min-w-0 flex-1 flex-row",
     );
     wrapper.dataset.groupId = group.id;
     group.element = { wrapper };
@@ -817,7 +817,7 @@ export class SidebarApp {
 
     for (let i = 0; i < count; i++) {
       const child = group.children[i];
-      const childWrapper = createElement("div", "flex min-h-0 flex-1");
+      const childWrapper = createElement("div", "flex min-h-0 min-w-0 flex-1");
       childWrapper.dataset.panelChild = String(i);
       childWrapper.style.flex = `${group.sizes[i] ?? 1} 1 0%`;
       childWrapper.appendChild(this.buildNodeElement(child));
