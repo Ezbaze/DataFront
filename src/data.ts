@@ -3795,6 +3795,7 @@ export class DataStore {
     const alliances = this.mapActiveAlliances(player);
     const goldValue = player.gold();
     const gold = typeof goldValue === "bigint" ? Number(goldValue) : goldValue;
+    const troops = player.isAlive() ? player.troops() : 0;
 
     const tradeStatus = this.determineTradeStatus(localPlayer, player);
     const tradeStopped = tradeStatus.stopped;
@@ -3816,7 +3817,7 @@ export class DataStore {
       isSelf,
       tiles: player.numTilesOwned(),
       gold,
-      troops: player.troops(),
+      troops,
       incomingAttacks,
       outgoingAttacks,
       defensiveSupports: [],
