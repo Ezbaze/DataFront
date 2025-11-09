@@ -5808,7 +5808,8 @@
               const left = index * 2 + 1;
               const right = left + 1;
               let smallest = index;
-              if (left < length && this.heap[left].fScore < this.heap[smallest].fScore) {
+              if (left < length &&
+                  this.heap[left].fScore < this.heap[smallest].fScore) {
                   smallest = left;
               }
               if (right < length &&
@@ -6091,7 +6092,8 @@
           const ratio = window.devicePixelRatio || 1;
           const pixelWidth = Math.round(width * ratio);
           const pixelHeight = Math.round(height * ratio);
-          if (this.canvas.width !== pixelWidth || this.canvas.height !== pixelHeight) {
+          if (this.canvas.width !== pixelWidth ||
+              this.canvas.height !== pixelHeight) {
               this.canvas.width = pixelWidth;
               this.canvas.height = pixelHeight;
           }
@@ -6526,7 +6528,10 @@
           const gScore = new Map();
           const visited = new Set();
           gScore.set(startRef, 0);
-          open.enqueue({ ref: startRef, fScore: this.heuristic(game, startRef, destRef) });
+          open.enqueue({
+              ref: startRef,
+              fScore: this.heuristic(game, startRef, destRef),
+          });
           const maxIterations = 75000;
           let iterations = 0;
           while (!open.isEmpty() && iterations < maxIterations) {
@@ -7765,8 +7770,8 @@
                   continue;
               }
               const status = eligibility.get(ownerId);
-              const includeFromLocal = ownerId === localId ? true : status?.includeFromLocal ?? false;
-              const includeToLocal = ownerId === localId ? true : status?.includeToLocal ?? false;
+              const includeFromLocal = ownerId === localId ? true : (status?.includeFromLocal ?? false);
+              const includeToLocal = ownerId === localId ? true : (status?.includeToLocal ?? false);
               if (!includeFromLocal || !includeToLocal) {
                   continue;
               }

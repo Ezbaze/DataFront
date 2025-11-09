@@ -25,7 +25,7 @@ Module._load = function patchedLoad(request, parent, isMain) {
   } catch (err) {
     console.warn(
       "alias-typescript.cjs: redirection failed",
-      err && err.message
+      err && err.message,
     );
   }
 

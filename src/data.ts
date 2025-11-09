@@ -886,9 +886,9 @@ export class DataStore {
 
       const status = eligibility.get(ownerId);
       const includeFromLocal =
-        ownerId === localId ? true : status?.includeFromLocal ?? false;
+        ownerId === localId ? true : (status?.includeFromLocal ?? false);
       const includeToLocal =
-        ownerId === localId ? true : status?.includeToLocal ?? false;
+        ownerId === localId ? true : (status?.includeToLocal ?? false);
 
       if (!includeFromLocal || !includeToLocal) {
         continue;

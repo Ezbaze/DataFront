@@ -1411,7 +1411,10 @@ class MinPriorityQueue<T extends { fScore: number }> {
       const left = index * 2 + 1;
       const right = left + 1;
       let smallest = index;
-      if (left < length && this.heap[left].fScore < this.heap[smallest].fScore) {
+      if (
+        left < length &&
+        this.heap[left].fScore < this.heap[smallest].fScore
+      ) {
         smallest = left;
       }
       if (
@@ -1560,7 +1563,9 @@ export class TradeRouteOverlay {
     if (this.portSummaries.length !== next.length) {
       return false;
     }
-    const current = new Map(this.portSummaries.map((entry) => [entry.id, entry]));
+    const current = new Map(
+      this.portSummaries.map((entry) => [entry.id, entry]),
+    );
     for (const summary of next) {
       const existing = current.get(summary.id);
       if (!existing) {
@@ -1724,7 +1729,10 @@ export class TradeRouteOverlay {
     const pixelWidth = Math.round(width * ratio);
     const pixelHeight = Math.round(height * ratio);
 
-    if (this.canvas.width !== pixelWidth || this.canvas.height !== pixelHeight) {
+    if (
+      this.canvas.width !== pixelWidth ||
+      this.canvas.height !== pixelHeight
+    ) {
       this.canvas.width = pixelWidth;
       this.canvas.height = pixelHeight;
     }
@@ -1868,9 +1876,7 @@ export class TradeRouteOverlay {
     this.maskSidebarRegion();
   }
 
-  private resolvePointer(
-    transform: TransformHandlerLike,
-  ): Point | null {
+  private resolvePointer(transform: TransformHandlerLike): Point | null {
     let pointer = this.pointer;
     const rect = transform.boundingRect?.();
     if (pointer && rect && !this.isPointerInside(rect, pointer)) {
@@ -1946,9 +1952,10 @@ export class TradeRouteOverlay {
 
       const midpoint = path[Math.floor(path.length / 2)] ?? destPoint;
       const ownerColor = this.normalizeColor(port.ownerColor);
-      const resolvedOwnerId = typeof port.ownerId === "string"
-        ? port.ownerId.trim()
-        : `${port.ownerId}`;
+      const resolvedOwnerId =
+        typeof port.ownerId === "string"
+          ? port.ownerId.trim()
+          : `${port.ownerId}`;
       const ownerName =
         port.ownerName?.trim() ||
         (resolvedOwnerId ? `Player ${resolvedOwnerId}` : "Unknown player");
@@ -2239,7 +2246,10 @@ export class TradeRouteOverlay {
     const visited = new Set<number>();
 
     gScore.set(startRef, 0);
-    open.enqueue({ ref: startRef, fScore: this.heuristic(game, startRef, destRef) });
+    open.enqueue({
+      ref: startRef,
+      fScore: this.heuristic(game, startRef, destRef),
+    });
 
     const maxIterations = 75000;
     let iterations = 0;
