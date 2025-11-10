@@ -1,5 +1,7 @@
 import { DataStore } from "./data";
 import { renderIcon } from "./icons";
+import { createDefaultRootNode, splitPanelLeaf } from "./panelLayout";
+import { startPanelResize } from "./panelResize";
 import {
   GameSnapshot,
   PanelGroupNode,
@@ -8,7 +10,6 @@ import {
   PanelNode,
   PanelOrientation,
   PlayerRecord,
-  SortState,
   ViewType,
 } from "./types";
 import { clamp, createElement, extractClanTag, focusTile } from "./utils";
@@ -91,73 +92,6 @@ interface OverlayRegistration {
   originalLeft: string;
   originalRight: string;
   originalMaxWidth: string;
-}
-
-let leafIdCounter = 0;
-let groupIdCounter = 0;
-
-const DEFAULT_SORT_STATES: Record<ViewType, SortState> = {
-  players: { key: "tiles", direction: "desc" },
-  clanmates: { key: "label", direction: "asc" },
-  teams: { key: "tiles", direction: "desc" },
-  ships: { key: "owner", direction: "asc" },
-  player: { key: "tiles", direction: "desc" },
-  actions: { key: "label", direction: "asc" },
-  actionEditor: { key: "label", direction: "asc" },
-  runningActions: { key: "label", direction: "asc" },
-  runningAction: { key: "label", direction: "asc" },
-  logs: { key: "label", direction: "asc" },
-  overlays: { key: "label", direction: "asc" },
-};
-
-function createLeaf(view: ViewType): PanelLeafNode {
-  return {
-    id: `leaf-${++leafIdCounter}`,
-    type: "leaf",
-    view,
-    expandedRows: new Set<string>(),
-    expandedGroups: new Set<string>(),
-    sortStates: {
-      players: { ...DEFAULT_SORT_STATES.players },
-      clanmates: { ...DEFAULT_SORT_STATES.clanmates },
-      teams: { ...DEFAULT_SORT_STATES.teams },
-      ships: { ...DEFAULT_SORT_STATES.ships },
-      player: { ...DEFAULT_SORT_STATES.player },
-      actions: { ...DEFAULT_SORT_STATES.actions },
-      actionEditor: { ...DEFAULT_SORT_STATES.actionEditor },
-      runningActions: { ...DEFAULT_SORT_STATES.runningActions },
-      runningAction: { ...DEFAULT_SORT_STATES.runningAction },
-      logs: { ...DEFAULT_SORT_STATES.logs },
-      overlays: { ...DEFAULT_SORT_STATES.overlays },
-    },
-    scrollTop: 0,
-    scrollLeft: 0,
-    logFollowEnabled: true,
-    columnVisibility: {},
-    hoveredRowElement: null,
-  };
-}
-
-function createGroup(
-  orientation: PanelOrientation,
-  children: PanelNode[],
-): PanelGroupNode {
-  const count = Math.max(children.length, 1);
-  return {
-    id: `group-${++groupIdCounter}`,
-    type: "group",
-    orientation,
-    children,
-    sizes: new Array(count).fill(1 / count),
-  };
-}
-
-function createDefaultRootNode(): PanelNode {
-  const clanmatesLeaf = createLeaf("clanmates");
-  const logsLeaf = createLeaf("logs");
-  const group = createGroup("horizontal", [clanmatesLeaf, logsLeaf]);
-  group.sizes = [0.8, 0.2];
-  return group;
 }
 
 export class SidebarApp {
@@ -634,7 +568,7 @@ export class SidebarApp {
   private buildLeafElement(leaf: PanelLeafNode): HTMLElement {
     const wrapper = createElement(
       "div",
-      "flex min-h-[200px] min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-slate-800/70 bg-slate-900/70 shadow-inner",
+      "flex min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-slate-800/70 bg-slate-900/70 shadow-inner",
     );
     wrapper.dataset.nodeId = leaf.id;
 
@@ -840,7 +774,7 @@ export class SidebarApp {
         );
         handle.dataset.handleIndex = String(i);
         handle.addEventListener("pointerdown", (event) =>
-          this.startPanelResize(group, i, event),
+          startPanelResize(group, i, event),
         );
         wrapper.appendChild(handle);
       }
@@ -849,125 +783,8 @@ export class SidebarApp {
     return wrapper;
   }
 
-  private startPanelResize(
-    group: PanelGroupNode,
-    index: number,
-    event: PointerEvent,
-  ): void {
-    const wrapper = group.element?.wrapper;
-    if (!wrapper) {
-      return;
-    }
-    const childA = wrapper.querySelector<HTMLElement>(
-      `[data-panel-child="${index}"]`,
-    );
-    const childB = wrapper.querySelector<HTMLElement>(
-      `[data-panel-child="${index + 1}"]`,
-    );
-    if (!childA || !childB) {
-      return;
-    }
-
-    event.preventDefault();
-    const orientation = group.orientation;
-    const rectA = childA.getBoundingClientRect();
-    const rectB = childB.getBoundingClientRect();
-    const totalPixels =
-      orientation === "horizontal"
-        ? rectA.height + rectB.height
-        : rectA.width + rectB.width;
-    const initialPixelsA =
-      orientation === "horizontal" ? rectA.height : rectA.width;
-    const sizeA = group.sizes[index] ?? 1;
-    const sizeB = group.sizes[index + 1] ?? 1;
-    const combinedShareRaw = sizeA + sizeB;
-    const combinedShare = combinedShareRaw > 0 ? combinedShareRaw : 1;
-    const startCoord =
-      orientation === "horizontal" ? event.clientY : event.clientX;
-    const originalUserSelect = document.body.style.userSelect;
-    document.body.style.userSelect = "none";
-
-    const onMove = (moveEvent: PointerEvent) => {
-      const currentCoord =
-        orientation === "horizontal" ? moveEvent.clientY : moveEvent.clientX;
-      const delta = currentCoord - startCoord;
-      const rawRatioA =
-        totalPixels === 0 ? 0.5 : (initialPixelsA + delta) / totalPixels;
-      const baseMinRatio = 0.15;
-      const baseMaxRatio = 0.85;
-      const minPanelPixels = 200;
-      let minRatio = baseMinRatio;
-      let maxRatio = baseMaxRatio;
-      if (orientation === "horizontal") {
-        const minRatioFromPixels =
-          totalPixels === 0 ? 0 : minPanelPixels / totalPixels;
-        const maxRatioFromPixels =
-          totalPixels === 0 ? 1 : 1 - minRatioFromPixels;
-        minRatio = Math.max(
-          minRatio,
-          Math.min(minRatioFromPixels, baseMaxRatio),
-        );
-        maxRatio = Math.min(
-          maxRatio,
-          Math.max(maxRatioFromPixels, baseMinRatio),
-        );
-        if (minRatio > maxRatio) {
-          const middle = (minRatio + maxRatio) / 2;
-          minRatio = middle;
-          maxRatio = middle;
-        }
-      }
-      const ratioA = clamp(rawRatioA, minRatio, maxRatio);
-      const ratioB = 1 - ratioA;
-      const nextSizeA = combinedShare * ratioA;
-      const nextSizeB = combinedShare * ratioB;
-      group.sizes[index] = nextSizeA;
-      group.sizes[index + 1] = nextSizeB;
-      childA.style.flex = `${nextSizeA} 1 0%`;
-      childB.style.flex = `${nextSizeB} 1 0%`;
-    };
-
-    const stop = () => {
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", stop);
-      window.removeEventListener("pointercancel", stop);
-      document.body.style.userSelect = originalUserSelect;
-    };
-
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", stop);
-    window.addEventListener("pointercancel", stop);
-  }
-
   private splitLeaf(leaf: PanelLeafNode, orientation: PanelOrientation): void {
-    const newLeaf = createLeaf(leaf.view);
-    const parentInfo = this.findParent(leaf);
-    if (!parentInfo) {
-      this.rootNode = createGroup(orientation, [leaf, newLeaf]);
-    } else {
-      const { parent, index } = parentInfo;
-      if (parent.orientation === orientation) {
-        const otherSizes = parent.sizes.reduce((sum, size, i) => {
-          if (i === index) {
-            return sum;
-          }
-          return sum + size;
-        }, 0);
-        const fallbackSize =
-          parent.children.length > 0 ? 1 / parent.children.length : 1;
-        const inferredSize = Math.max(1 - otherSizes, 0);
-        const currentSize =
-          parent.sizes[index] ??
-          (inferredSize > 0 ? inferredSize : fallbackSize);
-        const newSize = currentSize / 2;
-        parent.sizes[index] = currentSize - newSize;
-        parent.children.splice(index + 1, 0, newLeaf);
-        parent.sizes.splice(index + 1, 0, newSize);
-      } else {
-        const replacement = createGroup(orientation, [leaf, newLeaf]);
-        parent.children[index] = replacement;
-      }
-    }
+    this.rootNode = splitPanelLeaf(this.rootNode, leaf, orientation);
     this.renderLayout();
   }
 
