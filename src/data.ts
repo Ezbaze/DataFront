@@ -3787,10 +3787,11 @@ export class DataStore {
       .filter((attack) => !attack.retreating);
 
     const incomingAttacks = this.mapIncomingAttacks(incomingRaw);
-    const outgoingAttacks = this.mapOutgoingAttacks(outgoingRaw);
-    const expansions = outgoingRaw.filter(
-      (attack) => attack.targetID === 0,
-    ).length;
+    const nonExpansionOutgoing = outgoingRaw.filter(
+      (attack) => attack.targetID !== 0,
+    );
+    const outgoingAttacks = this.mapOutgoingAttacks(nonExpansionOutgoing);
+    const expansions = outgoingRaw.length - nonExpansionOutgoing.length;
 
     const alliances = this.mapActiveAlliances(player);
     const goldValue = player.gold();

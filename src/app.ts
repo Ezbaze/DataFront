@@ -20,7 +20,8 @@ import {
   showColumnVisibilityMenu,
   ViewActionHandlers,
   ViewLifecycleCallbacks,
-} from "./views";
+} from "./components/views";
+import { SidebarRole } from "./sidebarRoles";
 
 const VIEW_OPTIONS: { value: ViewType; label: string }[] = [
   { value: "players", label: "Players" },
@@ -59,23 +60,24 @@ function ensureSidebarStyles(): void {
 
   const style = document.createElement("style");
   style.id = SIDEBAR_STYLE_ID;
+  const tableRole = SidebarRole.TableContainer;
   style.textContent = `
-    #openfront-strategic-sidebar [data-sidebar-role="table-container"] {
+    #openfront-strategic-sidebar [data-sidebar-role="${tableRole}"] {
       scrollbar-width: thin;
       scrollbar-color: rgba(148, 163, 184, 0.7) transparent;
     }
 
-    #openfront-strategic-sidebar [data-sidebar-role="table-container"]::-webkit-scrollbar {
+    #openfront-strategic-sidebar [data-sidebar-role="${tableRole}"]::-webkit-scrollbar {
       width: 6px;
       height: 6px;
     }
 
-    #openfront-strategic-sidebar [data-sidebar-role="table-container"]::-webkit-scrollbar-thumb {
+    #openfront-strategic-sidebar [data-sidebar-role="${tableRole}"]::-webkit-scrollbar-thumb {
       background-color: rgba(148, 163, 184, 0.7);
       border-radius: 9999px;
     }
 
-    #openfront-strategic-sidebar [data-sidebar-role="table-container"]::-webkit-scrollbar-track {
+    #openfront-strategic-sidebar [data-sidebar-role="${tableRole}"]::-webkit-scrollbar-track {
       background-color: transparent;
     }
   `;
@@ -657,7 +659,7 @@ export class SidebarApp {
         this.scrollLogViewToBottom(leaf);
       }
       const container = leaf.contentContainer;
-      if (container && container.dataset.sidebarRole === "log-view") {
+      if (container && container.dataset.sidebarRole === SidebarRole.LogView) {
         container.dataset.logFollowState = leaf.logFollowEnabled
           ? "following"
           : "paused";

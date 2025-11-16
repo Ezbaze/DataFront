@@ -1,4 +1,5 @@
 import type { TileSummary } from "./types";
+import { SidebarRole } from "./sidebarRoles";
 
 const CLAN_TAG_PATTERN = /^\[([a-zA-Z]{2,5})\]/;
 
@@ -177,7 +178,7 @@ function ensureContextMenuElement(): HTMLDivElement {
         "border-slate-700/80 bg-slate-950/95 text-sm text-slate-100 shadow-2xl " +
         "backdrop-blur",
     );
-    contextMenuElement.dataset.sidebarRole = "context-menu";
+    contextMenuElement.dataset.sidebarRole = SidebarRole.ContextMenu;
     contextMenuElement.style.pointerEvents = "auto";
     contextMenuElement.style.zIndex = "2147483647";
   }

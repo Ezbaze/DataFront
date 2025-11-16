@@ -316,8 +316,7 @@
           }, 0);
           const fallbackSize = parent.children.length > 0 ? 1 / parent.children.length : 1;
           const inferredSize = Math.max(1 - otherSizes, 0);
-          const currentSize = parent.sizes[index] ??
-              (inferredSize > 0 ? inferredSize : fallbackSize);
+          const currentSize = parent.sizes[index] ?? (inferredSize > 0 ? inferredSize : fallbackSize);
           const newSize = currentSize / 2;
           parent.sizes[index] = currentSize - newSize;
           parent.children.splice(index + 1, 0, newLeaf);
@@ -329,6 +328,21 @@
       }
       return rootNode;
   }
+
+  const SidebarRole = {
+      TableContainer: "table-container",
+      ColumnVisibilityMenu: "column-visibility-menu",
+      ContextMenu: "context-menu",
+      ActionsDirectory: "actions-directory",
+      ActionEditor: "action-editor",
+      RunningActions: "running-actions",
+      RunningActionDetail: "running-action",
+      LogView: "log-view",
+      LogEntry: "log-entry",
+      LogMention: "log-mention",
+      OverlaysDirectory: "overlays-directory",
+      PlayerPanel: "player-panel",
+  };
 
   const CLAN_TAG_PATTERN = /^\[([a-zA-Z]{2,5})\]/;
   const numberFormatter = new Intl.NumberFormat("en-US");
@@ -451,7 +465,7 @@
           contextMenuElement = createElement("div", "fixed z-[2147483647] min-w-[160px] overflow-hidden rounded-md border " +
               "border-slate-700/80 bg-slate-950/95 text-sm text-slate-100 shadow-2xl " +
               "backdrop-blur");
-          contextMenuElement.dataset.sidebarRole = "context-menu";
+          contextMenuElement.dataset.sidebarRole = SidebarRole.ContextMenu;
           contextMenuElement.style.pointerEvents = "auto";
           contextMenuElement.style.zIndex = "2147483647";
       }
@@ -655,116 +669,85 @@
       window.addEventListener("pointercancel", stop);
   }
 
-  const DEFAULT_ACTIONS = {
-      toggleTrading: () => undefined,
-      showPlayerDetails: () => undefined,
-      focusPlayer: () => undefined,
-      focusTeam: () => undefined,
-      focusClan: () => undefined,
-      createAction: () => undefined,
-      selectAction: () => undefined,
-      setActionEnabled: () => undefined,
-      saveAction: () => undefined,
-      deleteAction: () => undefined,
-      startAction: () => undefined,
-      selectRunningAction: () => undefined,
-      stopRunningAction: () => undefined,
-      updateRunningActionSetting: () => undefined,
-      setRunningActionInterval: () => undefined,
-      clearLogs: () => undefined,
-      setOverlayEnabled: () => undefined,
-  };
-  const EMPTY_ACTIONS_STATE = {
-      revision: 0,
-      runningRevision: 0,
-      actions: [],
-      running: [],
-  };
-  function isTradeStoppedBySelf(carrier) {
-      if (typeof carrier.tradeStoppedBySelf === "boolean") {
-          return carrier.tradeStoppedBySelf;
-      }
-      if (carrier.tradeStopped !== true) {
-          return false;
-      }
-      if (carrier.tradeStoppedByOther === true) {
-          return false;
-      }
-      return true;
-  }
-  function isTradeStoppedByOther(carrier) {
-      if (typeof carrier.tradeStoppedByOther === "boolean") {
-          return carrier.tradeStoppedByOther;
-      }
-      if (carrier.tradeStopped !== true) {
-          return false;
-      }
-      if (carrier.tradeStoppedBySelf === true) {
-          return false;
-      }
-      return true;
-  }
-  let editorSettingIdCounter = 0;
-  function nextEditorSettingId() {
-      editorSettingIdCounter += 1;
-      return `editor-setting-${editorSettingIdCounter}`;
-  }
-  function getActionsState(snapshot) {
-      return snapshot.sidebarActions ?? EMPTY_ACTIONS_STATE;
-  }
-  function getRunModeLabel(mode) {
-      switch (mode) {
-          case "once":
-              return "Run once";
-          case "continuous":
-              return "Continuous";
-          case "event":
-              return "Event-driven";
-          default:
-              return mode;
-      }
-  }
-  function describeRunMode(mode) {
-      switch (mode) {
-          case "once":
-              return "Runs a single time and removes itself from the running list.";
-          case "continuous":
-              return "Keeps running until you stop it manually.";
-          case "event":
-              return "Listens for subscribed game events and reacts when they fire.";
-          default:
-              return mode;
-      }
-  }
   const SELECTED_ROW_INDICATOR_BOX_SHADOW = "inset 0.25rem 0 0 0 rgba(125, 211, 252, 0.65)";
   const TABLE_CELL_BASE_CLASS = "border-b border-r border-slate-800 border-slate-900/80 px-3 py-2 last:border-r-0";
   const TABLE_CELL_EXPANDABLE_CLASS = "border-b border-r border-slate-800/60 px-3 py-2 last:border-r-0";
   function applyRowSelectionIndicator(row, isSelected) {
       row.style.boxShadow = isSelected ? SELECTED_ROW_INDICATOR_BOX_SHADOW : "";
   }
-  function formatRunStatus(status) {
-      switch (status) {
-          case "running":
-              return "Running";
-          case "completed":
-              return "Completed";
-          case "stopped":
-              return "Stopped";
-          case "failed":
-              return "Failed";
-          default:
-              return status;
-      }
+  function cellClassForColumn(column, extra = "", options) {
+      const variant = options?.variant ?? "default";
+      const alignClass = column.align === "left"
+          ? "text-left"
+          : column.align === "right"
+              ? "text-right"
+              : "text-center";
+      const baseClass = variant === "expandable"
+          ? TABLE_CELL_EXPANDABLE_CLASS
+          : TABLE_CELL_BASE_CLASS;
+      return [baseClass, alignClass, extra].filter(Boolean).join(" ");
   }
-  function defaultValueForType(type) {
-      switch (type) {
-          case "number":
-              return 0;
-          case "toggle":
-              return false;
-          default:
-              return "";
+  function applyPersistentHover(element, leaf, rowKey, highlightClass) {
+      element.dataset.hoverHighlightClass = highlightClass;
+      if (leaf.hoveredRowKey === rowKey) {
+          if (leaf.hoveredRowElement && leaf.hoveredRowElement !== element) {
+              const previousClass = leaf.hoveredRowElement.dataset.hoverHighlightClass;
+              if (previousClass) {
+                  leaf.hoveredRowElement.classList.remove(previousClass);
+              }
+          }
+          leaf.hoveredRowElement = element;
+          element.classList.add(highlightClass);
       }
+      element.addEventListener("pointerenter", () => {
+          if (leaf.hoveredRowElement && leaf.hoveredRowElement !== element) {
+              const previousClass = leaf.hoveredRowElement.dataset.hoverHighlightClass;
+              if (previousClass) {
+                  leaf.hoveredRowElement.classList.remove(previousClass);
+              }
+          }
+          leaf.hoveredRowKey = rowKey;
+          leaf.hoveredRowElement = element;
+          element.classList.add(highlightClass);
+      });
+  }
+  function createPlayerNameElement(label, position, options) {
+      const classNames = [];
+      if (options?.className) {
+          classNames.push(options.className);
+      }
+      if (position) {
+          classNames.push("cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-500/60 rounded-sm transition-colors");
+      }
+      const className = classNames.filter(Boolean).join(" ").trim();
+      if (!position) {
+          const tag = options?.asBlock ? "div" : "span";
+          return createElement(tag, className, label);
+      }
+      const button = createElement("button", className, label);
+      button.type = "button";
+      button.title = `Focus on ${label}`;
+      attachImmediateTileFocus(button, () => {
+          focusTile(position);
+      });
+      return button;
+  }
+  function attachImmediateTileFocus(element, focus) {
+      element.addEventListener("pointerdown", (event) => {
+          if (event.button !== 0 && event.button !== undefined) {
+              return;
+          }
+          event.preventDefault();
+          event.stopPropagation();
+          focus();
+      });
+      element.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          if (event.detail === 0) {
+              focus();
+          }
+      });
   }
   const TABLE_HEADERS = [
       { key: "label", label: "Clan / Player", align: "left", hideable: false },
@@ -837,6 +820,102 @@
       { key: "status", label: "Status", align: "left" },
   ];
   const DEFAULT_SORT_STATE = { key: "tiles", direction: "desc" };
+  function ensureSortState(leaf, view) {
+      const state = leaf.sortStates[view];
+      if (state) {
+          return state;
+      }
+      const fallback = { ...DEFAULT_SORT_STATE };
+      leaf.sortStates[view] = fallback;
+      return fallback;
+  }
+  function getDefaultDirection(key) {
+      switch (key) {
+          case "label":
+          case "owner":
+          case "type":
+          case "origin":
+          case "current":
+          case "destination":
+          case "status":
+          case "source":
+          case "message":
+              return "asc";
+          case "timestamp":
+              return "asc";
+          case "level":
+              return "desc";
+          default:
+              return "desc";
+      }
+  }
+  const LOG_TABLE_HEADERS = [
+      {
+          key: "timestamp",
+          label: "Timestamp",
+          align: "left",
+          sortKey: "timestamp",
+          hideable: false,
+      },
+      { key: "level", label: "Level", align: "center", sortKey: "level" },
+      { key: "source", label: "Source", align: "left", sortKey: "source" },
+      { key: "message", label: "Message", align: "left", sortKey: "message" },
+  ];
+  const ACTIONS_TABLE_HEADERS = [
+      {
+          key: "name",
+          label: "Action",
+          align: "left",
+          sortKey: "label",
+          hideable: false,
+      },
+      { key: "status", label: "Status", align: "left", sortKey: "status" },
+      { key: "toggle", label: "Enabled", align: "center", sortKey: "enabled" },
+      { key: "controls", label: "Actions", align: "right", sortable: false },
+  ];
+  const RUNNING_ACTIONS_TABLE_HEADERS = [
+      {
+          key: "name",
+          label: "Action",
+          align: "left",
+          sortKey: "label",
+          hideable: false,
+      },
+      { key: "status", label: "Status", align: "left", sortKey: "status" },
+      { key: "mode", label: "Mode", align: "left", sortable: false },
+      { key: "started", label: "Started", align: "left", sortable: false },
+      { key: "controls", label: "", align: "right", sortable: false },
+  ];
+  const OVERLAY_TABLE_HEADERS = [
+      {
+          key: "name",
+          label: "Overlay",
+          align: "left",
+          sortKey: "label",
+          hideable: false,
+      },
+      { key: "status", label: "Status", align: "right", sortKey: "status" },
+  ];
+  function getTableHeadersForView(view) {
+      switch (view) {
+          case "players":
+          case "clanmates":
+          case "teams":
+              return TABLE_HEADERS;
+          case "ships":
+              return SHIP_HEADERS;
+          case "actions":
+              return ACTIONS_TABLE_HEADERS;
+          case "runningActions":
+              return RUNNING_ACTIONS_TABLE_HEADERS;
+          case "logs":
+              return LOG_TABLE_HEADERS;
+          case "overlays":
+              return OVERLAY_TABLE_HEADERS;
+          default:
+              return undefined;
+      }
+  }
   function ensureColumnVisibilityState(leaf, view, headers) {
       const current = leaf.columnVisibility[view] ?? {};
       const normalized = {};
@@ -869,162 +948,942 @@
   function getColumnVisibilitySignature(headers) {
       return headers.map((header) => header.key).join("|");
   }
-  function buildViewContent(leaf, snapshot, requestRender, existingContainer, lifecycle, actions) {
-      const view = leaf.view;
-      const sortState = ensureSortState(leaf, view);
-      const viewActions = actions ?? DEFAULT_ACTIONS;
-      const handleSort = (key) => {
-          const current = ensureSortState(leaf, view);
-          let direction;
-          if (current.key === key) {
-              direction = current.direction === "asc" ? "desc" : "asc";
+  function createTableShell(options) {
+      const { sortState, onSort, existingContainer, view, headers, role } = options;
+      const containerClass = "relative flex-1 overflow-auto border border-slate-900/70 bg-slate-950/60 backdrop-blur-sm";
+      const tableClass = "min-w-full border-collapse text-xs text-slate-100";
+      const targetRole = role ?? SidebarRole.TableContainer;
+      const canReuse = !!existingContainer &&
+          existingContainer.dataset.sidebarRole === targetRole &&
+          existingContainer.dataset.sidebarView === view;
+      const container = canReuse
+          ? existingContainer
+          : createElement("div", containerClass);
+      container.className = containerClass;
+      container.dataset.sidebarRole = targetRole;
+      container.dataset.sidebarView = view;
+      let table = container.querySelector("table");
+      if (!table || !canReuse) {
+          table = createElement("table", tableClass);
+      }
+      else {
+          table.className = tableClass;
+      }
+      const thead = table.tHead ?? createElement("thead", "sticky top-0 z-10");
+      thead.className = "sticky top-0 z-10";
+      thead.replaceChildren();
+      const headerRow = createElement("tr", "bg-slate-900/95");
+      for (const column of headers) {
+          const th = createElement("th", `border-b border-r border-slate-800 px-3 py-2 text-[0.65rem] font-semibold uppercase tracking-wide text-slate-300 last:border-r-0 ${column.align === "left"
+            ? "text-left"
+            : column.align === "right"
+                ? "text-right"
+                : "text-center"}`);
+          th.classList.add("bg-slate-900/90");
+          const labelWrapper = createElement("span", `flex w-full items-center gap-1 text-inherit ${column.align === "left"
+            ? "justify-start"
+            : column.align === "right"
+                ? "justify-end"
+                : "justify-center"}`, column.label);
+          if (column.title) {
+              th.title = column.title;
+              th.setAttribute("aria-label", column.title);
           }
-          else {
-              direction = getDefaultDirection(key);
+          const isSortable = (column.sortable ?? true) &&
+              sortState !== undefined &&
+              onSort !== undefined;
+          if (isSortable) {
+              const sortKey = column.sortKey ?? column.key;
+              const isActive = sortState.key === sortKey;
+              const indicator = createElement("span", `text-[0.6rem] ${isActive ? "text-sky-300" : "text-slate-500"}`, isActive ? (sortState.direction === "asc" ? "▲" : "▼") : "↕");
+              if (column.align === "right") {
+                  labelWrapper.appendChild(indicator);
+              }
+              else {
+                  labelWrapper.insertBefore(indicator, labelWrapper.firstChild);
+              }
+              th.classList.add("cursor-pointer", "select-none");
+              th.dataset.sortKey = sortKey;
+              th.addEventListener("click", (event) => {
+                  event.preventDefault();
+                  onSort(sortKey);
+              });
           }
-          leaf.sortStates[view] = { key, direction };
-          requestRender();
+          th.appendChild(labelWrapper);
+          headerRow.appendChild(th);
+      }
+      thead.appendChild(headerRow);
+      const tbody = table.tBodies[0] ?? createElement("tbody", "text-[0.75rem]");
+      tbody.className = "text-[0.75rem]";
+      tbody.replaceChildren();
+      if (!table.contains(thead)) {
+          table.appendChild(thead);
+      }
+      if (!table.contains(tbody)) {
+          table.appendChild(tbody);
+      }
+      if (container.firstElementChild !== table ||
+          container.childElementCount !== 1) {
+          container.replaceChildren(table);
+      }
+      return { container, tbody };
+  }
+  let columnMenuElement = null;
+  let columnMenuCleanup = null;
+  function ensureColumnMenuElement() {
+      if (!columnMenuElement) {
+          columnMenuElement = createElement("div");
+          columnMenuElement.dataset.sidebarRole = SidebarRole.ColumnVisibilityMenu;
+          columnMenuElement.style.pointerEvents = "auto";
+          columnMenuElement.style.zIndex = "2147483647";
+      }
+      columnMenuElement.className =
+          "fixed z-[2147483647] min-w-[200px] overflow-hidden rounded-md border " +
+              "border-slate-700/80 bg-slate-950/95 text-sm text-slate-100 shadow-2xl " +
+              "backdrop-blur";
+      return columnMenuElement;
+  }
+  function hideColumnVisibilityMenu() {
+      if (columnMenuCleanup) {
+          const cleanup = columnMenuCleanup;
+          columnMenuCleanup = null;
+          cleanup();
+          return;
+      }
+      if (columnMenuElement && columnMenuElement.parentElement) {
+          columnMenuElement.parentElement.removeChild(columnMenuElement);
+      }
+  }
+  function isColumnVisibilitySupported(view) {
+      const headers = getTableHeadersForView(view);
+      return Array.isArray(headers) && headers.length > 0;
+  }
+  function showColumnVisibilityMenu(options) {
+      const { leaf, anchor, onChange } = options;
+      const baseHeaders = getTableHeadersForView(leaf.view);
+      if (!baseHeaders || baseHeaders.length === 0) {
+          hideColumnVisibilityMenu();
+          return;
+      }
+      const visibility = ensureColumnVisibilityState(leaf, leaf.view, baseHeaders);
+      const hideableHeaders = baseHeaders.filter((header) => header.hideable !== false);
+      hideColumnVisibilityMenu();
+      const menu = ensureColumnMenuElement();
+      menu.style.visibility = "hidden";
+      menu.style.left = "0px";
+      menu.style.top = "0px";
+      const wrapper = createElement("div", "flex flex-col");
+      wrapper.appendChild(createElement("div", "border-b border-slate-800/80 px-3 py-2 text-xs font-semibold uppercase " +
+          "tracking-wide text-slate-300", "Columns"));
+      const list = createElement("div", "py-1");
+      for (const header of baseHeaders) {
+          const key = header.key;
+          const item = createElement("label", `${header.hideable === false
+            ? "cursor-default text-slate-300"
+            : "cursor-pointer text-slate-200 hover:bg-slate-800/70"} flex items-center gap-3 px-3 py-2 text-xs transition-colors`);
+          const checkbox = document.createElement("input");
+          checkbox.type = "checkbox";
+          checkbox.className =
+              "h-3.5 w-3.5 rounded border border-slate-600 bg-slate-900 text-sky-400 " +
+                  "focus:outline-none focus:ring-2 focus:ring-sky-500";
+          checkbox.checked = visibility[key] !== false;
+          checkbox.disabled = header.hideable === false;
+          item.appendChild(checkbox);
+          const label = createElement("span", "flex-1 truncate", header.label);
+          item.appendChild(label);
+          if (header.hideable === false) {
+              item.title = "This column is always visible.";
+              item.appendChild(createElement("span", "rounded-full border border-slate-700/70 px-2 py-0.5 text-[0.6rem] font-semibold uppercase tracking-wide text-slate-400", "Pinned"));
+          }
+          checkbox.addEventListener("change", () => {
+              if (header.hideable === false) {
+                  checkbox.checked = true;
+                  return;
+              }
+              const nextVisible = checkbox.checked;
+              if (!nextVisible) {
+                  const remainingVisible = hideableHeaders.filter((candidate) => {
+                      if (candidate.key === header.key) {
+                          return false;
+                      }
+                      const candidateKey = candidate.key;
+                      return visibility[candidateKey] !== false;
+                  }).length;
+                  if (remainingVisible === 0) {
+                      checkbox.checked = true;
+                      return;
+                  }
+              }
+              visibility[key] = nextVisible;
+              leaf.columnVisibility[leaf.view] = {
+                  ...visibility,
+              };
+              onChange?.();
+          });
+          list.appendChild(item);
+      }
+      if (list.childElementCount === 0) {
+          hideColumnVisibilityMenu();
+          return;
+      }
+      wrapper.appendChild(list);
+      menu.replaceChildren(wrapper);
+      document.body.appendChild(menu);
+      const menuRect = menu.getBoundingClientRect();
+      const anchorRect = anchor.getBoundingClientRect();
+      const viewportWidth = window.innerWidth;
+      const viewportHeight = window.innerHeight;
+      let top = anchorRect.bottom + 6;
+      let left = anchorRect.left;
+      if (top + menuRect.height > viewportHeight - 8) {
+          top = anchorRect.top - menuRect.height - 6;
+      }
+      if (top < 8) {
+          top = Math.max(8, Math.min(anchorRect.bottom + 6, viewportHeight - menuRect.height - 8));
+      }
+      if (left + menuRect.width > viewportWidth - 8) {
+          left = anchorRect.right - menuRect.width;
+      }
+      if (left < 8) {
+          left = 8;
+      }
+      menu.style.left = `${left}px`;
+      menu.style.top = `${top}px`;
+      menu.style.visibility = "visible";
+      const cleanupHandlers = [];
+      const cleanupMenu = () => {
+          while (cleanupHandlers.length > 0) {
+              const cleanup = cleanupHandlers.pop();
+              try {
+                  cleanup?.();
+              }
+              catch (error) {
+                  console.warn("Failed to clean up column visibility menu listener", error);
+              }
+          }
+          if (menu.parentElement) {
+              menu.parentElement.removeChild(menu);
+          }
+          if (columnMenuCleanup === cleanupMenu) {
+              columnMenuCleanup = null;
+          }
       };
-      switch (leaf.view) {
-          case "players":
-              return renderPlayersView({
+      columnMenuCleanup = cleanupMenu;
+      window.setTimeout(() => {
+          if (columnMenuCleanup !== cleanupMenu) {
+              return;
+          }
+          const handlePointerDown = (event) => {
+              if (!(event.target instanceof Node)) {
+                  return;
+              }
+              if (!menu.contains(event.target) && !anchor.contains(event.target)) {
+                  hideColumnVisibilityMenu();
+              }
+          };
+          const handleKeyDown = (event) => {
+              if (event.key === "Escape") {
+                  hideColumnVisibilityMenu();
+              }
+          };
+          const handleScroll = (event) => {
+              if (!event.isTrusted) {
+                  return;
+              }
+              hideColumnVisibilityMenu();
+          };
+          const handleBlur = () => hideColumnVisibilityMenu();
+          document.addEventListener("pointerdown", handlePointerDown, true);
+          document.addEventListener("keydown", handleKeyDown, true);
+          window.addEventListener("scroll", handleScroll, true);
+          window.addEventListener("blur", handleBlur);
+          cleanupHandlers.push(() => document.removeEventListener("pointerdown", handlePointerDown, true));
+          cleanupHandlers.push(() => document.removeEventListener("keydown", handleKeyDown, true));
+          cleanupHandlers.push(() => window.removeEventListener("scroll", handleScroll, true));
+          cleanupHandlers.push(() => window.removeEventListener("blur", handleBlur));
+      }, 0);
+  }
+  function compareSortValues(a, b, direction) {
+      if (typeof a === "string" && typeof b === "string") {
+          const cmp = a.localeCompare(b, undefined, { sensitivity: "base" });
+          return direction === "asc" ? cmp : -cmp;
+      }
+      const numA = Number(a);
+      const numB = Number(b);
+      if (!Number.isNaN(numA) && !Number.isNaN(numB)) {
+          const diff = numA - numB;
+          if (diff !== 0) {
+              return direction === "asc" ? diff : -diff;
+          }
+          return 0;
+      }
+      const fallback = String(a).localeCompare(String(b), undefined, {
+          sensitivity: "base",
+      });
+      return direction === "asc" ? fallback : -fallback;
+  }
+
+  function isTradeStoppedBySelf(carrier) {
+      if (typeof carrier.tradeStoppedBySelf === "boolean") {
+          return carrier.tradeStoppedBySelf;
+      }
+      if (carrier.tradeStopped !== true) {
+          return false;
+      }
+      if (carrier.tradeStoppedByOther === true) {
+          return false;
+      }
+      return true;
+  }
+  function isTradeStoppedByOther(carrier) {
+      if (typeof carrier.tradeStoppedByOther === "boolean") {
+          return carrier.tradeStoppedByOther;
+      }
+      if (carrier.tradeStopped !== true) {
+          return false;
+      }
+      if (carrier.tradeStoppedBySelf === true) {
+          return false;
+      }
+      return true;
+  }
+
+  const PLAYER_ALERT_CLASS = "bg-red-500 text-white";
+  const PLAYER_COUNT_CLASS = "font-semibold";
+  const PLAYER_NUMERIC_CLASS = "font-mono text-[0.75rem]";
+  const PLAYER_COLUMN_CONFIG = {
+      label: {
+          cellClass: "font-semibold",
+          aggregateCellClass: "font-semibold",
+          getValue: ({ player }) => player.name,
+          getAggregateValue: ({ group }) => group.label,
+          getSortValue: ({ player }) => player.name.toLowerCase(),
+          getAggregateSortValue: ({ group }) => group.label.toLowerCase(),
+      },
+      tiles: createResourceColumn({
+          formatter: formatNumber,
+          value: ({ player }) => player.tiles,
+          aggregateValue: ({ totals }) => totals.tiles,
+      }),
+      gold: createResourceColumn({
+          formatter: formatNumber,
+          value: ({ player }) => player.gold,
+          aggregateValue: ({ totals }) => totals.gold,
+      }),
+      troops: createResourceColumn({
+          formatter: formatTroopCount,
+          value: ({ player }) => player.troops,
+          aggregateValue: ({ totals }) => totals.troops,
+      }),
+      incoming: createMetricColumn("incoming", { highlightPositive: true }),
+      outgoing: createMetricColumn("outgoing"),
+      expanding: createMetricColumn("expanding"),
+      alliances: createMetricColumn("alliances"),
+      disconnected: createMetricColumn("disconnected"),
+      traitor: createMetricColumn("traitor"),
+      stable: createMetricColumn("stable"),
+      waiting: createMetricColumn("waiting"),
+      eliminated: createMetricColumn("eliminated"),
+  };
+  function createResourceColumn(options) {
+      return {
+          cellClass: PLAYER_NUMERIC_CLASS,
+          aggregateCellClass: PLAYER_NUMERIC_CLASS,
+          getValue: (context) => options.formatter(options.value(context)),
+          getAggregateValue: (context) => options.formatter(options.aggregateValue(context)),
+          getSortValue: (context) => options.value(context),
+          getAggregateSortValue: (context) => options.aggregateValue(context),
+      };
+  }
+  function createMetricColumn(metric, options) {
+      const getHighlightClass = options?.highlightPositive
+          ? (value) => (value > 0 ? PLAYER_ALERT_CLASS : undefined)
+          : () => undefined;
+      return {
+          cellClass: PLAYER_COUNT_CLASS,
+          aggregateCellClass: PLAYER_COUNT_CLASS,
+          getValue: ({ metrics }) => String(metrics[metric]),
+          getAggregateValue: ({ metrics }) => String(metrics[metric]),
+          getSortValue: ({ metrics }) => metrics[metric],
+          getAggregateSortValue: ({ metrics }) => metrics[metric],
+          getValueClass: ({ metrics }) => getHighlightClass(metrics[metric]),
+          getAggregateValueClass: ({ metrics }) => getHighlightClass(metrics[metric]),
+      };
+  }
+  function getPlayerColumnConfig(key) {
+      if (key in PLAYER_COLUMN_CONFIG) {
+          return PLAYER_COLUMN_CONFIG[key];
+      }
+      return undefined;
+  }
+  const tableContextActions = new WeakMap();
+  const playerContextTargets = new WeakMap();
+  const groupContextTargets = new WeakMap();
+  function findContextMenuTarget(event, container) {
+      if (event.target instanceof HTMLElement && container.contains(event.target)) {
+          let current = event.target;
+          while (current && current !== container) {
+              const type = current.dataset.contextTarget;
+              if (type === "player" || type === "group") {
+                  return { element: current, type };
+              }
+              current = current.parentElement;
+          }
+      }
+      const composedPath = typeof event.composedPath === "function" ? event.composedPath() : [];
+      for (const node of composedPath) {
+          if (!(node instanceof HTMLElement)) {
+              continue;
+          }
+          if (!container.contains(node)) {
+              continue;
+          }
+          const type = node.dataset.contextTarget;
+          if (type === "player" || type === "group") {
+              return { element: node, type };
+          }
+      }
+      return null;
+  }
+  function registerContextMenuDelegation(container, actions) {
+      tableContextActions.set(container, actions);
+      if (container.dataset.contextMenuDelegated === "true") {
+          return;
+      }
+      const handleContextMenu = (event) => {
+          const tableContainer = event.currentTarget;
+          const activeActions = tableContextActions.get(tableContainer);
+          if (!activeActions) {
+              return;
+          }
+          const targetInfo = findContextMenuTarget(event, tableContainer);
+          if (!targetInfo) {
+              return;
+          }
+          if (targetInfo.type === "player") {
+              const target = playerContextTargets.get(targetInfo.element);
+              if (!target) {
+                  return;
+              }
+              event.preventDefault();
+              event.stopPropagation();
+              const stoppedBySelf = isTradeStoppedBySelf(target);
+              const stoppedByOther = isTradeStoppedByOther(target);
+              const nextStopped = !stoppedBySelf;
+              const disabled = target.isSelf;
+              const actionLabel = nextStopped ? "Stop trading" : "Start trading";
+              const tooltip = disabled
+                  ? "You cannot toggle trading with yourself."
+                  : !nextStopped && stoppedByOther
+                      ? "The other player is also stopping trade with you."
+                      : nextStopped && stoppedByOther
+                          ? "This player has already stopped trading with you."
+                          : undefined;
+              showContextMenu({
+                  x: event.clientX,
+                  y: event.clientY,
+                  title: target.name,
+                  items: [
+                      {
+                          label: actionLabel,
+                          disabled,
+                          tooltip,
+                          onSelect: disabled
+                              ? undefined
+                              : () => activeActions.toggleTrading([target.id], nextStopped),
+                      },
+                  ],
+              });
+              return;
+          }
+          const target = groupContextTargets.get(targetInfo.element);
+          if (!target) {
+              return;
+          }
+          event.preventDefault();
+          event.stopPropagation();
+          const tradingPlayers = target.players.filter((player) => !isTradeStoppedBySelf(player));
+          const stoppedPlayers = target.players.filter((player) => isTradeStoppedBySelf(player));
+          const items = [];
+          if (tradingPlayers.length > 0) {
+              const ids = tradingPlayers.map((player) => player.id);
+              items.push({
+                  label: tradingPlayers.length === target.players.length
+                      ? "Stop trading"
+                      : `Stop trading (${tradingPlayers.length})`,
+                  onSelect: () => activeActions.toggleTrading(ids, true),
+              });
+          }
+          if (stoppedPlayers.length > 0) {
+              const ids = stoppedPlayers.map((player) => player.id);
+              items.push({
+                  label: stoppedPlayers.length === target.players.length
+                      ? "Start trading"
+                      : `Start trading (${stoppedPlayers.length})`,
+                  onSelect: () => activeActions.toggleTrading(ids, false),
+              });
+          }
+          if (!items.length) {
+              items.push({
+                  label: "Stop trading",
+                  disabled: true,
+                  tooltip: "No eligible players in this group.",
+              });
+          }
+          showContextMenu({
+              x: event.clientX,
+              y: event.clientY,
+              title: target.label,
+              items,
+          });
+      };
+      container.addEventListener("contextmenu", handleContextMenu);
+      container.dataset.contextMenuDelegated = "true";
+  }
+  function appendPlayerRows(options) {
+      const { player, indent, leaf, snapshot, tbody, metricsCache, actions } = options;
+      const headers = options.headers;
+      const metrics = getMetrics(player, snapshot, metricsCache);
+      const rowKey = player.id;
+      const tr = createElement("tr", "hover:bg-slate-800/50 transition-colors");
+      tr.dataset.rowKey = rowKey;
+      applyPersistentHover(tr, leaf, rowKey, "bg-slate-800/50");
+      tr.dataset.contextTarget = "player";
+      playerContextTargets.set(tr, {
+          id: player.id,
+          name: player.name,
+          tradeStopped: player.tradeStopped ?? false,
+          tradeStoppedBySelf: player.tradeStoppedBySelf,
+          tradeStoppedByOther: player.tradeStoppedByOther,
+          isSelf: player.isSelf ?? false,
+      });
+      const labelHeader = headers.find((header) => header.key === "label");
+      if (labelHeader) {
+          const firstCell = createElement("td", cellClassForColumn(labelHeader, "align-top"));
+          firstCell.appendChild(createLabelBlock({
+              label: player.name,
+              subtitle: [player.clan, player.team].filter(Boolean).join(" • ") || undefined,
+              indent,
+              focus: player.position,
+          }));
+          tr.appendChild(firstCell);
+      }
+      appendMetricCells({
+          row: tr,
+          metrics,
+          player,
+          snapshot,
+          headers,
+      });
+      tbody.appendChild(tr);
+      tr.addEventListener("click", () => {
+          actions.showPlayerDetails(player.id);
+      });
+  }
+  function appendGroupRows(options) {
+      const { group, leaf, snapshot, tbody, requestRender, groupType, metricsCache, actions, headers, } = options;
+      const groupKey = `${groupType}:${group.key}`;
+      const expanded = leaf.expandedGroups.has(groupKey);
+      const row = createElement("tr", "bg-slate-900/70 hover:bg-slate-800/60 transition-colors font-semibold");
+      row.dataset.groupKey = groupKey;
+      applyPersistentHover(row, leaf, groupKey, "bg-slate-800/60");
+      const eligiblePlayers = group.players.filter((player) => !player.isSelf);
+      row.dataset.contextTarget = "group";
+      groupContextTargets.set(row, {
+          label: group.label,
+          players: eligiblePlayers,
+      });
+      const labelHeader = headers.find((header) => header.key === "label");
+      if (labelHeader) {
+          const firstCell = createElement("td", cellClassForColumn(labelHeader, "align-top", {
+              variant: "expandable",
+          }));
+          firstCell.appendChild(createLabelBlock({
+              label: `${group.label} (${group.players.length})`,
+              subtitle: groupType === "clan" ? "Clan summary" : "Team summary",
+              indent: 0,
+              expanded,
+              toggleAttribute: "data-group-toggle",
+              rowKey: groupKey,
+              onToggle: (next) => {
+                  if (next) {
+                      leaf.expandedGroups.add(groupKey);
+                  }
+                  else {
+                      leaf.expandedGroups.delete(groupKey);
+                  }
+                  requestRender();
+              },
+              persistHover: leaf.hoveredGroupToggleKey === groupKey,
+              onToggleHoverChange: (hovered) => {
+                  if (hovered) {
+                      leaf.hoveredGroupToggleKey = groupKey;
+                  }
+                  else if (leaf.hoveredGroupToggleKey === groupKey) {
+                      leaf.hoveredGroupToggleKey = undefined;
+                  }
+              },
+          }));
+          row.appendChild(firstCell);
+      }
+      appendAggregateCells({
+          row,
+          group,
+          snapshot,
+          headers,
+          variant: "expandable",
+      });
+      tbody.appendChild(row);
+      if (expanded) {
+          for (const player of group.players) {
+              appendPlayerRows({
+                  player,
+                  indent: 1,
                   leaf,
                   snapshot,
-                  requestRender,
-                  sortState,
-                  onSort: handleSort,
-                  existingContainer,
-                  actions: viewActions,
-                  lifecycle,
+                  tbody,
+                  metricsCache,
+                  actions,
+                  headers,
               });
-          case "clanmates":
-              return renderClanView({
-                  leaf,
-                  snapshot,
-                  requestRender,
-                  sortState,
-                  onSort: handleSort,
-                  existingContainer,
-                  actions: viewActions,
-                  lifecycle,
-              });
-          case "teams":
-              return renderTeamView({
-                  leaf,
-                  snapshot,
-                  requestRender,
-                  sortState,
-                  onSort: handleSort,
-                  existingContainer,
-                  actions: viewActions,
-                  lifecycle,
-              });
-          case "ships":
-              return renderShipView({
-                  leaf,
-                  snapshot,
-                  requestRender,
-                  sortState,
-                  onSort: handleSort,
-                  existingContainer,
-                  actions: viewActions,
-                  lifecycle,
-              });
-          case "player":
-              return renderPlayerPanelView({
-                  leaf,
-                  snapshot,
-                  requestRender,
-                  sortState,
-                  onSort: handleSort,
-                  existingContainer,
-                  actions: viewActions,
-                  lifecycle,
-              });
-          case "actions":
-              return renderActionsDirectoryView({
-                  leaf,
-                  snapshot,
-                  sortState,
-                  onSort: handleSort,
-                  existingContainer,
-                  actions: viewActions,
-              });
-          case "actionEditor":
-              return renderActionEditorView({
-                  leaf,
-                  snapshot,
-                  existingContainer,
-                  lifecycle,
-                  actions: viewActions,
-              });
-          case "runningActions":
-              return renderRunningActionsView({
-                  leaf,
-                  snapshot,
-                  sortState,
-                  onSort: handleSort,
-                  existingContainer,
-                  actions: viewActions,
-              });
-          case "runningAction":
-              return renderRunningActionDetailView({
-                  leaf,
-                  snapshot,
-                  existingContainer,
-                  lifecycle,
-                  actions: viewActions,
-              });
-          case "logs":
-              return renderLogView({
-                  leaf,
-                  snapshot,
-                  sortState,
-                  onSort: handleSort,
-                  existingContainer,
-                  actions: viewActions,
-              });
-          case "overlays":
-              return renderOverlayView({
-                  leaf,
-                  snapshot,
-                  sortState,
-                  onSort: handleSort,
-                  existingContainer,
-                  actions: viewActions,
-              });
-          default:
-              return createElement("div", "text-slate-200 text-sm", "Unsupported view");
+          }
       }
   }
-  function ensureSortState(leaf, view) {
-      const state = leaf.sortStates[view];
-      if (state) {
-          return state;
+  function appendMetricCells(options) {
+      const { row, metrics, player, snapshot, headers } = options;
+      const context = { player, metrics, snapshot };
+      for (const column of headers) {
+          if (column.key === "label") {
+              continue;
+          }
+          const config = getPlayerColumnConfig(column.key);
+          const className = [
+              config?.cellClass,
+              config?.getValueClass?.(context),
+          ]
+              .filter(Boolean)
+              .join(" ");
+          const td = createElement("td", cellClassForColumn(column, className));
+          td.textContent = config?.getValue?.(context) ?? "";
+          row.appendChild(td);
       }
-      const fallback = { ...DEFAULT_SORT_STATE };
-      leaf.sortStates[view] = fallback;
-      return fallback;
   }
-  function getDefaultDirection(key) {
+  function appendAggregateCells(options) {
+      const { row, group, snapshot, headers } = options;
+      const variant = options.variant ?? "default";
+      const context = {
+          group,
+          metrics: group.metrics,
+          totals: group.totals,
+          snapshot,
+      };
+      for (const column of headers) {
+          if (column.key === "label") {
+              continue;
+          }
+          const config = getPlayerColumnConfig(column.key);
+          const className = [
+              config?.aggregateCellClass,
+              config?.getAggregateValueClass?.(context),
+          ]
+              .filter(Boolean)
+              .join(" ");
+          const td = createElement("td", cellClassForColumn(column, className, { variant }));
+          td.textContent = config?.getAggregateValue?.(context) ?? "";
+          row.appendChild(td);
+      }
+  }
+  function createLabelBlock(options) {
+      const { label, subtitle, indent, expanded, toggleAttribute, rowKey, onToggle, focus, persistHover, onToggleHoverChange, } = options;
+      const container = createElement("div", "flex items-start gap-3");
+      container.style.marginLeft = `${indent * 1.5}rem`;
+      const labelBlock = createElement("div", "space-y-1");
+      const labelEl = createPlayerNameElement(label, focus, {
+          asBlock: true,
+          className: "block font-semibold text-slate-100 transition-colors hover:text-sky-200",
+      });
+      labelBlock.appendChild(labelEl);
+      if (subtitle) {
+          labelBlock.appendChild(createElement("div", "text-[0.65rem] uppercase tracking-wide text-slate-400", subtitle));
+      }
+      if (toggleAttribute && rowKey && typeof expanded === "boolean" && onToggle) {
+          const button = createElement("button", "flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-slate-700 bg-slate-800 text-slate-300 hover:text-slate-50 focus:outline-none focus:ring-2 focus:ring-sky-500/60 transition-colors");
+          button.setAttribute(toggleAttribute, rowKey);
+          button.type = "button";
+          let currentExpanded = expanded;
+          const updateToggleState = (nextExpanded) => {
+              currentExpanded = nextExpanded;
+              button.title = nextExpanded ? "Collapse" : "Expand";
+              button.textContent = nextExpanded ? "−" : "+";
+          };
+          const setHoverState = (hovered) => {
+              if (hovered) {
+                  button.classList.add("text-slate-50");
+              }
+              else {
+                  button.classList.remove("text-slate-50");
+              }
+              onToggleHoverChange?.(hovered);
+          };
+          updateToggleState(currentExpanded);
+          if (persistHover) {
+              setHoverState(true);
+          }
+          button.addEventListener("pointerenter", () => {
+              setHoverState(true);
+          });
+          button.addEventListener("pointerleave", () => {
+              requestAnimationFrame(() => {
+                  if (!button.isConnected) {
+                      return;
+                  }
+                  setHoverState(false);
+              });
+          });
+          let pointerHandled = false;
+          button.addEventListener("pointerdown", (event) => {
+              if (event.button !== 0) {
+                  return;
+              }
+              event.preventDefault();
+              event.stopPropagation();
+              pointerHandled = true;
+              const nextExpanded = !currentExpanded;
+              updateToggleState(nextExpanded);
+              onToggle(nextExpanded);
+          });
+          button.addEventListener("click", (event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              if (pointerHandled) {
+                  pointerHandled = false;
+                  return;
+              }
+              const nextExpanded = !currentExpanded;
+              updateToggleState(nextExpanded);
+              onToggle(nextExpanded);
+          });
+          container.appendChild(button);
+      }
+      container.appendChild(labelBlock);
+      return container;
+  }
+  function getMetrics(player, snapshot, cache) {
+      const cached = cache.get(player.id);
+      if (cached) {
+          return cached;
+      }
+      const metrics = computePlayerMetrics(player, snapshot);
+      cache.set(player.id, metrics);
+      return metrics;
+  }
+  function comparePlayers(options) {
+      const { a, b, sortState, snapshot, metricsCache } = options;
+      const metricsA = getMetrics(a, snapshot, metricsCache);
+      const metricsB = getMetrics(b, snapshot, metricsCache);
+      const column = getPlayerColumnConfig(sortState.key);
+      const contextA = {
+          player: a,
+          metrics: metricsA,
+          snapshot,
+      };
+      const contextB = {
+          player: b,
+          metrics: metricsB,
+          snapshot,
+      };
+      const valueA = column?.getSortValue?.(contextA) ??
+          getDefaultPlayerSortValue(sortState.key, contextA);
+      const valueB = column?.getSortValue?.(contextB) ??
+          getDefaultPlayerSortValue(sortState.key, contextB);
+      const result = compareSortValues(valueA, valueB, sortState.direction);
+      if (result !== 0) {
+          return result;
+      }
+      return a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
+  }
+  function compareAggregated(options) {
+      const { a, b, sortState, snapshot } = options;
+      const column = getPlayerColumnConfig(sortState.key);
+      const contextA = {
+          group: a,
+          metrics: a.metrics,
+          totals: a.totals,
+          snapshot,
+      };
+      const contextB = {
+          group: b,
+          metrics: b.metrics,
+          totals: b.totals,
+          snapshot,
+      };
+      const valueA = column?.getAggregateSortValue?.(contextA) ??
+          getDefaultAggregateSortValue(sortState.key, contextA);
+      const valueB = column?.getAggregateSortValue?.(contextB) ??
+          getDefaultAggregateSortValue(sortState.key, contextB);
+      const result = compareSortValues(valueA, valueB, sortState.direction);
+      if (result !== 0) {
+          return result;
+      }
+      return a.label.localeCompare(b.label, undefined, { sensitivity: "base" });
+  }
+  function getDefaultPlayerSortValue(key, context) {
+      const { player, metrics } = context;
       switch (key) {
-          case "label":
-          case "owner":
-          case "type":
-          case "origin":
-          case "current":
-          case "destination":
-          case "status":
-          case "source":
-          case "message":
-              return "asc";
-          case "timestamp":
-              return "asc";
-          case "level":
-              return "desc";
+          case "tiles":
+              return player.tiles;
+          case "gold":
+              return player.gold;
+          case "troops":
+              return player.troops;
+          case "incoming":
+              return metrics.incoming;
+          case "outgoing":
+              return metrics.outgoing;
+          case "expanding":
+              return metrics.expanding;
+          case "alliances":
+              return metrics.alliances;
+          case "disconnected":
+              return metrics.disconnected;
+          case "traitor":
+              return metrics.traitor;
+          case "stable":
+              return metrics.stable;
+          case "waiting":
+              return metrics.waiting;
+          case "eliminated":
+              return metrics.eliminated;
           default:
-              return "desc";
+              return player.name.toLowerCase();
       }
+  }
+  function getDefaultAggregateSortValue(key, context) {
+      const { group, metrics, totals } = context;
+      switch (key) {
+          case "tiles":
+              return totals.tiles;
+          case "gold":
+              return totals.gold;
+          case "troops":
+              return totals.troops;
+          case "incoming":
+              return metrics.incoming;
+          case "outgoing":
+              return metrics.outgoing;
+          case "expanding":
+              return metrics.expanding;
+          case "alliances":
+              return metrics.alliances;
+          case "disconnected":
+              return metrics.disconnected;
+          case "traitor":
+              return metrics.traitor;
+          case "stable":
+              return metrics.stable;
+          case "waiting":
+              return metrics.waiting;
+          case "eliminated":
+              return metrics.eliminated;
+          case "label":
+              return group.label.toLowerCase();
+          default:
+              return group.label.toLowerCase();
+      }
+  }
+  function groupPlayers(options) {
+      const { players, snapshot, metricsCache, getKey, sortState } = options;
+      const map = new Map();
+      for (const player of players) {
+          const key = getKey(player) ?? "Unaffiliated";
+          if (!map.has(key)) {
+              map.set(key, {
+                  key,
+                  label: key,
+                  players: [],
+                  metrics: {
+                      incoming: 0,
+                      outgoing: 0,
+                      expanding: 0,
+                      waiting: 0,
+                      eliminated: 0,
+                      disconnected: 0,
+                      traitor: 0,
+                      alliances: 0,
+                      stable: 0,
+                  },
+                  totals: {
+                      tiles: 0,
+                      gold: 0,
+                      troops: 0,
+                  },
+              });
+          }
+          const entry = map.get(key);
+          entry.players.push(player);
+          const metrics = getMetrics(player, snapshot, metricsCache);
+          entry.metrics.incoming += metrics.incoming;
+          entry.metrics.outgoing += metrics.outgoing;
+          entry.metrics.expanding += metrics.expanding;
+          entry.metrics.waiting += metrics.waiting;
+          entry.metrics.eliminated += metrics.eliminated;
+          entry.metrics.disconnected += metrics.disconnected;
+          entry.metrics.traitor += metrics.traitor;
+          entry.metrics.alliances += metrics.alliances;
+          entry.metrics.stable += metrics.stable;
+          entry.totals.tiles += player.tiles;
+          entry.totals.gold += player.gold;
+          entry.totals.troops += player.troops;
+      }
+      const rows = Array.from(map.values());
+      for (const row of rows) {
+          row.players.sort((a, b) => comparePlayers({
+              a,
+              b,
+              sortState,
+              snapshot,
+              metricsCache,
+          }));
+      }
+      rows.sort((a, b) => compareAggregated({ a, b, sortState, snapshot }));
+      return rows;
+  }
+  function computePlayerMetrics(player, snapshot) {
+      const incoming = player.incomingAttacks.length;
+      const outgoing = player.outgoingAttacks.length;
+      const expanding = player.expansions;
+      const waiting = player.waiting ? 1 : 0;
+      const eliminated = player.eliminated ? 1 : 0;
+      const disconnected = player.disconnected ? 1 : 0;
+      const traitor = player.traitor ? 1 : 0;
+      const alliances = getActiveAlliances(player, snapshot).length;
+      const stable = incoming +
+          outgoing +
+          expanding +
+          waiting +
+          eliminated +
+          disconnected +
+          traitor ===
+          0
+          ? 1
+          : 0;
+      return {
+          incoming,
+          outgoing,
+          expanding,
+          waiting,
+          eliminated,
+          disconnected,
+          traitor,
+          alliances,
+          stable,
+      };
+  }
+  function getActiveAlliances(player, snapshot) {
+      return player.alliances.filter((pact) => {
+          const expiresAt = pact.startedAtMs + snapshot.allianceDurationMs;
+          return expiresAt > snapshot.currentTimeMs;
+      });
   }
   function renderPlayersView(options) {
       const { leaf, snapshot, sortState, onSort, existingContainer, actions } = options;
@@ -1121,6 +1980,7 @@
       registerContextMenuDelegation(container, actions);
       return container;
   }
+
   function renderShipView(options) {
       const { leaf, snapshot, sortState, onSort, existingContainer } = options;
       const visibleHeaders = getVisibleHeaders(leaf, leaf.view, SHIP_HEADERS);
@@ -1167,17 +2027,147 @@
       }
       return container;
   }
+  function getShipExtraCellClass(key) {
+      switch (key) {
+          case "label":
+              return "font-semibold text-slate-100";
+          case "owner":
+              return "text-slate-200";
+          case "type":
+              return "text-[0.75rem] text-slate-300";
+          case "troops":
+              return "font-mono text-[0.75rem] text-slate-200";
+          case "status":
+              return "capitalize text-slate-200";
+          case "origin":
+          case "current":
+          case "destination":
+              return "text-[0.75rem] text-slate-300";
+          default:
+              return "text-slate-300";
+      }
+  }
+  function getShipCellValue(key, ship) {
+      switch (key) {
+          case "label":
+              return `${ship.type} #${ship.id}`;
+          case "owner":
+              return ship.ownerName;
+          case "type":
+              return ship.type;
+          case "troops":
+              return formatTroopCount(ship.troops);
+          case "origin":
+              return formatTileSummary(ship.origin);
+          case "current":
+              return formatTileSummary(ship.current);
+          case "destination":
+              return formatTileSummary(ship.destination);
+          case "status":
+              return deriveShipStatus(ship);
+          default:
+              return "";
+      }
+  }
+  function compareShips(options) {
+      const { a, b, sortState } = options;
+      const valueA = getShipSortValue(a, sortState.key);
+      const valueB = getShipSortValue(b, sortState.key);
+      const result = compareSortValues(valueA, valueB, sortState.direction);
+      if (result !== 0) {
+          return result;
+      }
+      const ownerCompare = a.ownerName.localeCompare(b.ownerName, undefined, {
+          sensitivity: "base",
+      });
+      if (ownerCompare !== 0) {
+          return ownerCompare;
+      }
+      return a.id.localeCompare(b.id, undefined, { sensitivity: "base" });
+  }
+  function getShipSortValue(ship, key) {
+      switch (key) {
+          case "label":
+              return `${ship.type.toLowerCase()}-${ship.id}`;
+          case "owner":
+              return ship.ownerName.toLowerCase();
+          case "type":
+              return ship.type.toLowerCase();
+          case "troops":
+              return ship.troops;
+          case "origin":
+              return tileSortValue(ship.origin);
+          case "current":
+              return tileSortValue(ship.current);
+          case "destination":
+              return tileSortValue(ship.destination);
+          case "status":
+              return deriveShipStatus(ship).toLowerCase();
+          default:
+              return 0;
+      }
+  }
+  function tileSortValue(summary) {
+      if (!summary) {
+          return "";
+      }
+      const x = summary.x.toString().padStart(5, "0");
+      const y = summary.y.toString().padStart(5, "0");
+      const owner = summary.ownerName?.toLowerCase() ?? "";
+      return `${x}:${y}:${owner}`;
+  }
+  function formatTileSummary(summary) {
+      if (!summary) {
+          return "–";
+      }
+      const coords = `${summary.x}, ${summary.y}`;
+      return summary.ownerName ? `${coords} (${summary.ownerName})` : coords;
+  }
+  function deriveShipStatus(ship) {
+      if (ship.retreating) {
+          return "Retreating";
+      }
+      if (ship.reachedTarget) {
+          return "Arrived";
+      }
+      if (ship.type === "Transport") {
+          return "En Route";
+      }
+      if (!ship.destination) {
+          return ship.current ? "Idle" : "Unknown";
+      }
+      if (ship.current &&
+          ship.destination &&
+          ship.current.ref === ship.destination.ref) {
+          return "Stationed";
+      }
+      return "En route";
+  }
+  function createCoordinateButton(summary) {
+      if (!summary) {
+          return createElement("span", "text-slate-500", "–");
+      }
+      const label = formatTileSummary(summary);
+      const button = createElement("button", "inline-flex max-w-full items-center rounded-sm px-0 text-left text-sky-300 transition-colors hover:text-sky-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-500/60", label);
+      button.type = "button";
+      button.title = `Focus on ${label}`;
+      attachImmediateTileFocus(button, () => {
+          focusTile(summary);
+      });
+      return button;
+  }
+
   function renderPlayerPanelView(options) {
       const { leaf, snapshot, existingContainer } = options;
       const containerClass = "relative flex-1 overflow-auto border border-slate-900/70 bg-slate-950/60 backdrop-blur-sm";
       const canReuse = !!existingContainer &&
-          existingContainer.dataset.sidebarRole === "player-panel" &&
+          existingContainer.dataset.sidebarRole === SidebarRole.PlayerPanel &&
           existingContainer.dataset.sidebarView === leaf.view;
       const container = canReuse
           ? existingContainer
           : createElement("div", containerClass);
       container.className = containerClass;
-      container.dataset.sidebarRole = "player-panel";
+      container.dataset.sidebarRole = SidebarRole.PlayerPanel;
       container.dataset.sidebarView = leaf.view;
       const content = createElement("div", "flex min-h-full flex-col gap-6 p-4 text-sm text-slate-100");
       const playerId = leaf.selectedPlayerId;
@@ -1203,9 +2193,9 @@
               }
               header.appendChild(title);
               const summary = createElement("div", "grid gap-3 sm:grid-cols-3 text-[0.75rem]");
-              summary.appendChild(createSummaryStat("Tiles", formatNumber(player.tiles)));
-              summary.appendChild(createSummaryStat("Gold", formatNumber(player.gold)));
-              summary.appendChild(createSummaryStat("Troops", formatTroopCount(player.troops)));
+              summary.appendChild(createSummaryStat$1("Tiles", formatNumber(player.tiles)));
+              summary.appendChild(createSummaryStat$1("Gold", formatNumber(player.gold)));
+              summary.appendChild(createSummaryStat$1("Troops", formatTroopCount(player.troops)));
               header.appendChild(summary);
               const playerStoppedBySelf = isTradeStoppedBySelf(player);
               const playerStoppedByOther = isTradeStoppedByOther(player);
@@ -1230,13 +2220,155 @@
       container.replaceChildren(content);
       return container;
   }
+  function renderPlayerDetails(player, snapshot) {
+      const wrapper = createElement("div", "space-y-4 text-[0.75rem] text-slate-100");
+      const metrics = computePlayerMetrics(player, snapshot);
+      const badgeRow = createElement("div", "flex flex-wrap gap-2");
+      badgeRow.appendChild(createBadge("⚠️ Incoming", metrics.incoming));
+      badgeRow.appendChild(createBadge("⚔️ Outgoing", metrics.outgoing));
+      badgeRow.appendChild(createBadge("🌱 Expanding", metrics.expanding));
+      badgeRow.appendChild(createBadge("🤝 Alliances", metrics.alliances));
+      badgeRow.appendChild(createBadge("📡 Disconnected", metrics.disconnected));
+      badgeRow.appendChild(createBadge("🕱 Traitor", metrics.traitor));
+      badgeRow.appendChild(createBadge("⏳ Waiting", metrics.waiting));
+      badgeRow.appendChild(createBadge("☠️ Eliminated", metrics.eliminated));
+      badgeRow.appendChild(createBadge("🛡️ Stable", metrics.stable, metrics.stable > 0));
+      wrapper.appendChild(badgeRow);
+      const grid = createElement("div", "grid gap-4 md:grid-cols-2");
+      grid.appendChild(createDetailSection("Incoming attacks", player.incomingAttacks, (attack) => `${attack.from} – ${formatTroopCount(attack.troops)} troops`));
+      grid.appendChild(createDetailSection("Outgoing attacks", player.outgoingAttacks, (attack) => `${attack.target} – ${formatTroopCount(attack.troops)} troops`));
+      grid.appendChild(createDetailSection("Defensive supports", player.defensiveSupports, (support) => `${support.ally} – ${formatTroopCount(support.troops)} troops`));
+      const activeAlliances = getActiveAlliances(player, snapshot);
+      grid.appendChild(createDetailSection("Alliances", activeAlliances, (pact) => {
+          const expiresAt = pact.startedAtMs + snapshot.allianceDurationMs;
+          const countdown = formatCountdown(expiresAt, snapshot.currentTimeMs);
+          return `${pact.partner} – expires in ${countdown}`;
+      }));
+      if (player.traitor || player.traitorTargets.length) {
+          grid.appendChild(createDetailSection("Traitor activity", player.traitorTargets, (target) => `Betrayed ${target}`));
+      }
+      wrapper.appendChild(grid);
+      return wrapper;
+  }
+  function createDetailSection(title, entries, toLabel) {
+      const section = createElement("section", "space-y-2");
+      const heading = createElement("h4", "font-semibold uppercase text-slate-300 tracking-wide text-[0.7rem]", title);
+      section.appendChild(heading);
+      if (!entries.length) {
+          section.appendChild(createElement("p", "text-slate-500 italic", "No records."));
+          return section;
+      }
+      const list = createElement("ul", "space-y-2");
+      for (const entry of entries) {
+          const item = createElement("li", "rounded-md border border-slate-800 bg-slate-900/80 px-3 py-2");
+          item.appendChild(createElement("div", "font-medium text-slate-200", toLabel(entry)));
+          list.appendChild(item);
+      }
+      section.appendChild(list);
+      return section;
+  }
+  function createBadge(label, value, highlight = value > 0) {
+      const badge = createElement("span", `inline-flex items-center gap-1 rounded-full px-3 py-1 text-[0.65rem] font-semibold ${highlight
+        ? "bg-sky-500/20 text-sky-200 border border-sky-500/40"
+        : "bg-slate-800/80 text-slate-300"}`);
+      const [emoji, ...rest] = label.split(" ");
+      const emojiSpan = createElement("span", "text-base");
+      emojiSpan.textContent = emoji;
+      badge.appendChild(emojiSpan);
+      badge.appendChild(createElement("span", "", rest.join(" ")));
+      badge.appendChild(createElement("span", "font-mono text-[0.7rem]", String(value)));
+      return badge;
+  }
+  function createSummaryStat$1(label, value) {
+      const wrapper = createElement("div", "rounded-md border border-slate-800/70 bg-slate-900/70 px-3 py-2");
+      const title = createElement("div", "text-[0.65rem] uppercase tracking-wide text-slate-400", label);
+      const content = createElement("div", "font-mono text-base text-slate-100", value);
+      wrapper.appendChild(title);
+      wrapper.appendChild(content);
+      return wrapper;
+  }
+
+  const EMPTY_ACTIONS_STATE = {
+      revision: 0,
+      runningRevision: 0,
+      actions: [],
+      running: [],
+  };
+  function getActionsState(snapshot) {
+      return snapshot.sidebarActions ?? EMPTY_ACTIONS_STATE;
+  }
+
+  let editorSettingIdCounter = 0;
+  function nextEditorSettingId() {
+      editorSettingIdCounter += 1;
+      return `editor-setting-${editorSettingIdCounter}`;
+  }
+  function getRunModeLabel(mode) {
+      switch (mode) {
+          case "once":
+              return "Run once";
+          case "continuous":
+              return "Continuous";
+          case "event":
+              return "Event-driven";
+          default:
+              return mode;
+      }
+  }
+  function describeRunMode(mode) {
+      switch (mode) {
+          case "once":
+              return "Runs a single time and removes itself from the running list.";
+          case "continuous":
+              return "Keeps running until you stop it manually.";
+          case "event":
+              return "Listens for subscribed game events and reacts when they fire.";
+          default:
+              return mode;
+      }
+  }
+  function formatRunStatus(status) {
+      switch (status) {
+          case "running":
+              return "Running";
+          case "completed":
+              return "Completed";
+          case "stopped":
+              return "Stopped";
+          case "failed":
+              return "Failed";
+          default:
+              return status;
+      }
+  }
+  function defaultValueForType(type) {
+      switch (type) {
+          case "number":
+              return 0;
+          case "toggle":
+              return false;
+          default:
+              return "";
+      }
+  }
   function renderActionsDirectoryView(options) {
       const { leaf, snapshot, existingContainer, actions, sortState, onSort } = options;
       const state = getActionsState(snapshot);
-      const signature = `${state.revision}:${state.selectedActionId ?? ""}:${state.running.length}`;
+      const runningSignature = state.running.length === 0
+          ? "none"
+          : state.running
+              .map((run) => [
+              run.id,
+              run.actionId,
+              run.status,
+              run.lastUpdatedMs ?? "0",
+          ].join(":"))
+              .sort()
+              .join("|");
+      const signature = `${state.revision}:${state.runningRevision}:${state.selectedActionId ?? ""}:${runningSignature}`;
       const sortSignature = `${sortState.key}:${sortState.direction}`;
       const isDirectoryContainer = !!existingContainer &&
-          existingContainer.dataset.sidebarRole === "actions-directory";
+          existingContainer.dataset.sidebarRole === SidebarRole.ActionsDirectory;
       const visibleHeaders = getVisibleHeaders(leaf, leaf.view, ACTIONS_TABLE_HEADERS);
       const visibilitySignature = getColumnVisibilitySignature(visibleHeaders);
       if (isDirectoryContainer &&
@@ -1252,7 +2384,7 @@
           existingContainer: isDirectoryContainer ? existingContainer : undefined,
           view: leaf.view,
           headers: visibleHeaders,
-          role: "actions-directory",
+          role: SidebarRole.ActionsDirectory,
       });
       container.dataset.signature = signature;
       container.dataset.sortState = sortSignature;
@@ -1427,13 +2559,13 @@
           ? `${state.revision}:${selectedAction.id}:${selectedAction.updatedAtMs}`
           : `${state.revision}:none`;
       const prior = existingContainer;
-      const isEditorContainer = !!prior && prior.dataset.sidebarRole === "action-editor";
+      const isEditorContainer = !!prior && prior.dataset.sidebarRole === SidebarRole.ActionEditor;
       const container = isEditorContainer
           ? prior
           : createElement("div", "relative flex-1 overflow-auto border border-slate-900/70 bg-slate-950/60 backdrop-blur-sm");
       container.className =
           "relative flex-1 overflow-auto border border-slate-900/70 bg-slate-950/60 backdrop-blur-sm";
-      container.dataset.sidebarRole = "action-editor";
+      container.dataset.sidebarRole = SidebarRole.ActionEditor;
       container.dataset.sidebarView = leaf.view;
       if (container.dataset.signature === signature) {
           return container;
@@ -1637,7 +2769,7 @@
       layout.appendChild(settingsSection);
       const footer = createElement("div", "flex flex-wrap items-center justify-between gap-3 border-t border-slate-800/70 pt-4");
       const leftControls = createElement("div", "flex items-center gap-2");
-      const runButton = createElement("button", "rounded-md border border-sky-500/60 bg-sky-500/10 px-3 py-1.5 text-xs font-semibold text-sky-100 transition-colors hover:bg-sky-500/20", "Run action");
+      const runButton = createElement("button", "rounded-md border border-sky-500/60 bg-sky-500/20 px-3 py-1.5 text-xs font-semibold text-sky-100 transition-colors hover:bg-sky-500/30", "Run action");
       runButton.type = "button";
       const applyRunButtonState = (enabled) => {
           if (enabled) {
@@ -1706,779 +2838,14 @@
       container.replaceChildren(layout);
       return container;
   }
-  function renderRunningActionsView(options) {
-      const { leaf, snapshot, existingContainer, actions, sortState, onSort } = options;
-      const state = getActionsState(snapshot);
-      const signature = `${state.runningRevision}:${state.selectedRunningActionId ?? ""}:${state.running.length}`;
-      const sortSignature = `${sortState.key}:${sortState.direction}`;
-      const isContainer = !!existingContainer &&
-          existingContainer.dataset.sidebarRole === "running-actions";
-      const visibleHeaders = getVisibleHeaders(leaf, leaf.view, RUNNING_ACTIONS_TABLE_HEADERS);
-      const visibilitySignature = getColumnVisibilitySignature(visibleHeaders);
-      if (isContainer &&
-          existingContainer.dataset.signature === signature &&
-          existingContainer.dataset.sortState === sortSignature &&
-          existingContainer.dataset.columnVisibilitySignature === visibilitySignature) {
-          existingContainer.dataset.columnVisibilitySignature = visibilitySignature;
-          return existingContainer;
-      }
-      const { container, tbody } = createTableShell({
-          sortState,
-          onSort,
-          existingContainer: isContainer ? existingContainer : undefined,
-          view: leaf.view,
-          headers: visibleHeaders,
-          role: "running-actions",
-      });
-      container.dataset.signature = signature;
-      container.dataset.sortState = sortSignature;
-      container.dataset.columnVisibilitySignature = visibilitySignature;
-      const cellBaseClass = `${TABLE_CELL_BASE_CLASS} align-top`;
-      const visibleKeys = new Set(visibleHeaders.map((header) => header.key));
-      const getStatusRank = (run) => {
-          const rank = {
-              running: 0,
-              completed: 1,
-              stopped: 2,
-              failed: 3,
-          };
-          return rank[run.status] ?? 4;
+  function createActionStatusBadge(status) {
+      const baseClass = "rounded-full px-2 py-0.5 text-[0.6rem] font-semibold uppercase tracking-wide";
+      const styles = {
+          Enabled: "bg-sky-500/20 text-sky-200",
+          Running: "bg-emerald-500/20 text-emerald-200",
+          Disabled: "bg-slate-700/60 text-slate-200",
       };
-      if (state.running.length === 0) {
-          const row = createElement("tr", "hover:bg-transparent");
-          const cell = createElement("td", `${cellBaseClass} text-center text-slate-400`, "No actions are currently running.");
-          cell.colSpan = Math.max(1, visibleHeaders.length);
-          row.appendChild(cell);
-          tbody.appendChild(row);
-          return container;
-      }
-      const runs = [...state.running];
-      if (sortState.key === "label") {
-          runs.sort((a, b) => compareSortValues(a.name.toLowerCase(), b.name.toLowerCase(), sortState.direction));
-      }
-      else if (sortState.key === "status") {
-          runs.sort((a, b) => {
-              const cmp = compareSortValues(getStatusRank(a), getStatusRank(b), sortState.direction);
-              if (cmp !== 0) {
-                  return cmp;
-              }
-              return compareSortValues(a.name.toLowerCase(), b.name.toLowerCase(), "asc");
-          });
-      }
-      for (const run of runs) {
-          const isSelected = state.selectedRunningActionId === run.id;
-          const row = createElement("tr", "cursor-pointer transition-colors hover:bg-slate-800/40");
-          applyRowSelectionIndicator(row, isSelected);
-          row.dataset.runningActionId = run.id;
-          row.addEventListener("click", () => {
-              actions.selectRunningAction?.(run.id);
-          });
-          const nameCell = createElement("td", `${cellBaseClass} text-left`);
-          const nameLine = createElement("div", "flex flex-wrap items-center gap-2");
-          const nameLabel = createPlayerNameElement(run.name, undefined, {
-              className: "font-semibold text-slate-100 transition-colors hover:text-sky-200",
-          });
-          nameLine.appendChild(nameLabel);
-          nameCell.appendChild(nameLine);
-          const statusCell = createElement("td", `${cellBaseClass} text-left`);
-          statusCell.appendChild(createRunStatusBadge(run.status));
-          const modeCell = createElement("td", `${cellBaseClass} text-[0.75rem] uppercase tracking-wide text-slate-400`, getRunModeLabel(run.runMode));
-          const startedCell = createElement("td", `${cellBaseClass} text-[0.75rem] text-slate-300`, formatTimestamp(run.startedAtMs));
-          const controlsCell = createElement("td", `${cellBaseClass} text-right`);
-          const stopButton = createElement("button", "rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-1 text-xs font-semibold text-rose-200 transition-colors hover:bg-rose-500/20", "Stop");
-          stopButton.type = "button";
-          stopButton.addEventListener("click", (event) => {
-              event.stopPropagation();
-              actions.stopRunningAction?.(run.id);
-          });
-          if (run.status !== "running") {
-              stopButton.disabled = true;
-              stopButton.classList.add("cursor-not-allowed", "opacity-50");
-          }
-          controlsCell.appendChild(stopButton);
-          if (visibleKeys.has("name")) {
-              row.appendChild(nameCell);
-          }
-          if (visibleKeys.has("status")) {
-              row.appendChild(statusCell);
-          }
-          if (visibleKeys.has("mode")) {
-              row.appendChild(modeCell);
-          }
-          if (visibleKeys.has("started")) {
-              row.appendChild(startedCell);
-          }
-          if (visibleKeys.has("controls")) {
-              row.appendChild(controlsCell);
-          }
-          tbody.appendChild(row);
-      }
-      return container;
-  }
-  function renderRunningActionDetailView(options) {
-      const { leaf, snapshot, existingContainer, actions } = options;
-      const state = getActionsState(snapshot);
-      const selectedRun = state.running.find((run) => run.id === state.selectedRunningActionId);
-      const signature = selectedRun
-          ? `${state.runningRevision}:${selectedRun.id}:${selectedRun.lastUpdatedMs}`
-          : `${state.runningRevision}:none`;
-      const isContainer = !!existingContainer &&
-          existingContainer.dataset.sidebarRole === "running-action";
-      const container = isContainer
-          ? existingContainer
-          : createElement("div", "relative flex-1 overflow-auto border border-slate-900/70 bg-slate-950/60 backdrop-blur-sm");
-      container.className =
-          "relative flex-1 overflow-auto border border-slate-900/70 bg-slate-950/60 backdrop-blur-sm";
-      container.dataset.sidebarRole = "running-action";
-      container.dataset.sidebarView = leaf.view;
-      if (container.dataset.signature === signature) {
-          return container;
-      }
-      container.dataset.signature = signature;
-      if (!selectedRun) {
-          container.replaceChildren(createElement("div", "flex h-full items-center justify-center p-6 text-center text-sm text-slate-400", state.running.length === 0
-              ? "No actions are currently running."
-              : "Select a running action to adjust its settings."));
-          return container;
-      }
-      const layout = createElement("div", "flex min-h-full flex-col gap-6 p-4 text-sm text-slate-100");
-      const header = createElement("div", "flex flex-wrap items-start justify-between gap-3 border-b border-slate-800/70 pb-3");
-      const headerText = createElement("div", "flex flex-col gap-1");
-      const titleLine = createElement("div", "flex flex-wrap items-center gap-2 text-lg font-semibold text-slate-100");
-      titleLine.appendChild(createElement("span", "", selectedRun.name));
-      titleLine.appendChild(createRunStatusBadge(selectedRun.status));
-      headerText.appendChild(titleLine);
-      const trimmedDescription = selectedRun.description?.trim() ?? "";
-      if (trimmedDescription !== "") {
-          headerText.appendChild(createElement("div", "text-sm text-slate-400", trimmedDescription));
-      }
-      headerText.appendChild(createElement("div", "text-[0.7rem] text-slate-400", describeRunMode(selectedRun.runMode)));
-      header.appendChild(headerText);
-      const stopButton = createElement("button", "rounded-md border border-rose-500/50 bg-rose-500/10 px-3 py-1.5 text-xs font-semibold text-rose-200 transition-colors hover:bg-rose-500/20", "Stop action");
-      stopButton.type = "button";
-      stopButton.addEventListener("click", () => {
-          actions.stopRunningAction?.(selectedRun.id);
-      });
-      if (selectedRun.status !== "running") {
-          stopButton.disabled = true;
-          stopButton.classList.add("cursor-not-allowed", "opacity-50");
-      }
-      header.appendChild(stopButton);
-      layout.appendChild(header);
-      const meta = createElement("div", "grid gap-3 text-[0.75rem] sm:grid-cols-3");
-      meta.appendChild(createSummaryStat("Status", formatRunStatus(selectedRun.status)));
-      meta.appendChild(createSummaryStat("Started", formatTimestamp(selectedRun.startedAtMs)));
-      meta.appendChild(createSummaryStat("Last update", formatTimestamp(selectedRun.lastUpdatedMs)));
-      layout.appendChild(meta);
-      if (selectedRun.runMode === "continuous") {
-          const intervalField = createElement("label", "flex w-full max-w-xs flex-col gap-1");
-          intervalField.appendChild(createElement("span", "text-xs uppercase tracking-wide text-slate-400", "Run every (ticks)"));
-          const intervalInput = document.createElement("input");
-          intervalInput.type = "number";
-          intervalInput.min = "1";
-          intervalInput.className =
-              "w-full rounded-md border border-slate-700 bg-slate-900/80 px-3 py-1.5 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-sky-500/70";
-          intervalInput.value = String(selectedRun.runIntervalTicks ?? 1);
-          intervalInput.addEventListener("change", () => {
-              const numeric = Number(intervalInput.value);
-              const normalized = Number.isFinite(numeric) && numeric > 0 ? Math.floor(numeric) : 1;
-              intervalInput.value = String(normalized);
-              if (normalized === selectedRun.runIntervalTicks) {
-                  return;
-              }
-              actions.setRunningActionInterval?.(selectedRun.id, normalized);
-          });
-          intervalField.appendChild(intervalInput);
-          layout.appendChild(intervalField);
-      }
-      const settingsSection = createElement("div", "flex flex-col gap-3");
-      settingsSection.appendChild(createElement("span", "text-xs uppercase tracking-wide text-slate-400", "Runtime settings"));
-      const settingsList = createElement("div", "flex flex-col gap-3");
-      if (selectedRun.settings.length === 0) {
-          settingsList.appendChild(createElement("p", "text-[0.75rem] text-slate-400", "This action does not expose any runtime settings."));
-      }
-      else {
-          for (const setting of selectedRun.settings) {
-              settingsList.appendChild(createRunningSettingField(selectedRun.id, setting, actions));
-          }
-      }
-      settingsSection.appendChild(settingsList);
-      layout.appendChild(settingsSection);
-      container.replaceChildren(layout);
-      return container;
-  }
-  const LOG_TABLE_HEADERS = [
-      {
-          key: "timestamp",
-          label: "Timestamp",
-          align: "left",
-          sortKey: "timestamp",
-          hideable: false,
-      },
-      { key: "level", label: "Level", align: "center", sortKey: "level" },
-      { key: "source", label: "Source", align: "left", sortKey: "source" },
-      { key: "message", label: "Message", align: "left", sortKey: "message" },
-  ];
-  const ACTIONS_TABLE_HEADERS = [
-      {
-          key: "name",
-          label: "Action",
-          align: "left",
-          sortKey: "label",
-          hideable: false,
-      },
-      { key: "status", label: "Status", align: "left", sortKey: "status" },
-      { key: "toggle", label: "Enabled", align: "center", sortKey: "enabled" },
-      { key: "controls", label: "Actions", align: "right", sortable: false },
-  ];
-  const RUNNING_ACTIONS_TABLE_HEADERS = [
-      {
-          key: "name",
-          label: "Action",
-          align: "left",
-          sortKey: "label",
-          hideable: false,
-      },
-      { key: "status", label: "Status", align: "left", sortKey: "status" },
-      { key: "mode", label: "Mode", align: "left", sortable: false },
-      { key: "started", label: "Started", align: "left", sortable: false },
-      { key: "controls", label: "", align: "right", sortable: false },
-  ];
-  const OVERLAY_TABLE_HEADERS = [
-      {
-          key: "name",
-          label: "Overlay",
-          align: "left",
-          sortKey: "label",
-          hideable: false,
-      },
-      { key: "status", label: "Status", align: "right", sortKey: "status" },
-  ];
-  function getTableHeadersForView(view) {
-      switch (view) {
-          case "players":
-          case "clanmates":
-          case "teams":
-              return TABLE_HEADERS;
-          case "ships":
-              return SHIP_HEADERS;
-          case "actions":
-              return ACTIONS_TABLE_HEADERS;
-          case "runningActions":
-              return RUNNING_ACTIONS_TABLE_HEADERS;
-          case "logs":
-              return LOG_TABLE_HEADERS;
-          case "overlays":
-              return OVERLAY_TABLE_HEADERS;
-          default:
-              return undefined;
-      }
-  }
-  function renderOverlayView(options) {
-      const { leaf, snapshot, existingContainer, actions, sortState, onSort } = options;
-      const overlays = snapshot.sidebarOverlays ?? [];
-      const revision = snapshot.sidebarOverlayRevision ?? 0;
-      const signature = `${revision}:${overlays
-        .map((overlay) => `${overlay.id}:${overlay.enabled ? 1 : 0}`)
-        .join("|")}`;
-      const sortSignature = `${sortState.key}:${sortState.direction}`;
-      const isOverlayContainer = !!existingContainer &&
-          existingContainer.dataset.sidebarRole === "overlays-directory";
-      const visibleHeaders = getVisibleHeaders(leaf, leaf.view, OVERLAY_TABLE_HEADERS);
-      const visibilitySignature = getColumnVisibilitySignature(visibleHeaders);
-      if (isOverlayContainer &&
-          existingContainer.dataset.signature === signature &&
-          existingContainer.dataset.sortState === sortSignature &&
-          existingContainer.dataset.columnVisibilitySignature === visibilitySignature) {
-          existingContainer.dataset.columnVisibilitySignature = visibilitySignature;
-          return existingContainer;
-      }
-      const { container, tbody } = createTableShell({
-          sortState,
-          onSort,
-          existingContainer: isOverlayContainer ? existingContainer : undefined,
-          view: leaf.view,
-          headers: visibleHeaders,
-          role: "overlays-directory",
-      });
-      container.dataset.signature = signature;
-      container.dataset.sortState = sortSignature;
-      container.dataset.columnVisibilitySignature = visibilitySignature;
-      const cellBaseClass = `${TABLE_CELL_BASE_CLASS} align-top`;
-      const visibleKeys = new Set(visibleHeaders.map((header) => header.key));
-      if (overlays.length === 0) {
-          const row = createElement("tr", "hover:bg-transparent");
-          const cell = createElement("td", `${cellBaseClass} text-center text-slate-400`, "No overlays available.");
-          cell.colSpan = Math.max(1, visibleHeaders.length);
-          row.appendChild(cell);
-          tbody.appendChild(row);
-          return container;
-      }
-      const sortedOverlays = [...overlays];
-      if (sortState.key === "label") {
-          sortedOverlays.sort((a, b) => compareSortValues(a.label.toLowerCase(), b.label.toLowerCase(), sortState.direction));
-      }
-      else if (sortState.key === "status") {
-          sortedOverlays.sort((a, b) => compareSortValues(a.enabled ? 1 : 0, b.enabled ? 1 : 0, sortState.direction));
-      }
-      for (const overlay of sortedOverlays) {
-          const row = createElement("tr", "transition-colors hover:bg-slate-800/40");
-          const nameCell = createElement("td", `${cellBaseClass} text-left`);
-          const nameStack = createElement("div", "flex flex-col gap-1");
-          const nameLabel = createElement("span", "font-semibold text-slate-100", overlay.label);
-          nameStack.appendChild(nameLabel);
-          nameCell.appendChild(nameStack);
-          const statusCell = createElement("td", `${cellBaseClass} text-right`);
-          const toggleWrapper = createElement("div", "flex justify-end");
-          const toggleButton = createElement("button", "relative inline-flex h-6 w-12 items-center rounded-full border transition-colors focus:outline-none focus:ring-2 focus:ring-sky-500/60");
-          toggleButton.type = "button";
-          toggleButton.setAttribute("role", "switch");
-          const srToggleLabel = createElement("span", "sr-only", "Toggle overlay");
-          const toggleKnob = createElement("span", "pointer-events-none absolute left-1 h-4 w-4 rounded-full shadow transition-transform duration-150 ease-out");
-          toggleButton.appendChild(srToggleLabel);
-          toggleButton.appendChild(toggleKnob);
-          const updateToggleAppearance = (enabled) => {
-              toggleButton.setAttribute("aria-checked", enabled ? "true" : "false");
-              toggleButton.classList.toggle("border-emerald-400/60", enabled);
-              toggleButton.classList.toggle("bg-emerald-500/40", enabled);
-              toggleButton.classList.toggle("hover:bg-emerald-500/50", enabled);
-              toggleButton.classList.toggle("border-slate-700", !enabled);
-              toggleButton.classList.toggle("bg-slate-800/70", !enabled);
-              toggleButton.classList.toggle("hover:bg-slate-700/80", !enabled);
-              toggleKnob.classList.toggle("bg-emerald-100", enabled);
-              toggleKnob.classList.toggle("bg-slate-300", !enabled);
-              toggleKnob.style.transform = enabled
-                  ? "translateX(1.5rem)"
-                  : "translateX(0)";
-              toggleButton.title = enabled ? "Disable overlay" : "Enable overlay";
-          };
-          let currentEnabled = overlay.enabled;
-          updateToggleAppearance(currentEnabled);
-          toggleButton.addEventListener("click", (event) => {
-              event.stopPropagation();
-              currentEnabled = !currentEnabled;
-              updateToggleAppearance(currentEnabled);
-              actions.setOverlayEnabled?.(overlay.id, currentEnabled);
-          });
-          toggleWrapper.appendChild(toggleButton);
-          statusCell.appendChild(toggleWrapper);
-          if (visibleKeys.has("status")) {
-              row.appendChild(statusCell);
-          }
-          if (visibleKeys.has("name")) {
-              row.insertBefore(nameCell, row.firstChild);
-          }
-          tbody.appendChild(row);
-      }
-      return container;
-  }
-  function renderLogView(options) {
-      const { leaf, snapshot, existingContainer, actions, sortState, onSort } = options;
-      const logActions = actions ?? DEFAULT_ACTIONS;
-      const logs = snapshot.sidebarLogs ?? [];
-      const revision = snapshot.sidebarLogRevision ?? 0;
-      const followEnabled = leaf.logFollowEnabled !== false;
-      const supportedSortKeys = [
-          "timestamp",
-          "level",
-          "source",
-          "message",
-      ];
-      let activeSortState = sortState;
-      if (!supportedSortKeys.includes(sortState.key)) {
-          const fallbackDirection = getDefaultDirection("timestamp");
-          activeSortState = { key: "timestamp", direction: fallbackDirection };
-          leaf.sortStates[leaf.view] = activeSortState;
-      }
-      const sortSignature = `${activeSortState.key}:${activeSortState.direction}`;
-      const isLogContainer = !!existingContainer && existingContainer.dataset.sidebarRole === "log-view";
-      const visibleHeaders = getVisibleHeaders(leaf, leaf.view, LOG_TABLE_HEADERS);
-      const visibilitySignature = getColumnVisibilitySignature(visibleHeaders);
-      if (isLogContainer) {
-          existingContainer.dataset.logFollowState = followEnabled
-              ? "following"
-              : "paused";
-          existingContainer.dataset.logStickToBottom = followEnabled
-              ? "true"
-              : "false";
-          const previousRevision = Number(existingContainer.dataset.logRevision ?? "-1");
-          const previousSortState = existingContainer.dataset.sortState ?? "";
-          const previousVisibility = existingContainer.dataset.columnVisibilitySignature ?? "";
-          if (previousRevision === revision &&
-              previousSortState === sortSignature &&
-              previousVisibility === visibilitySignature) {
-              existingContainer.dataset.logRevision = String(revision);
-              existingContainer.dataset.sortState = sortSignature;
-              existingContainer.dataset.columnVisibilitySignature = visibilitySignature;
-              return existingContainer;
-          }
-      }
-      const { container, tbody } = createTableShell({
-          sortState: activeSortState,
-          onSort,
-          existingContainer: isLogContainer ? existingContainer : undefined,
-          view: leaf.view,
-          headers: visibleHeaders,
-          role: "log-view",
-      });
-      container.dataset.logFollowState = followEnabled ? "following" : "paused";
-      container.dataset.logStickToBottom = followEnabled ? "true" : "false";
-      container.dataset.logRevision = String(revision);
-      container.dataset.sortState = sortSignature;
-      container.dataset.columnVisibilitySignature = visibilitySignature;
-      const visibleKeys = new Set(visibleHeaders.map((header) => header.key));
-      if (logs.length === 0) {
-          const emptyRow = createElement("tr");
-          const emptyCell = createElement("td", `${TABLE_CELL_BASE_CLASS} py-8 text-center text-[0.75rem] italic text-slate-500`, "No log messages yet.");
-          emptyCell.colSpan = Math.max(1, visibleHeaders.length);
-          emptyRow.appendChild(emptyCell);
-          tbody.appendChild(emptyRow);
-      }
-      else {
-          const sortedLogs = [...logs];
-          switch (activeSortState.key) {
-              case "timestamp":
-                  sortedLogs.sort((a, b) => compareSortValues(a.timestampMs, b.timestampMs, activeSortState.direction));
-                  break;
-              case "level":
-                  sortedLogs.sort((a, b) => compareSortValues(getLogLevelWeight(a.level), getLogLevelWeight(b.level), activeSortState.direction));
-                  break;
-              case "source":
-                  sortedLogs.sort((a, b) => compareSortValues((a.source ?? "").toLowerCase(), (b.source ?? "").toLowerCase(), activeSortState.direction));
-                  break;
-              case "message":
-                  sortedLogs.sort((a, b) => compareSortValues(getLogMessageSortValue(a), getLogMessageSortValue(b), activeSortState.direction));
-                  break;
-          }
-          for (const entry of sortedLogs) {
-              tbody.appendChild(renderLogRow(entry, logActions, visibleKeys));
-          }
-      }
-      return container;
-  }
-  function renderLogRow(entry, actions, visibleKeys) {
-      const row = createElement("tr", "transition-colors hover:bg-slate-900/40");
-      row.dataset.sidebarRole = "log-entry";
-      row.dataset.logEntryId = entry.id;
-      row.dataset.logLevel = entry.level;
-      row.dataset.logTimestamp = String(entry.timestampMs);
-      row.style.boxShadow = `inset 0.25rem 0 0 0 ${getLogAccentColor(entry.level)}`;
-      const cellBaseClass = `${TABLE_CELL_BASE_CLASS} align-top`;
-      const timestampCell = createElement("td", `${cellBaseClass} font-mono text-[0.75rem] text-slate-300 whitespace-nowrap`, formatTimestamp(entry.timestampMs));
-      const levelCell = createElement("td", `${cellBaseClass} text-center`);
-      const levelBadge = createElement("span", `inline-flex items-center justify-center rounded px-1.5 py-0.5 text-[0.65rem] font-semibold uppercase tracking-wide ${getLogLevelBadgeClass(entry.level)}`, entry.level.toUpperCase());
-      levelCell.appendChild(levelBadge);
-      const hasSource = !!entry.source && entry.source.trim().length > 0;
-      const sourceCell = createElement("td", `${cellBaseClass} text-[0.75rem] text-slate-400 whitespace-nowrap`, hasSource ? entry.source : "–");
-      const messageCellClass = `${cellBaseClass} font-mono text-[0.75rem] whitespace-pre-wrap break-words `;
-      const messageCell = createElement("td", `${messageCellClass}${getLogMessageClass(entry.level)}`);
-      if (entry.tokens && entry.tokens.length > 0) {
-          messageCell.appendChild(renderLogTokens(entry.tokens, actions));
-      }
-      else {
-          messageCell.textContent = entry.message;
-      }
-      if (visibleKeys.has("timestamp")) {
-          row.appendChild(timestampCell);
-      }
-      if (visibleKeys.has("level")) {
-          row.appendChild(levelCell);
-      }
-      if (visibleKeys.has("source")) {
-          row.appendChild(sourceCell);
-      }
-      if (visibleKeys.has("message")) {
-          row.appendChild(messageCell);
-      }
-      return row;
-  }
-  function getLogLevelWeight(level) {
-      switch (level) {
-          case "error":
-              return 3;
-          case "warn":
-              return 2;
-          case "info":
-              return 1;
-          case "debug":
-              return 0;
-          default:
-              return 0;
-      }
-  }
-  function getLogMessageSortValue(entry) {
-      if (entry.tokens && entry.tokens.length > 0) {
-          return entry.tokens
-              .map((token) => (token.type === "text" ? token.text : token.label))
-              .join(" ")
-              .toLowerCase();
-      }
-      return entry.message.toLowerCase();
-  }
-  function renderLogTokens(tokens, actions) {
-      const fragment = document.createDocumentFragment();
-      for (const token of tokens) {
-          if (token.type === "text") {
-              fragment.appendChild(document.createTextNode(token.text));
-              continue;
-          }
-          fragment.appendChild(createLogMentionPill(token, actions));
-      }
-      return fragment;
-  }
-  function createLogMentionPill(token, actions) {
-      const button = createElement("button", "inline-flex max-w-full items-center gap-1 rounded-full border border-slate-700/70 bg-slate-900/40 px-2.5 py-0.5 text-[0.65rem] font-semibold text-slate-200 transition-colors hover:border-sky-500/70 hover:text-sky-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-500/60");
-      button.type = "button";
-      button.dataset.sidebarRole = "log-mention";
-      button.dataset.mentionType = token.type;
-      button.dataset.mentionId = token.id;
-      if (token.color) {
-          button.style.borderColor = token.color;
-      }
-      if (token.color) {
-          const swatch = createElement("span", "h-2 w-2 shrink-0 rounded-full border border-slate-900/70");
-          swatch.style.backgroundColor = token.color;
-          button.appendChild(swatch);
-      }
-      const label = createElement("span", "max-w-[10rem] truncate text-left", token.label);
-      label.title = token.label;
-      button.appendChild(label);
-      switch (token.type) {
-          case "player":
-              button.title = `Focus on ${token.label}`;
-              button.addEventListener("click", (event) => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  actions.focusPlayer?.(token.id);
-              });
-              break;
-          case "team":
-              button.title = `Show team ${token.label}`;
-              button.addEventListener("click", (event) => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  actions.focusTeam?.(token.id);
-              });
-              break;
-          case "clan":
-              button.title = `Show clan ${token.label}`;
-              button.addEventListener("click", (event) => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  actions.focusClan?.(token.id);
-              });
-              break;
-      }
-      return button;
-  }
-  function getLogLevelBadgeClass(level) {
-      switch (level) {
-          case "error":
-              return "border border-rose-500/40 bg-rose-500/15 text-rose-200";
-          case "warn":
-              return "border border-amber-400/40 bg-amber-400/15 text-amber-200";
-          case "debug":
-              return "border border-slate-600/50 bg-slate-800/70 text-slate-300";
-          default:
-              return "border border-sky-400/40 bg-sky-400/15 text-sky-200";
-      }
-  }
-  function getLogMessageClass(level) {
-      switch (level) {
-          case "error":
-              return "text-rose-200";
-          case "warn":
-              return "text-amber-200";
-          case "debug":
-              return "text-slate-400";
-          default:
-              return "text-slate-200";
-      }
-  }
-  function getLogAccentColor(level) {
-      switch (level) {
-          case "error":
-              return "rgba(248, 113, 113, 0.75)";
-          case "warn":
-              return "rgba(251, 191, 36, 0.75)";
-          case "debug":
-              return "rgba(148, 163, 184, 0.55)";
-          default:
-              return "rgba(56, 189, 248, 0.65)";
-      }
-  }
-  let columnMenuElement = null;
-  let columnMenuCleanup = null;
-  function ensureColumnMenuElement() {
-      if (!columnMenuElement) {
-          columnMenuElement = createElement("div");
-          columnMenuElement.dataset.sidebarRole = "column-visibility-menu";
-          columnMenuElement.style.pointerEvents = "auto";
-          columnMenuElement.style.zIndex = "2147483647";
-      }
-      columnMenuElement.className =
-          "fixed z-[2147483647] min-w-[200px] overflow-hidden rounded-md border " +
-              "border-slate-700/80 bg-slate-950/95 text-sm text-slate-100 shadow-2xl " +
-              "backdrop-blur";
-      return columnMenuElement;
-  }
-  function hideColumnVisibilityMenu() {
-      if (columnMenuCleanup) {
-          const cleanup = columnMenuCleanup;
-          columnMenuCleanup = null;
-          cleanup();
-          return;
-      }
-      if (columnMenuElement && columnMenuElement.parentElement) {
-          columnMenuElement.parentElement.removeChild(columnMenuElement);
-      }
-  }
-  function isColumnVisibilitySupported(view) {
-      const headers = getTableHeadersForView(view);
-      return Array.isArray(headers) && headers.length > 0;
-  }
-  function showColumnVisibilityMenu(options) {
-      const { leaf, anchor, onChange } = options;
-      const baseHeaders = getTableHeadersForView(leaf.view);
-      if (!baseHeaders || baseHeaders.length === 0) {
-          hideColumnVisibilityMenu();
-          return;
-      }
-      const visibility = ensureColumnVisibilityState(leaf, leaf.view, baseHeaders);
-      const hideableHeaders = baseHeaders.filter((header) => header.hideable !== false);
-      hideColumnVisibilityMenu();
-      const menu = ensureColumnMenuElement();
-      menu.style.visibility = "hidden";
-      menu.style.left = "0px";
-      menu.style.top = "0px";
-      const wrapper = createElement("div", "flex flex-col");
-      wrapper.appendChild(createElement("div", "border-b border-slate-800/80 px-3 py-2 text-xs font-semibold uppercase " +
-          "tracking-wide text-slate-300", "Columns"));
-      const list = createElement("div", "py-1");
-      for (const header of baseHeaders) {
-          const key = header.key;
-          const item = createElement("label", `${header.hideable === false
-            ? "cursor-default text-slate-300"
-            : "cursor-pointer text-slate-200 hover:bg-slate-800/70"} flex items-center gap-3 px-3 py-2 text-xs transition-colors`);
-          const checkbox = document.createElement("input");
-          checkbox.type = "checkbox";
-          checkbox.className =
-              "h-3.5 w-3.5 rounded border border-slate-600 bg-slate-900 text-sky-400 " +
-                  "focus:outline-none focus:ring-2 focus:ring-sky-500";
-          checkbox.checked = visibility[key] !== false;
-          checkbox.disabled = header.hideable === false;
-          item.appendChild(checkbox);
-          const label = createElement("span", "flex-1 truncate", header.label);
-          item.appendChild(label);
-          if (header.hideable === false) {
-              item.title = "This column is always visible.";
-              item.appendChild(createElement("span", "rounded-full border border-slate-700/70 px-2 py-0.5 text-[0.6rem] font-semibold uppercase tracking-wide text-slate-400", "Pinned"));
-          }
-          checkbox.addEventListener("change", () => {
-              if (header.hideable === false) {
-                  checkbox.checked = true;
-                  return;
-              }
-              const nextVisible = checkbox.checked;
-              if (!nextVisible) {
-                  const remainingVisible = hideableHeaders.filter((candidate) => {
-                      if (candidate.key === header.key) {
-                          return false;
-                      }
-                      const candidateKey = candidate.key;
-                      return visibility[candidateKey] !== false;
-                  }).length;
-                  if (remainingVisible === 0) {
-                      checkbox.checked = true;
-                      return;
-                  }
-              }
-              visibility[key] = nextVisible;
-              leaf.columnVisibility[leaf.view] = { ...visibility };
-              onChange?.();
-          });
-          list.appendChild(item);
-      }
-      if (list.childElementCount === 0) {
-          hideColumnVisibilityMenu();
-          return;
-      }
-      wrapper.appendChild(list);
-      menu.replaceChildren(wrapper);
-      document.body.appendChild(menu);
-      const menuRect = menu.getBoundingClientRect();
-      const anchorRect = anchor.getBoundingClientRect();
-      const viewportWidth = window.innerWidth;
-      const viewportHeight = window.innerHeight;
-      let top = anchorRect.bottom + 6;
-      let left = anchorRect.left;
-      if (top + menuRect.height > viewportHeight - 8) {
-          top = anchorRect.top - menuRect.height - 6;
-      }
-      if (top < 8) {
-          top = Math.max(8, Math.min(anchorRect.bottom + 6, viewportHeight - menuRect.height - 8));
-      }
-      if (left + menuRect.width > viewportWidth - 8) {
-          left = anchorRect.right - menuRect.width;
-      }
-      if (left < 8) {
-          left = 8;
-      }
-      menu.style.left = `${left}px`;
-      menu.style.top = `${top}px`;
-      menu.style.visibility = "visible";
-      const cleanupHandlers = [];
-      const cleanupMenu = () => {
-          while (cleanupHandlers.length > 0) {
-              const cleanup = cleanupHandlers.pop();
-              try {
-                  cleanup?.();
-              }
-              catch (error) {
-                  console.warn("Failed to clean up column visibility menu listener", error);
-              }
-          }
-          if (menu.parentElement) {
-              menu.parentElement.removeChild(menu);
-          }
-          if (columnMenuCleanup === cleanupMenu) {
-              columnMenuCleanup = null;
-          }
-      };
-      columnMenuCleanup = cleanupMenu;
-      window.setTimeout(() => {
-          if (columnMenuCleanup !== cleanupMenu) {
-              return;
-          }
-          const handlePointerDown = (event) => {
-              if (!(event.target instanceof Node)) {
-                  return;
-              }
-              if (!menu.contains(event.target) && !anchor.contains(event.target)) {
-                  hideColumnVisibilityMenu();
-              }
-          };
-          const handleKeyDown = (event) => {
-              if (event.key === "Escape") {
-                  hideColumnVisibilityMenu();
-              }
-          };
-          const handleScroll = (event) => {
-              if (!event.isTrusted) {
-                  return;
-              }
-              hideColumnVisibilityMenu();
-          };
-          const handleBlur = () => hideColumnVisibilityMenu();
-          document.addEventListener("pointerdown", handlePointerDown, true);
-          document.addEventListener("keydown", handleKeyDown, true);
-          window.addEventListener("scroll", handleScroll, true);
-          window.addEventListener("blur", handleBlur);
-          cleanupHandlers.push(() => document.removeEventListener("pointerdown", handlePointerDown, true));
-          cleanupHandlers.push(() => document.removeEventListener("keydown", handleKeyDown, true));
-          cleanupHandlers.push(() => window.removeEventListener("scroll", handleScroll, true));
-          cleanupHandlers.push(() => window.removeEventListener("blur", handleBlur));
-      }, 0);
+      return createElement("span", `${baseClass} ${styles[status]}`, status);
   }
   function createActionSettingEditorCard(formState, setting, onRemove) {
       const card = createElement("div", "rounded-md border border-slate-800/70 bg-slate-900/70 p-3");
@@ -2594,6 +2961,227 @@
           }
       }
   }
+
+  function renderRunningActionsView(options) {
+      const { leaf, snapshot, existingContainer, actions, sortState, onSort } = options;
+      const state = getActionsState(snapshot);
+      const signature = `${state.runningRevision}:${state.selectedRunningActionId ?? ""}:${state.running.length}`;
+      const sortSignature = `${sortState.key}:${sortState.direction}`;
+      const isContainer = !!existingContainer &&
+          existingContainer.dataset.sidebarRole === SidebarRole.RunningActions;
+      const visibleHeaders = getVisibleHeaders(leaf, leaf.view, RUNNING_ACTIONS_TABLE_HEADERS);
+      const visibilitySignature = getColumnVisibilitySignature(visibleHeaders);
+      if (isContainer &&
+          existingContainer.dataset.signature === signature &&
+          existingContainer.dataset.sortState === sortSignature &&
+          existingContainer.dataset.columnVisibilitySignature === visibilitySignature) {
+          existingContainer.dataset.columnVisibilitySignature = visibilitySignature;
+          return existingContainer;
+      }
+      const { container, tbody } = createTableShell({
+          sortState,
+          onSort,
+          existingContainer: isContainer ? existingContainer : undefined,
+          view: leaf.view,
+          headers: visibleHeaders,
+          role: SidebarRole.RunningActions,
+      });
+      container.dataset.signature = signature;
+      container.dataset.sortState = sortSignature;
+      container.dataset.columnVisibilitySignature = visibilitySignature;
+      const cellBaseClass = `${TABLE_CELL_BASE_CLASS} align-top`;
+      const visibleKeys = new Set(visibleHeaders.map((header) => header.key));
+      const getStatusRank = (run) => {
+          const rank = {
+              running: 0,
+              completed: 1,
+              stopped: 2,
+              failed: 3,
+          };
+          return rank[run.status] ?? 4;
+      };
+      if (state.running.length === 0) {
+          const row = createElement("tr", "hover:bg-transparent");
+          const cell = createElement("td", `${cellBaseClass} text-center text-slate-400`, "No actions are currently running.");
+          cell.colSpan = Math.max(1, visibleHeaders.length);
+          row.appendChild(cell);
+          tbody.appendChild(row);
+          return container;
+      }
+      const runs = [...state.running];
+      if (sortState.key === "label") {
+          runs.sort((a, b) => compareSortValues(a.name.toLowerCase(), b.name.toLowerCase(), sortState.direction));
+      }
+      else if (sortState.key === "status") {
+          runs.sort((a, b) => {
+              const cmp = compareSortValues(getStatusRank(a), getStatusRank(b), sortState.direction);
+              if (cmp !== 0) {
+                  return cmp;
+              }
+              return compareSortValues(a.name.toLowerCase(), b.name.toLowerCase(), "asc");
+          });
+      }
+      for (const run of runs) {
+          const isSelected = state.selectedRunningActionId === run.id;
+          const row = createElement("tr", "cursor-pointer transition-colors hover:bg-slate-800/40");
+          applyRowSelectionIndicator(row, isSelected);
+          row.dataset.runningActionId = run.id;
+          row.addEventListener("click", () => {
+              actions.selectRunningAction?.(run.id);
+          });
+          const nameCell = createElement("td", `${cellBaseClass} text-left`);
+          const nameLine = createElement("div", "flex flex-wrap items-center gap-2");
+          const nameLabel = createPlayerNameElement(run.name, undefined, {
+              className: "font-semibold text-slate-100 transition-colors hover:text-sky-200",
+          });
+          nameLine.appendChild(nameLabel);
+          nameCell.appendChild(nameLine);
+          const statusCell = createElement("td", `${cellBaseClass} text-left`);
+          statusCell.appendChild(createRunStatusBadge(run.status));
+          const modeCell = createElement("td", `${cellBaseClass} text-[0.75rem] uppercase tracking-wide text-slate-400`, getRunModeLabel(run.runMode));
+          const startedCell = createElement("td", `${cellBaseClass} text-[0.75rem] text-slate-300`, formatTimestamp(run.startedAtMs));
+          const controlsCell = createElement("td", `${cellBaseClass} text-right`);
+          const stopButton = createElement("button", "rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-1 text-xs font-semibold text-rose-200 transition-colors hover:bg-rose-500/20", "Stop");
+          stopButton.type = "button";
+          stopButton.addEventListener("click", (event) => {
+              event.stopPropagation();
+              actions.stopRunningAction?.(run.id);
+          });
+          if (run.status !== "running") {
+              stopButton.disabled = true;
+              stopButton.classList.add("cursor-not-allowed", "opacity-50");
+          }
+          controlsCell.appendChild(stopButton);
+          if (visibleKeys.has("name")) {
+              row.appendChild(nameCell);
+          }
+          if (visibleKeys.has("status")) {
+              row.appendChild(statusCell);
+          }
+          if (visibleKeys.has("mode")) {
+              row.appendChild(modeCell);
+          }
+          if (visibleKeys.has("started")) {
+              row.appendChild(startedCell);
+          }
+          if (visibleKeys.has("controls")) {
+              row.appendChild(controlsCell);
+          }
+          tbody.appendChild(row);
+      }
+      return container;
+  }
+  function renderRunningActionDetailView(options) {
+      const { leaf, snapshot, existingContainer, actions } = options;
+      const state = getActionsState(snapshot);
+      const selectedRun = state.running.find((run) => run.id === state.selectedRunningActionId);
+      const signature = selectedRun
+          ? `${state.runningRevision}:${selectedRun.id}:${selectedRun.lastUpdatedMs}`
+          : `${state.runningRevision}:none`;
+      const isContainer = !!existingContainer &&
+          existingContainer.dataset.sidebarRole === SidebarRole.RunningActionDetail;
+      const container = isContainer
+          ? existingContainer
+          : createElement("div", "relative flex-1 overflow-auto border border-slate-900/70 bg-slate-950/60 backdrop-blur-sm");
+      container.className =
+          "relative flex-1 overflow-auto border border-slate-900/70 bg-slate-950/60 backdrop-blur-sm";
+      container.dataset.sidebarRole = SidebarRole.RunningActionDetail;
+      container.dataset.sidebarView = leaf.view;
+      if (container.dataset.signature === signature) {
+          return container;
+      }
+      container.dataset.signature = signature;
+      if (!selectedRun) {
+          container.replaceChildren(createElement("div", "flex h-full items-center justify-center p-6 text-center text-sm text-slate-400", state.running.length === 0
+              ? "No actions are currently running."
+              : "Select a running action to adjust its settings."));
+          return container;
+      }
+      const layout = createElement("div", "flex min-h-full flex-col gap-6 p-4 text-sm text-slate-100");
+      const header = createElement("div", "flex flex-wrap items-start justify-between gap-3 border-b border-slate-800/70 pb-3");
+      const headerText = createElement("div", "flex flex-col gap-1");
+      const titleLine = createElement("div", "flex flex-wrap items-center gap-2 text-lg font-semibold text-slate-100");
+      titleLine.appendChild(createElement("span", "", selectedRun.name));
+      titleLine.appendChild(createRunStatusBadge(selectedRun.status));
+      headerText.appendChild(titleLine);
+      const trimmedDescription = selectedRun.description?.trim() ?? "";
+      if (trimmedDescription !== "") {
+          headerText.appendChild(createElement("div", "text-sm text-slate-400", trimmedDescription));
+      }
+      headerText.appendChild(createElement("div", "text-[0.7rem] text-slate-400", describeRunMode(selectedRun.runMode)));
+      header.appendChild(headerText);
+      const stopButton = createElement("button", "rounded-md border border-rose-500/50 bg-rose-500/10 px-3 py-1.5 text-xs font-semibold text-rose-200 transition-colors hover:bg-rose-500/20", "Stop action");
+      stopButton.type = "button";
+      stopButton.addEventListener("click", () => {
+          actions.stopRunningAction?.(selectedRun.id);
+      });
+      if (selectedRun.status !== "running") {
+          stopButton.disabled = true;
+          stopButton.classList.add("cursor-not-allowed", "opacity-50");
+      }
+      header.appendChild(stopButton);
+      layout.appendChild(header);
+      const meta = createElement("div", "grid gap-3 text-[0.75rem] sm:grid-cols-3");
+      meta.appendChild(createSummaryStat("Status", formatRunStatus(selectedRun.status)));
+      meta.appendChild(createSummaryStat("Started", formatTimestamp(selectedRun.startedAtMs)));
+      meta.appendChild(createSummaryStat("Last update", formatTimestamp(selectedRun.lastUpdatedMs)));
+      layout.appendChild(meta);
+      if (selectedRun.runMode === "continuous") {
+          const intervalField = createElement("label", "flex w-full max-w-xs flex-col gap-1");
+          intervalField.appendChild(createElement("span", "text-xs uppercase tracking-wide text-slate-400", "Run every (ticks)"));
+          const intervalInput = document.createElement("input");
+          intervalInput.type = "number";
+          intervalInput.min = "1";
+          intervalInput.className =
+              "w-full rounded-md border border-slate-700 bg-slate-900/80 px-3 py-1.5 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-sky-500/70";
+          intervalInput.value = String(selectedRun.runIntervalTicks ?? 1);
+          intervalInput.addEventListener("change", () => {
+              const numeric = Number(intervalInput.value);
+              const normalized = Number.isFinite(numeric) && numeric > 0 ? Math.floor(numeric) : 1;
+              intervalInput.value = String(normalized);
+              if (normalized === selectedRun.runIntervalTicks) {
+                  return;
+              }
+              actions.setRunningActionInterval?.(selectedRun.id, normalized);
+          });
+          intervalField.appendChild(intervalInput);
+          layout.appendChild(intervalField);
+      }
+      const settingsSection = createElement("div", "flex flex-col gap-3");
+      settingsSection.appendChild(createElement("span", "text-xs uppercase tracking-wide text-slate-400", "Runtime settings"));
+      const settingsList = createElement("div", "flex flex-col gap-3");
+      if (selectedRun.settings.length === 0) {
+          settingsList.appendChild(createElement("p", "text-[0.75rem] text-slate-400", "This action does not expose any runtime settings."));
+      }
+      else {
+          for (const setting of selectedRun.settings) {
+              settingsList.appendChild(createRunningSettingField(selectedRun.id, setting, actions));
+          }
+      }
+      settingsSection.appendChild(settingsList);
+      layout.appendChild(settingsSection);
+      container.replaceChildren(layout);
+      return container;
+  }
+  function createRunStatusBadge(status) {
+      const baseClass = "rounded-full px-2 py-0.5 text-[0.6rem] font-semibold uppercase tracking-wide";
+      const styles = {
+          running: "bg-emerald-500/20 text-emerald-200",
+          completed: "bg-sky-500/20 text-sky-200",
+          stopped: "bg-amber-500/20 text-amber-200",
+          failed: "bg-rose-500/20 text-rose-200",
+      };
+      const className = `${baseClass} ${styles[status] ?? "bg-slate-700/60 text-slate-200"}`;
+      return createElement("span", className, formatRunStatus(status));
+  }
+  function createSummaryStat(label, value) {
+      const wrapper = createElement("div", "rounded-md border border-slate-800/70 bg-slate-900/70 px-3 py-2");
+      const title = createElement("div", "text-[0.65rem] uppercase tracking-wide text-slate-400", label);
+      const content = createElement("div", "font-mono text-base text-slate-100", value);
+      wrapper.appendChild(title);
+      wrapper.appendChild(content);
+      return wrapper;
+  }
   function createRunningSettingField(runId, setting, actions) {
       const field = createElement("div", "rounded-md border border-slate-800/70 bg-slate-900/70 p-3");
       const header = createElement("div", "flex items-center justify-between gap-2");
@@ -2652,988 +3240,480 @@
       field.appendChild(controlContainer);
       return field;
   }
-  function createTableShell(options) {
-      const { sortState, onSort, existingContainer, view, headers, role } = options;
-      const containerClass = "relative flex-1 overflow-auto border border-slate-900/70 bg-slate-950/60 backdrop-blur-sm";
-      const tableClass = "min-w-full border-collapse text-xs text-slate-100";
-      const targetRole = role ?? "table-container";
-      const canReuse = !!existingContainer &&
-          existingContainer.dataset.sidebarRole === targetRole &&
-          existingContainer.dataset.sidebarView === view;
-      const container = canReuse
-          ? existingContainer
-          : createElement("div", containerClass);
-      container.className = containerClass;
-      container.dataset.sidebarRole = targetRole;
-      container.dataset.sidebarView = view;
-      let table = container.querySelector("table");
-      if (!table || !canReuse) {
-          table = createElement("table", tableClass);
+
+  function renderLogView(options) {
+      const { leaf, snapshot, existingContainer, actions, sortState, onSort } = options;
+      const logActions = actions;
+      const logs = snapshot.sidebarLogs ?? [];
+      const revision = snapshot.sidebarLogRevision ?? 0;
+      const followEnabled = leaf.logFollowEnabled !== false;
+      const supportedSortKeys = ["timestamp", "level", "source", "message"];
+      let activeSortState = sortState;
+      if (!supportedSortKeys.includes(sortState.key)) {
+          const fallbackDirection = getDefaultDirection("timestamp");
+          activeSortState = { key: "timestamp", direction: fallbackDirection };
+          leaf.sortStates[leaf.view] = activeSortState;
+      }
+      const sortSignature = `${activeSortState.key}:${activeSortState.direction}`;
+      const isLogContainer = !!existingContainer &&
+          existingContainer.dataset.sidebarRole === SidebarRole.LogView;
+      const visibleHeaders = getVisibleHeaders(leaf, leaf.view, LOG_TABLE_HEADERS);
+      const visibilitySignature = getColumnVisibilitySignature(visibleHeaders);
+      if (isLogContainer) {
+          existingContainer.dataset.logFollowState = followEnabled
+              ? "following"
+              : "paused";
+          existingContainer.dataset.logStickToBottom = followEnabled
+              ? "true"
+              : "false";
+          const previousRevision = Number(existingContainer.dataset.logRevision ?? "-1");
+          const previousSortState = existingContainer.dataset.sortState ?? "";
+          const previousVisibility = existingContainer.dataset.columnVisibilitySignature ?? "";
+          if (previousRevision === revision &&
+              previousSortState === sortSignature &&
+              previousVisibility === visibilitySignature) {
+              existingContainer.dataset.logRevision = String(revision);
+              existingContainer.dataset.sortState = sortSignature;
+              existingContainer.dataset.columnVisibilitySignature = visibilitySignature;
+              return existingContainer;
+          }
+      }
+      const { container, tbody } = createTableShell({
+          sortState: activeSortState,
+          onSort,
+          existingContainer: isLogContainer ? existingContainer : undefined,
+          view: leaf.view,
+          headers: visibleHeaders,
+          role: SidebarRole.LogView,
+      });
+      container.dataset.logFollowState = followEnabled ? "following" : "paused";
+      container.dataset.logStickToBottom = followEnabled ? "true" : "false";
+      container.dataset.logRevision = String(revision);
+      container.dataset.sortState = sortSignature;
+      container.dataset.columnVisibilitySignature = visibilitySignature;
+      const visibleKeys = new Set(visibleHeaders.map((header) => header.key));
+      if (logs.length === 0) {
+          const emptyRow = createElement("tr");
+          const emptyCell = createElement("td", `${TABLE_CELL_BASE_CLASS} py-8 text-center text-[0.75rem] italic text-slate-500`, "No log messages yet.");
+          emptyCell.colSpan = Math.max(1, visibleHeaders.length);
+          emptyRow.appendChild(emptyCell);
+          tbody.appendChild(emptyRow);
       }
       else {
-          table.className = tableClass;
-      }
-      const thead = table.tHead ?? createElement("thead", "sticky top-0 z-10");
-      thead.className = "sticky top-0 z-10";
-      thead.replaceChildren();
-      const headerRow = createElement("tr", "bg-slate-900/95");
-      for (const column of headers) {
-          const th = createElement("th", `border-b border-r border-slate-800 px-3 py-2 text-[0.65rem] font-semibold uppercase tracking-wide text-slate-300 last:border-r-0 ${column.align === "left"
-            ? "text-left"
-            : column.align === "right"
-                ? "text-right"
-                : "text-center"}`);
-          th.classList.add("bg-slate-900/90");
-          const labelWrapper = createElement("span", `flex w-full items-center gap-1 text-inherit ${column.align === "left"
-            ? "justify-start"
-            : column.align === "right"
-                ? "justify-end"
-                : "justify-center"}`, column.label);
-          if (column.title) {
-              th.title = column.title;
-              th.setAttribute("aria-label", column.title);
+          const sortedLogs = [...logs];
+          switch (activeSortState.key) {
+              case "timestamp":
+                  sortedLogs.sort((a, b) => compareSortValues(a.timestampMs, b.timestampMs, activeSortState.direction));
+                  break;
+              case "level":
+                  sortedLogs.sort((a, b) => compareSortValues(getLogLevelWeight(a.level), getLogLevelWeight(b.level), activeSortState.direction));
+                  break;
+              case "source":
+                  sortedLogs.sort((a, b) => compareSortValues((a.source ?? "").toLowerCase(), (b.source ?? "").toLowerCase(), activeSortState.direction));
+                  break;
+              case "message":
+                  sortedLogs.sort((a, b) => compareSortValues(getLogMessageSortValue(a), getLogMessageSortValue(b), activeSortState.direction));
+                  break;
           }
-          const isSortable = (column.sortable ?? true) &&
-              sortState !== undefined &&
-              onSort !== undefined;
-          if (isSortable) {
-              const sortKey = column.sortKey ?? column.key;
-              const isActive = sortState.key === sortKey;
-              const indicator = createElement("span", `text-[0.6rem] ${isActive ? "text-sky-300" : "text-slate-500"}`, isActive ? (sortState.direction === "asc" ? "▲" : "▼") : "↕");
-              if (column.align === "right") {
-                  labelWrapper.appendChild(indicator);
-              }
-              else {
-                  labelWrapper.insertBefore(indicator, labelWrapper.firstChild);
-              }
-              th.classList.add("cursor-pointer", "select-none");
-              th.dataset.sortKey = sortKey;
-              th.addEventListener("click", (event) => {
-                  event.preventDefault();
-                  onSort(sortKey);
-              });
-          }
-          th.appendChild(labelWrapper);
-          headerRow.appendChild(th);
-      }
-      thead.appendChild(headerRow);
-      const tbody = table.tBodies[0] ?? createElement("tbody", "text-[0.75rem]");
-      tbody.className = "text-[0.75rem]";
-      tbody.replaceChildren();
-      if (!table.contains(thead)) {
-          table.appendChild(thead);
-      }
-      if (!table.contains(tbody)) {
-          table.appendChild(tbody);
-      }
-      if (container.firstElementChild !== table ||
-          container.childElementCount !== 1) {
-          container.replaceChildren(table);
-      }
-      return { container, tbody };
-  }
-  function getShipExtraCellClass(key) {
-      switch (key) {
-          case "label":
-              return "font-semibold text-slate-100";
-          case "owner":
-              return "text-slate-200";
-          case "type":
-              return "text-[0.75rem] text-slate-300";
-          case "troops":
-              return "font-mono text-[0.75rem] text-slate-200";
-          case "status":
-              return "capitalize text-slate-200";
-          case "origin":
-          case "current":
-          case "destination":
-              return "text-[0.75rem] text-slate-300";
-          default:
-              return "text-slate-300";
-      }
-  }
-  function attachImmediateTileFocus(element, focus) {
-      element.addEventListener("pointerdown", (event) => {
-          if (event.button !== 0 && event.button !== undefined) {
-              return;
-          }
-          event.preventDefault();
-          event.stopPropagation();
-          focus();
-      });
-      element.addEventListener("click", (event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          if (event.detail === 0) {
-              focus();
-          }
-      });
-  }
-  function createCoordinateButton(summary) {
-      if (!summary) {
-          return createElement("span", "text-slate-500", "–");
-      }
-      const label = formatTileSummary(summary);
-      const button = createElement("button", "inline-flex max-w-full items-center rounded-sm px-0 text-left text-sky-300 transition-colors hover:text-sky-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-500/60", label);
-      button.type = "button";
-      button.title = `Focus on ${label}`;
-      attachImmediateTileFocus(button, () => {
-          focusTile(summary);
-      });
-      return button;
-  }
-  function createPlayerNameElement(label, position, options) {
-      const classNames = [];
-      if (options?.className) {
-          classNames.push(options.className);
-      }
-      if (position) {
-          classNames.push("cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-500/60 rounded-sm transition-colors");
-      }
-      const className = classNames.filter(Boolean).join(" ").trim();
-      if (!position) {
-          const tag = options?.asBlock ? "div" : "span";
-          return createElement(tag, className, label);
-      }
-      const button = createElement("button", className, label);
-      button.type = "button";
-      button.title = `Focus on ${label}`;
-      attachImmediateTileFocus(button, () => {
-          focusTile(position);
-      });
-      return button;
-  }
-  function getShipCellValue(key, ship) {
-      switch (key) {
-          case "label":
-              return `${ship.type} #${ship.id}`;
-          case "owner":
-              return ship.ownerName;
-          case "type":
-              return ship.type;
-          case "troops":
-              return formatTroopCount(ship.troops);
-          case "origin":
-              return formatTileSummary(ship.origin);
-          case "current":
-              return formatTileSummary(ship.current);
-          case "destination":
-              return formatTileSummary(ship.destination);
-          case "status":
-              return deriveShipStatus(ship);
-          default:
-              return "";
-      }
-  }
-  function compareShips(options) {
-      const { a, b, sortState } = options;
-      const valueA = getShipSortValue(a, sortState.key);
-      const valueB = getShipSortValue(b, sortState.key);
-      const result = compareSortValues(valueA, valueB, sortState.direction);
-      if (result !== 0) {
-          return result;
-      }
-      const ownerCompare = a.ownerName.localeCompare(b.ownerName, undefined, {
-          sensitivity: "base",
-      });
-      if (ownerCompare !== 0) {
-          return ownerCompare;
-      }
-      return a.id.localeCompare(b.id, undefined, { sensitivity: "base" });
-  }
-  function getShipSortValue(ship, key) {
-      switch (key) {
-          case "label":
-              return `${ship.type.toLowerCase()}-${ship.id}`;
-          case "owner":
-              return ship.ownerName.toLowerCase();
-          case "type":
-              return ship.type.toLowerCase();
-          case "troops":
-              return ship.troops;
-          case "origin":
-              return tileSortValue(ship.origin);
-          case "current":
-              return tileSortValue(ship.current);
-          case "destination":
-              return tileSortValue(ship.destination);
-          case "status":
-              return deriveShipStatus(ship).toLowerCase();
-          default:
-              return 0;
-      }
-  }
-  function tileSortValue(summary) {
-      if (!summary) {
-          return "";
-      }
-      const x = summary.x.toString().padStart(5, "0");
-      const y = summary.y.toString().padStart(5, "0");
-      const owner = summary.ownerName?.toLowerCase() ?? "";
-      return `${x}:${y}:${owner}`;
-  }
-  function formatTileSummary(summary) {
-      if (!summary) {
-          return "–";
-      }
-      const coords = `${summary.x}, ${summary.y}`;
-      return summary.ownerName ? `${coords} (${summary.ownerName})` : coords;
-  }
-  function deriveShipStatus(ship) {
-      if (ship.retreating) {
-          return "Retreating";
-      }
-      if (ship.reachedTarget) {
-          return "Arrived";
-      }
-      if (ship.type === "Transport") {
-          return "En Route";
-      }
-      if (!ship.destination) {
-          return ship.current ? "Idle" : "Unknown";
-      }
-      if (ship.current &&
-          ship.destination &&
-          ship.current.ref === ship.destination.ref) {
-          return "Stationed";
-      }
-      return "En route";
-  }
-  const tableContextActions = new WeakMap();
-  const playerContextTargets = new WeakMap();
-  const groupContextTargets = new WeakMap();
-  function findContextMenuTarget(event, container) {
-      if (event.target instanceof HTMLElement && container.contains(event.target)) {
-          let current = event.target;
-          while (current && current !== container) {
-              const type = current.dataset.contextTarget;
-              if (type === "player" || type === "group") {
-                  return { element: current, type };
-              }
-              current = current.parentElement;
+          for (const entry of sortedLogs) {
+              tbody.appendChild(renderLogRow(entry, logActions, visibleKeys));
           }
       }
-      const composedPath = typeof event.composedPath === "function" ? event.composedPath() : [];
-      for (const node of composedPath) {
-          if (!(node instanceof HTMLElement)) {
-              continue;
-          }
-          if (!container.contains(node)) {
-              continue;
-          }
-          const type = node.dataset.contextTarget;
-          if (type === "player" || type === "group") {
-              return { element: node, type };
-          }
-      }
-      return null;
-  }
-  function registerContextMenuDelegation(container, actions) {
-      tableContextActions.set(container, actions);
-      if (container.dataset.contextMenuDelegated === "true") {
-          return;
-      }
-      const handleContextMenu = (event) => {
-          const tableContainer = event.currentTarget;
-          const activeActions = tableContextActions.get(tableContainer);
-          if (!activeActions) {
-              return;
-          }
-          const targetInfo = findContextMenuTarget(event, tableContainer);
-          if (!targetInfo) {
-              return;
-          }
-          if (targetInfo.type === "player") {
-              const target = playerContextTargets.get(targetInfo.element);
-              if (!target) {
-                  return;
-              }
-              event.preventDefault();
-              event.stopPropagation();
-              const stoppedBySelf = isTradeStoppedBySelf(target);
-              const stoppedByOther = isTradeStoppedByOther(target);
-              const nextStopped = !stoppedBySelf;
-              const disabled = target.isSelf;
-              const actionLabel = nextStopped ? "Stop trading" : "Start trading";
-              const tooltip = disabled
-                  ? "You cannot toggle trading with yourself."
-                  : !nextStopped && stoppedByOther
-                      ? "The other player is also stopping trade with you."
-                      : nextStopped && stoppedByOther
-                          ? "This player has already stopped trading with you."
-                          : undefined;
-              showContextMenu({
-                  x: event.clientX,
-                  y: event.clientY,
-                  title: target.name,
-                  items: [
-                      {
-                          label: actionLabel,
-                          disabled,
-                          tooltip,
-                          onSelect: disabled
-                              ? undefined
-                              : () => activeActions.toggleTrading([target.id], nextStopped),
-                      },
-                  ],
-              });
-              return;
-          }
-          const target = groupContextTargets.get(targetInfo.element);
-          if (!target) {
-              return;
-          }
-          event.preventDefault();
-          event.stopPropagation();
-          if (target.players.length === 0) {
-              showContextMenu({
-                  x: event.clientX,
-                  y: event.clientY,
-                  title: target.label,
-                  items: [
-                      {
-                          label: "Stop trading",
-                          disabled: true,
-                          tooltip: "No eligible players in this group.",
-                      },
-                  ],
-              });
-              return;
-          }
-          const tradingPlayers = target.players.filter((player) => !isTradeStoppedBySelf(player));
-          const stoppedPlayers = target.players.filter((player) => isTradeStoppedBySelf(player));
-          const buildIdList = (players) => Array.from(new Set(players.map((player) => player.id)));
-          const items = [];
-          if (tradingPlayers.length > 0) {
-              const ids = buildIdList(tradingPlayers);
-              items.push({
-                  label: tradingPlayers.length === target.players.length
-                      ? "Stop trading"
-                      : `Stop trading (${tradingPlayers.length})`,
-                  onSelect: () => activeActions.toggleTrading(ids, true),
-              });
-          }
-          if (stoppedPlayers.length > 0) {
-              const ids = buildIdList(stoppedPlayers);
-              items.push({
-                  label: stoppedPlayers.length === target.players.length
-                      ? "Start trading"
-                      : `Start trading (${stoppedPlayers.length})`,
-                  onSelect: () => activeActions.toggleTrading(ids, false),
-              });
-          }
-          if (!items.length) {
-              items.push({
-                  label: "Stop trading",
-                  disabled: true,
-                  tooltip: "No eligible players in this group.",
-              });
-          }
-          showContextMenu({
-              x: event.clientX,
-              y: event.clientY,
-              title: target.label,
-              items,
-          });
-      };
-      container.addEventListener("contextmenu", handleContextMenu);
-      container.dataset.contextMenuDelegated = "true";
-  }
-  function appendPlayerRows(options) {
-      const { player, indent, leaf, snapshot, tbody, metricsCache, actions } = options;
-      const headers = options.headers;
-      const metrics = getMetrics(player, snapshot, metricsCache);
-      const rowKey = player.id;
-      const tr = createElement("tr", "hover:bg-slate-800/50 transition-colors");
-      tr.dataset.rowKey = rowKey;
-      applyPersistentHover(tr, leaf, rowKey, "bg-slate-800/50");
-      tr.dataset.contextTarget = "player";
-      playerContextTargets.set(tr, {
-          id: player.id,
-          name: player.name,
-          tradeStopped: player.tradeStopped ?? false,
-          tradeStoppedBySelf: player.tradeStoppedBySelf,
-          tradeStoppedByOther: player.tradeStoppedByOther,
-          isSelf: player.isSelf ?? false,
-      });
-      const labelHeader = headers.find((header) => header.key === "label");
-      if (labelHeader) {
-          const firstCell = createElement("td", cellClassForColumn(labelHeader, "align-top"));
-          firstCell.appendChild(createLabelBlock({
-              label: player.name,
-              subtitle: [player.clan, player.team].filter(Boolean).join(" • ") || undefined,
-              indent,
-              focus: player.position,
-          }));
-          tr.appendChild(firstCell);
-      }
-      appendMetricCells(tr, metrics, player, headers);
-      tbody.appendChild(tr);
-      tr.addEventListener("click", () => {
-          actions.showPlayerDetails(player.id);
-      });
-  }
-  function appendGroupRows(options) {
-      const { group, leaf, snapshot, tbody, requestRender, groupType, metricsCache, actions, headers, } = options;
-      const groupKey = `${groupType}:${group.key}`;
-      const expanded = leaf.expandedGroups.has(groupKey);
-      const row = createElement("tr", "bg-slate-900/70 hover:bg-slate-800/60 transition-colors font-semibold");
-      row.dataset.groupKey = groupKey;
-      applyPersistentHover(row, leaf, groupKey, "bg-slate-800/60");
-      const eligiblePlayers = group.players.filter((player) => !player.isSelf);
-      row.dataset.contextTarget = "group";
-      groupContextTargets.set(row, {
-          label: group.label,
-          players: eligiblePlayers,
-      });
-      const labelHeader = headers.find((header) => header.key === "label");
-      if (labelHeader) {
-          const firstCell = createElement("td", cellClassForColumn(labelHeader, "align-top", {
-              variant: "expandable",
-          }));
-          firstCell.appendChild(createLabelBlock({
-              label: `${group.label} (${group.players.length})`,
-              subtitle: groupType === "clan" ? "Clan summary" : "Team summary",
-              indent: 0,
-              expanded,
-              toggleAttribute: "data-group-toggle",
-              rowKey: groupKey,
-              onToggle: (next) => {
-                  if (next) {
-                      leaf.expandedGroups.add(groupKey);
-                  }
-                  else {
-                      leaf.expandedGroups.delete(groupKey);
-                  }
-                  requestRender();
-              },
-              persistHover: leaf.hoveredGroupToggleKey === groupKey,
-              onToggleHoverChange: (hovered) => {
-                  if (hovered) {
-                      leaf.hoveredGroupToggleKey = groupKey;
-                  }
-                  else if (leaf.hoveredGroupToggleKey === groupKey) {
-                      leaf.hoveredGroupToggleKey = undefined;
-                  }
-              },
-          }));
-          row.appendChild(firstCell);
-      }
-      appendAggregateCells(row, group.metrics, group.totals, headers, {
-          variant: "expandable",
-      });
-      tbody.appendChild(row);
-      if (expanded) {
-          for (const player of group.players) {
-              appendPlayerRows({
-                  player,
-                  indent: 1,
-                  leaf,
-                  snapshot,
-                  tbody,
-                  metricsCache,
-                  actions,
-                  headers,
-              });
-          }
-      }
-  }
-  function applyPersistentHover(element, leaf, rowKey, highlightClass) {
-      element.dataset.hoverHighlightClass = highlightClass;
-      if (leaf.hoveredRowKey === rowKey) {
-          if (leaf.hoveredRowElement && leaf.hoveredRowElement !== element) {
-              const previousClass = leaf.hoveredRowElement.dataset.hoverHighlightClass;
-              if (previousClass) {
-                  leaf.hoveredRowElement.classList.remove(previousClass);
-              }
-          }
-          leaf.hoveredRowElement = element;
-          element.classList.add(highlightClass);
-      }
-      element.addEventListener("pointerenter", () => {
-          if (leaf.hoveredRowElement && leaf.hoveredRowElement !== element) {
-              const previousClass = leaf.hoveredRowElement.dataset.hoverHighlightClass;
-              if (previousClass) {
-                  leaf.hoveredRowElement.classList.remove(previousClass);
-              }
-          }
-          leaf.hoveredRowKey = rowKey;
-          leaf.hoveredRowElement = element;
-          element.classList.add(highlightClass);
-      });
-  }
-  function appendMetricCells(row, metrics, player, headers) {
-      for (const column of headers) {
-          if (column.key === "label") {
-              continue;
-          }
-          const extraClasses = [getExtraCellClass(column.key, false)];
-          if (column.key === "incoming" && metrics.incoming > 0) {
-              extraClasses.push("bg-red-500 text-white");
-          }
-          const td = createElement("td", cellClassForColumn(column, extraClasses.filter(Boolean).join(" ")));
-          td.textContent = getPlayerCellValue(column.key, metrics, player);
-          row.appendChild(td);
-      }
-  }
-  function appendAggregateCells(row, metrics, totals, headers, options) {
-      const variant = options?.variant ?? "default";
-      for (const column of headers) {
-          if (column.key === "label") {
-              continue;
-          }
-          const extraClasses = [getExtraCellClass(column.key, true)];
-          if (column.key === "incoming" && metrics.incoming > 0) {
-              extraClasses.push("bg-red-500 text-white");
-          }
-          const td = createElement("td", cellClassForColumn(column, extraClasses.filter(Boolean).join(" "), {
-              variant,
-          }));
-          td.textContent = getAggregateCellValue(column.key, metrics, totals);
-          row.appendChild(td);
-      }
-  }
-  function renderPlayerDetails(player, snapshot) {
-      const wrapper = createElement("div", "space-y-4 text-[0.75rem] text-slate-100");
-      const metrics = computePlayerMetrics(player, snapshot);
-      const badgeRow = createElement("div", "flex flex-wrap gap-2");
-      badgeRow.appendChild(createBadge("⚠️ Incoming", metrics.incoming));
-      badgeRow.appendChild(createBadge("⚔️ Outgoing", metrics.outgoing));
-      badgeRow.appendChild(createBadge("🌱 Expanding", metrics.expanding));
-      badgeRow.appendChild(createBadge("🤝 Alliances", metrics.alliances));
-      badgeRow.appendChild(createBadge("📡 Disconnected", metrics.disconnected));
-      badgeRow.appendChild(createBadge("🕱 Traitor", metrics.traitor));
-      badgeRow.appendChild(createBadge("⏳ Waiting", metrics.waiting));
-      badgeRow.appendChild(createBadge("☠️ Eliminated", metrics.eliminated));
-      badgeRow.appendChild(createBadge("🛡️ Stable", metrics.stable, metrics.stable > 0));
-      wrapper.appendChild(badgeRow);
-      const grid = createElement("div", "grid gap-4 md:grid-cols-2");
-      grid.appendChild(createDetailSection("Incoming attacks", player.incomingAttacks, (attack) => `${attack.from} – ${formatTroopCount(attack.troops)} troops`));
-      grid.appendChild(createDetailSection("Outgoing attacks", player.outgoingAttacks, (attack) => `${attack.target} – ${formatTroopCount(attack.troops)} troops`));
-      grid.appendChild(createDetailSection("Defensive supports", player.defensiveSupports, (support) => `${support.ally} – ${formatTroopCount(support.troops)} troops`));
-      const activeAlliances = getActiveAlliances(player, snapshot);
-      grid.appendChild(createDetailSection("Alliances", activeAlliances, (pact) => {
-          const expiresAt = pact.startedAtMs + snapshot.allianceDurationMs;
-          const countdown = formatCountdown(expiresAt, snapshot.currentTimeMs);
-          return `${pact.partner} – expires in ${countdown}`;
-      }));
-      if (player.traitor || player.traitorTargets.length) {
-          grid.appendChild(createDetailSection("Traitor activity", player.traitorTargets, (target) => `Betrayed ${target}`));
-      }
-      wrapper.appendChild(grid);
-      return wrapper;
-  }
-  function createDetailSection(title, entries, toLabel) {
-      const section = createElement("section", "space-y-2");
-      const heading = createElement("h4", "font-semibold uppercase text-slate-300 tracking-wide text-[0.7rem]", title);
-      section.appendChild(heading);
-      if (!entries.length) {
-          section.appendChild(createElement("p", "text-slate-500 italic", "No records."));
-          return section;
-      }
-      const list = createElement("ul", "space-y-2");
-      for (const entry of entries) {
-          const item = createElement("li", "rounded-md border border-slate-800 bg-slate-900/80 px-3 py-2");
-          item.appendChild(createElement("div", "font-medium text-slate-200", toLabel(entry)));
-          list.appendChild(item);
-      }
-      section.appendChild(list);
-      return section;
-  }
-  function createBadge(label, value, highlight = value > 0) {
-      const badge = createElement("span", `inline-flex items-center gap-1 rounded-full px-3 py-1 text-[0.65rem] font-semibold ${highlight
-        ? "bg-sky-500/20 text-sky-200 border border-sky-500/40"
-        : "bg-slate-800/80 text-slate-300"}`);
-      const [emoji, ...rest] = label.split(" ");
-      const emojiSpan = createElement("span", "text-base");
-      emojiSpan.textContent = emoji;
-      badge.appendChild(emojiSpan);
-      badge.appendChild(createElement("span", "", rest.join(" ")));
-      badge.appendChild(createElement("span", "font-mono text-[0.7rem]", String(value)));
-      return badge;
-  }
-  function createActionStatusBadge(status) {
-      const baseClass = "rounded-full px-2 py-0.5 text-[0.6rem] font-semibold uppercase tracking-wide";
-      const styles = {
-          Enabled: "bg-sky-500/20 text-sky-200",
-          Running: "bg-emerald-500/20 text-emerald-200",
-          Disabled: "bg-slate-700/60 text-slate-200",
-      };
-      return createElement("span", `${baseClass} ${styles[status]}`, status);
-  }
-  function createRunStatusBadge(status) {
-      const baseClass = "rounded-full px-2 py-0.5 text-[0.6rem] font-semibold uppercase tracking-wide";
-      const styles = {
-          running: "bg-emerald-500/20 text-emerald-200",
-          completed: "bg-sky-500/20 text-sky-200",
-          stopped: "bg-amber-500/20 text-amber-200",
-          failed: "bg-rose-500/20 text-rose-200",
-      };
-      const className = `${baseClass} ${styles[status] ?? "bg-slate-700/60 text-slate-200"}`;
-      return createElement("span", className, formatRunStatus(status));
-  }
-  function createSummaryStat(label, value) {
-      const wrapper = createElement("div", "rounded-md border border-slate-800/70 bg-slate-900/70 px-3 py-2");
-      const title = createElement("div", "text-[0.65rem] uppercase tracking-wide text-slate-400", label);
-      const content = createElement("div", "font-mono text-base text-slate-100", value);
-      wrapper.appendChild(title);
-      wrapper.appendChild(content);
-      return wrapper;
-  }
-  function createLabelBlock(options) {
-      const { label, subtitle, indent, expanded, toggleAttribute, rowKey, onToggle, focus, persistHover, onToggleHoverChange, } = options;
-      const container = createElement("div", "flex items-start gap-3");
-      container.style.marginLeft = `${indent * 1.5}rem`;
-      const labelBlock = createElement("div", "space-y-1");
-      const labelEl = createPlayerNameElement(label, focus, {
-          asBlock: true,
-          className: "block font-semibold text-slate-100 transition-colors hover:text-sky-200",
-      });
-      labelBlock.appendChild(labelEl);
-      if (subtitle) {
-          labelBlock.appendChild(createElement("div", "text-[0.65rem] uppercase tracking-wide text-slate-400", subtitle));
-      }
-      if (toggleAttribute && rowKey && typeof expanded === "boolean" && onToggle) {
-          const button = createElement("button", "flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-slate-700 bg-slate-800 text-slate-300 hover:text-slate-50 focus:outline-none focus:ring-2 focus:ring-sky-500/60 transition-colors");
-          button.setAttribute(toggleAttribute, rowKey);
-          button.type = "button";
-          let currentExpanded = expanded;
-          const updateToggleState = (nextExpanded) => {
-              currentExpanded = nextExpanded;
-              button.title = nextExpanded ? "Collapse" : "Expand";
-              button.textContent = nextExpanded ? "−" : "+";
-          };
-          const setHoverState = (hovered) => {
-              if (hovered) {
-                  button.classList.add("text-slate-50");
-              }
-              else {
-                  button.classList.remove("text-slate-50");
-              }
-              onToggleHoverChange?.(hovered);
-          };
-          updateToggleState(currentExpanded);
-          if (persistHover) {
-              setHoverState(true);
-          }
-          button.addEventListener("pointerenter", () => {
-              setHoverState(true);
-          });
-          button.addEventListener("pointerleave", () => {
-              requestAnimationFrame(() => {
-                  if (!button.isConnected) {
-                      return;
-                  }
-                  setHoverState(false);
-              });
-          });
-          let pointerHandled = false;
-          button.addEventListener("pointerdown", (event) => {
-              if (event.button !== 0) {
-                  return;
-              }
-              event.preventDefault();
-              event.stopPropagation();
-              pointerHandled = true;
-              const nextExpanded = !currentExpanded;
-              updateToggleState(nextExpanded);
-              onToggle(nextExpanded);
-          });
-          button.addEventListener("click", (event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              if (pointerHandled) {
-                  pointerHandled = false;
-                  return;
-              }
-              const nextExpanded = !currentExpanded;
-              updateToggleState(nextExpanded);
-              onToggle(nextExpanded);
-          });
-          container.appendChild(button);
-      }
-      container.appendChild(labelBlock);
       return container;
   }
-  function cellClassForColumn(column, extra = "", options) {
-      const variant = options?.variant ?? "default";
-      const alignClass = column.align === "left"
-          ? "text-left"
-          : column.align === "right"
-              ? "text-right"
-              : "text-center";
-      const baseClass = variant === "expandable"
-          ? TABLE_CELL_EXPANDABLE_CLASS
-          : TABLE_CELL_BASE_CLASS;
-      return [baseClass, alignClass, extra].filter(Boolean).join(" ");
-  }
-  function getExtraCellClass(key, aggregate) {
-      if (key === "tiles" || key === "gold" || key === "troops") {
-          return "font-mono text-[0.75rem]";
+  function renderLogRow(entry, actions, visibleKeys) {
+      const row = createElement("tr", "transition-colors hover:bg-slate-900/40");
+      row.dataset.sidebarRole = SidebarRole.LogEntry;
+      row.dataset.logEntryId = entry.id;
+      row.dataset.logLevel = entry.level;
+      row.dataset.logTimestamp = String(entry.timestampMs);
+      row.style.boxShadow = `inset 0.25rem 0 0 0 ${getLogAccentColor(entry.level)}`;
+      const cellBaseClass = `${TABLE_CELL_BASE_CLASS} align-top`;
+      const timestampCell = createElement("td", `${cellBaseClass} font-mono text-[0.75rem] text-slate-300 whitespace-nowrap`, formatTimestamp(entry.timestampMs));
+      const levelCell = createElement("td", `${cellBaseClass} text-center`);
+      const levelBadge = createElement("span", `inline-flex items-center justify-center rounded px-1.5 py-0.5 text-[0.65rem] font-semibold uppercase tracking-wide ${getLogLevelBadgeClass(entry.level)}`, entry.level.toUpperCase());
+      levelCell.appendChild(levelBadge);
+      const hasSource = !!entry.source && entry.source.trim().length > 0;
+      const sourceCell = createElement("td", `${cellBaseClass} text-[0.75rem] text-slate-400 whitespace-nowrap`, hasSource ? entry.source : "–");
+      const messageCellClass = `${cellBaseClass} font-mono text-[0.75rem] whitespace-pre-wrap break-words `;
+      const messageCell = createElement("td", `${messageCellClass}${getLogMessageClass(entry.level)}`);
+      if (entry.tokens && entry.tokens.length > 0) {
+          messageCell.appendChild(renderLogTokens(entry.tokens, actions));
       }
-      return aggregate ? "font-semibold" : "font-semibold";
+      else {
+          messageCell.textContent = entry.message;
+      }
+      if (visibleKeys.has("timestamp")) {
+          row.appendChild(timestampCell);
+      }
+      if (visibleKeys.has("level")) {
+          row.appendChild(levelCell);
+      }
+      if (visibleKeys.has("source")) {
+          row.appendChild(sourceCell);
+      }
+      if (visibleKeys.has("message")) {
+          row.appendChild(messageCell);
+      }
+      return row;
   }
-  function getPlayerCellValue(key, metrics, player) {
-      switch (key) {
-          case "tiles":
-              return formatNumber(player.tiles);
-          case "gold":
-              return formatNumber(player.gold);
-          case "troops":
-              return formatTroopCount(player.troops);
-          case "incoming":
-              return String(metrics.incoming);
-          case "outgoing":
-              return String(metrics.outgoing);
-          case "expanding":
-              return String(metrics.expanding);
-          case "alliances":
-              return String(metrics.alliances);
-          case "disconnected":
-              return String(metrics.disconnected);
-          case "traitor":
-              return String(metrics.traitor);
-          case "stable":
-              return String(metrics.stable);
-          case "waiting":
-              return String(metrics.waiting);
-          case "eliminated":
-              return String(metrics.eliminated);
+  function getLogLevelWeight(level) {
+      switch (level) {
+          case "error":
+              return 3;
+          case "warn":
+              return 2;
+          case "info":
+              return 1;
+          case "debug":
+              return 0;
           default:
-              return "";
+              return 0;
       }
   }
-  function getAggregateCellValue(key, metrics, totals) {
-      switch (key) {
-          case "tiles":
-              return formatNumber(totals.tiles);
-          case "gold":
-              return formatNumber(totals.gold);
-          case "troops":
-              return formatTroopCount(totals.troops);
-          case "incoming":
-              return String(metrics.incoming);
-          case "outgoing":
-              return String(metrics.outgoing);
-          case "expanding":
-              return String(metrics.expanding);
-          case "alliances":
-              return String(metrics.alliances);
-          case "disconnected":
-              return String(metrics.disconnected);
-          case "traitor":
-              return String(metrics.traitor);
-          case "stable":
-              return String(metrics.stable);
-          case "waiting":
-              return String(metrics.waiting);
-          case "eliminated":
-              return String(metrics.eliminated);
-          default:
-              return "";
+  function getLogMessageSortValue(entry) {
+      if (entry.tokens && entry.tokens.length > 0) {
+          return entry.tokens
+              .map((token) => (token.type === "text" ? token.text : token.label))
+              .join(" ")
+              .toLowerCase();
       }
+      return entry.message.toLowerCase();
   }
-  function getMetrics(player, snapshot, cache) {
-      const cached = cache.get(player.id);
-      if (cached) {
-          return cached;
-      }
-      const metrics = computePlayerMetrics(player, snapshot);
-      cache.set(player.id, metrics);
-      return metrics;
-  }
-  function comparePlayers(options) {
-      const { a, b, sortState, snapshot, metricsCache } = options;
-      const metricsA = getMetrics(a, snapshot, metricsCache);
-      const metricsB = getMetrics(b, snapshot, metricsCache);
-      const valueA = getPlayerSortValue(a, metricsA, sortState.key);
-      const valueB = getPlayerSortValue(b, metricsB, sortState.key);
-      const result = compareSortValues(valueA, valueB, sortState.direction);
-      if (result !== 0) {
-          return result;
-      }
-      return a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
-  }
-  function compareAggregated(options) {
-      const { a, b, sortState } = options;
-      const valueA = getAggregateSortValue(a, sortState.key);
-      const valueB = getAggregateSortValue(b, sortState.key);
-      const result = compareSortValues(valueA, valueB, sortState.direction);
-      if (result !== 0) {
-          return result;
-      }
-      return a.label.localeCompare(b.label, undefined, { sensitivity: "base" });
-  }
-  function compareSortValues(a, b, direction) {
-      if (typeof a === "string" && typeof b === "string") {
-          const cmp = a.localeCompare(b, undefined, { sensitivity: "base" });
-          return direction === "asc" ? cmp : -cmp;
-      }
-      const numA = Number(a);
-      const numB = Number(b);
-      if (!Number.isNaN(numA) && !Number.isNaN(numB)) {
-          const diff = numA - numB;
-          if (diff !== 0) {
-              return direction === "asc" ? diff : -diff;
+  function renderLogTokens(tokens, actions) {
+      const fragment = document.createDocumentFragment();
+      for (const token of tokens) {
+          if (token.type === "text") {
+              fragment.appendChild(document.createTextNode(token.text));
+              continue;
           }
-          return 0;
+          fragment.appendChild(createLogMentionPill(token, actions));
       }
-      const fallback = String(a).localeCompare(String(b), undefined, {
-          sensitivity: "base",
-      });
-      return direction === "asc" ? fallback : -fallback;
+      return fragment;
   }
-  function getPlayerSortValue(player, metrics, key) {
-      switch (key) {
-          case "label":
-              return player.name.toLowerCase();
-          case "tiles":
-              return player.tiles;
-          case "gold":
-              return player.gold;
-          case "troops":
-              return player.troops;
-          case "incoming":
-              return metrics.incoming;
-          case "outgoing":
-              return metrics.outgoing;
-          case "expanding":
-              return metrics.expanding;
-          case "alliances":
-              return metrics.alliances;
-          case "disconnected":
-              return metrics.disconnected;
-          case "traitor":
-              return metrics.traitor;
-          case "stable":
-              return metrics.stable;
-          case "waiting":
-              return metrics.waiting;
-          case "eliminated":
-              return metrics.eliminated;
-          default:
-              return 0;
+  function createLogMentionPill(token, actions) {
+      const button = createElement("button", "inline-flex max-w-full items-center gap-1 rounded-full border border-slate-700/70 bg-slate-900/40 px-2.5 py-0.5 text-[0.65rem] font-semibold text-slate-200 transition-colors hover:border-sky-500/70 hover:text-sky-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-500/60");
+      button.type = "button";
+      button.dataset.sidebarRole = SidebarRole.LogMention;
+      button.dataset.mentionType = token.type;
+      button.dataset.mentionId = token.id;
+      if (token.color) {
+          button.style.borderColor = token.color;
+          const swatch = createElement("span", "h-2 w-2 shrink-0 rounded-full border border-slate-900/70");
+          swatch.style.backgroundColor = token.color;
+          button.appendChild(swatch);
       }
-  }
-  function getAggregateSortValue(row, key) {
-      switch (key) {
-          case "label":
-              return row.label.toLowerCase();
-          case "tiles":
-              return row.totals.tiles;
-          case "gold":
-              return row.totals.gold;
-          case "troops":
-              return row.totals.troops;
-          case "incoming":
-              return row.metrics.incoming;
-          case "outgoing":
-              return row.metrics.outgoing;
-          case "expanding":
-              return row.metrics.expanding;
-          case "alliances":
-              return row.metrics.alliances;
-          case "disconnected":
-              return row.metrics.disconnected;
-          case "traitor":
-              return row.metrics.traitor;
-          case "stable":
-              return row.metrics.stable;
-          case "waiting":
-              return row.metrics.waiting;
-          case "eliminated":
-              return row.metrics.eliminated;
-          default:
-              return 0;
-      }
-  }
-  function groupPlayers(options) {
-      const { players, snapshot, metricsCache, getKey, sortState } = options;
-      const map = new Map();
-      for (const player of players) {
-          const key = getKey(player) ?? "Unaffiliated";
-          if (!map.has(key)) {
-              map.set(key, {
-                  key,
-                  label: key,
-                  players: [],
-                  metrics: {
-                      incoming: 0,
-                      outgoing: 0,
-                      expanding: 0,
-                      waiting: 0,
-                      eliminated: 0,
-                      disconnected: 0,
-                      traitor: 0,
-                      alliances: 0,
-                      stable: 0,
-                  },
-                  totals: {
-                      tiles: 0,
-                      gold: 0,
-                      troops: 0,
-                  },
+      const label = createElement("span", "max-w-[10rem] truncate text-left", token.label);
+      label.title = token.label;
+      button.appendChild(label);
+      switch (token.type) {
+          case "player":
+              button.title = `Focus on ${token.label}`;
+              button.addEventListener("click", (event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  actions.focusPlayer?.(token.id);
               });
-          }
-          const entry = map.get(key);
-          entry.players.push(player);
-          const metrics = getMetrics(player, snapshot, metricsCache);
-          entry.metrics.incoming += metrics.incoming;
-          entry.metrics.outgoing += metrics.outgoing;
-          entry.metrics.expanding += metrics.expanding;
-          entry.metrics.waiting += metrics.waiting;
-          entry.metrics.eliminated += metrics.eliminated;
-          entry.metrics.disconnected += metrics.disconnected;
-          entry.metrics.traitor += metrics.traitor;
-          entry.metrics.alliances += metrics.alliances;
-          entry.metrics.stable += metrics.stable;
-          entry.totals.tiles += player.tiles;
-          entry.totals.gold += player.gold;
-          entry.totals.troops += player.troops;
+              break;
+          case "team":
+              button.title = `Show team ${token.label}`;
+              button.addEventListener("click", (event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  actions.focusTeam?.(token.id);
+              });
+              break;
+          case "clan":
+              button.title = `Show clan ${token.label}`;
+              button.addEventListener("click", (event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  actions.focusClan?.(token.id);
+              });
+              break;
       }
-      const rows = Array.from(map.values());
-      for (const row of rows) {
-          row.players.sort((a, b) => comparePlayers({ a, b, sortState, snapshot, metricsCache }));
+      return button;
+  }
+  function getLogLevelBadgeClass(level) {
+      switch (level) {
+          case "error":
+              return "border border-rose-500/40 bg-rose-500/15 text-rose-200";
+          case "warn":
+              return "border border-amber-400/40 bg-amber-400/15 text-amber-200";
+          case "debug":
+              return "border border-slate-600/50 bg-slate-800/70 text-slate-300";
+          default:
+              return "border border-sky-400/40 bg-sky-400/15 text-sky-200";
       }
-      rows.sort((a, b) => compareAggregated({ a, b, sortState }));
-      return rows;
   }
-  function computePlayerMetrics(player, snapshot) {
-      const incoming = player.incomingAttacks.length;
-      const outgoing = player.outgoingAttacks.length;
-      const expanding = player.expansions;
-      const waiting = player.waiting ? 1 : 0;
-      const eliminated = player.eliminated ? 1 : 0;
-      const disconnected = player.disconnected ? 1 : 0;
-      const traitor = player.traitor ? 1 : 0;
-      const alliances = getActiveAlliances(player, snapshot).length;
-      const stable = incoming +
-          outgoing +
-          expanding +
-          waiting +
-          eliminated +
-          disconnected +
-          traitor ===
-          0
-          ? 1
-          : 0;
-      return {
-          incoming,
-          outgoing,
-          expanding,
-          waiting,
-          eliminated,
-          disconnected,
-          traitor,
-          alliances,
-          stable,
-      };
+  function getLogMessageClass(level) {
+      switch (level) {
+          case "error":
+              return "text-rose-200";
+          case "warn":
+              return "text-amber-200";
+          case "debug":
+              return "text-slate-400";
+          default:
+              return "text-slate-200";
+      }
   }
-  function getActiveAlliances(player, snapshot) {
-      return player.alliances.filter((pact) => {
-          const expiresAt = pact.startedAtMs + snapshot.allianceDurationMs;
-          return expiresAt > snapshot.currentTimeMs;
+  function getLogAccentColor(level) {
+      switch (level) {
+          case "error":
+              return "rgba(248, 113, 113, 0.75)";
+          case "warn":
+              return "rgba(251, 191, 36, 0.75)";
+          case "debug":
+              return "rgba(148, 163, 184, 0.55)";
+          default:
+              return "rgba(56, 189, 248, 0.65)";
+      }
+  }
+
+  function renderOverlayView(options) {
+      const { leaf, snapshot, existingContainer, actions, sortState, onSort } = options;
+      const overlays = snapshot.sidebarOverlays ?? [];
+      const revision = snapshot.sidebarOverlayRevision ?? 0;
+      const signature = `${revision}:${overlays
+        .map((overlay) => `${overlay.id}:${overlay.enabled ? 1 : 0}`)
+        .join("|")}`;
+      const sortSignature = `${sortState.key}:${sortState.direction}`;
+      const isOverlayContainer = !!existingContainer &&
+          existingContainer.dataset.sidebarRole === SidebarRole.OverlaysDirectory;
+      const visibleHeaders = getVisibleHeaders(leaf, leaf.view, OVERLAY_TABLE_HEADERS);
+      const visibilitySignature = getColumnVisibilitySignature(visibleHeaders);
+      if (isOverlayContainer &&
+          existingContainer.dataset.signature === signature &&
+          existingContainer.dataset.sortState === sortSignature &&
+          existingContainer.dataset.columnVisibilitySignature === visibilitySignature) {
+          existingContainer.dataset.columnVisibilitySignature = visibilitySignature;
+          return existingContainer;
+      }
+      const { container, tbody } = createTableShell({
+          sortState,
+          onSort,
+          existingContainer: isOverlayContainer ? existingContainer : undefined,
+          view: leaf.view,
+          headers: visibleHeaders,
+          role: SidebarRole.OverlaysDirectory,
       });
+      container.dataset.signature = signature;
+      container.dataset.sortState = sortSignature;
+      container.dataset.columnVisibilitySignature = visibilitySignature;
+      const cellBaseClass = `${TABLE_CELL_BASE_CLASS} align-top`;
+      const visibleKeys = new Set(visibleHeaders.map((header) => header.key));
+      if (overlays.length === 0) {
+          const row = createElement("tr", "hover:bg-transparent");
+          const cell = createElement("td", `${cellBaseClass} text-center text-slate-400`, "No overlays available.");
+          cell.colSpan = Math.max(1, visibleHeaders.length);
+          row.appendChild(cell);
+          tbody.appendChild(row);
+          return container;
+      }
+      const sortedOverlays = [...overlays];
+      if (sortState.key === "label") {
+          sortedOverlays.sort((a, b) => compareSortValues(a.label.toLowerCase(), b.label.toLowerCase(), sortState.direction));
+      }
+      else if (sortState.key === "status") {
+          sortedOverlays.sort((a, b) => compareSortValues(a.enabled ? 1 : 0, b.enabled ? 1 : 0, sortState.direction));
+      }
+      for (const overlay of sortedOverlays) {
+          const row = createElement("tr", "transition-colors hover:bg-slate-800/40");
+          const nameCell = createElement("td", `${cellBaseClass} text-left`);
+          const nameStack = createElement("div", "flex flex-col gap-1");
+          const nameLabel = createElement("span", "font-semibold text-slate-100", overlay.label);
+          nameStack.appendChild(nameLabel);
+          nameCell.appendChild(nameStack);
+          const statusCell = createElement("td", `${cellBaseClass} text-right`);
+          const toggleWrapper = createElement("div", "flex justify-end");
+          const toggleButton = createElement("button", "relative inline-flex h-6 w-12 items-center rounded-full border transition-colors focus:outline-none focus:ring-2 focus:ring-sky-500/60");
+          toggleButton.type = "button";
+          toggleButton.setAttribute("role", "switch");
+          const srToggleLabel = createElement("span", "sr-only", "Toggle overlay");
+          const toggleKnob = createElement("span", "pointer-events-none absolute left-1 h-4 w-4 rounded-full shadow transition-transform duration-150 ease-out");
+          toggleButton.appendChild(srToggleLabel);
+          toggleButton.appendChild(toggleKnob);
+          const updateToggleAppearance = (enabled) => {
+              toggleButton.setAttribute("aria-checked", enabled ? "true" : "false");
+              toggleButton.classList.toggle("border-emerald-400/60", enabled);
+              toggleButton.classList.toggle("bg-emerald-500/40", enabled);
+              toggleButton.classList.toggle("hover:bg-emerald-500/50", enabled);
+              toggleButton.classList.toggle("border-slate-700", !enabled);
+              toggleButton.classList.toggle("bg-slate-800/70", !enabled);
+              toggleButton.classList.toggle("hover:bg-slate-700/80", !enabled);
+              toggleKnob.classList.toggle("bg-emerald-100", enabled);
+              toggleKnob.classList.toggle("bg-slate-300", !enabled);
+              toggleKnob.style.transform = enabled
+                  ? "translateX(1.5rem)"
+                  : "translateX(0)";
+              toggleButton.title = enabled ? "Disable overlay" : "Enable overlay";
+          };
+          let currentEnabled = overlay.enabled;
+          updateToggleAppearance(currentEnabled);
+          toggleButton.addEventListener("click", (event) => {
+              event.stopPropagation();
+              currentEnabled = !currentEnabled;
+              updateToggleAppearance(currentEnabled);
+              actions.setOverlayEnabled?.(overlay.id, currentEnabled);
+          });
+          toggleWrapper.appendChild(toggleButton);
+          statusCell.appendChild(toggleWrapper);
+          if (visibleKeys.has("status")) {
+              row.appendChild(statusCell);
+          }
+          if (visibleKeys.has("name")) {
+              row.insertBefore(nameCell, row.firstChild);
+          }
+          tbody.appendChild(row);
+      }
+      return container;
+  }
+
+  const DEFAULT_ACTIONS = {
+      toggleTrading: () => undefined,
+      showPlayerDetails: () => undefined,
+      focusPlayer: () => undefined,
+      focusTeam: () => undefined,
+      focusClan: () => undefined,
+      createAction: () => undefined,
+      selectAction: () => undefined,
+      setActionEnabled: () => undefined,
+      saveAction: () => undefined,
+      deleteAction: () => undefined,
+      startAction: () => undefined,
+      selectRunningAction: () => undefined,
+      stopRunningAction: () => undefined,
+      updateRunningActionSetting: () => undefined,
+      setRunningActionInterval: () => undefined,
+      clearLogs: () => undefined,
+      setOverlayEnabled: () => undefined,
+  };
+  function buildViewContent(leaf, snapshot, requestRender, existingContainer, lifecycle, actions) {
+      const view = leaf.view;
+      const sortState = ensureSortState(leaf, view);
+      const viewActions = actions ?? DEFAULT_ACTIONS;
+      const handleSort = (key) => {
+          const current = ensureSortState(leaf, view);
+          const direction = current.key === key
+              ? current.direction === "asc"
+                  ? "desc"
+                  : "asc"
+              : getDefaultDirection(key);
+          leaf.sortStates[view] = { key, direction };
+          requestRender();
+      };
+      switch (view) {
+          case "players":
+              return renderPlayersView({
+                  leaf,
+                  snapshot,
+                  requestRender,
+                  sortState,
+                  onSort: handleSort,
+                  existingContainer,
+                  actions: viewActions,
+                  lifecycle,
+              });
+          case "clanmates":
+              return renderClanView({
+                  leaf,
+                  snapshot,
+                  requestRender,
+                  sortState,
+                  onSort: handleSort,
+                  existingContainer,
+                  actions: viewActions,
+                  lifecycle,
+              });
+          case "teams":
+              return renderTeamView({
+                  leaf,
+                  snapshot,
+                  requestRender,
+                  sortState,
+                  onSort: handleSort,
+                  existingContainer,
+                  actions: viewActions,
+                  lifecycle,
+              });
+          case "ships":
+              return renderShipView({
+                  leaf,
+                  snapshot,
+                  requestRender,
+                  sortState,
+                  onSort: handleSort,
+                  existingContainer,
+                  actions: viewActions,
+                  lifecycle,
+              });
+          case "player":
+              return renderPlayerPanelView({
+                  leaf,
+                  snapshot,
+                  requestRender,
+                  sortState,
+                  onSort: handleSort,
+                  existingContainer,
+                  actions: viewActions,
+                  lifecycle,
+              });
+          case "actions":
+              return renderActionsDirectoryView({
+                  leaf,
+                  snapshot,
+                  sortState,
+                  onSort: handleSort,
+                  existingContainer,
+                  actions: viewActions,
+              });
+          case "actionEditor":
+              return renderActionEditorView({
+                  leaf,
+                  snapshot,
+                  existingContainer,
+                  lifecycle,
+                  actions: viewActions,
+              });
+          case "runningActions":
+              return renderRunningActionsView({
+                  leaf,
+                  snapshot,
+                  sortState,
+                  onSort: handleSort,
+                  existingContainer,
+                  actions: viewActions,
+              });
+          case "runningAction":
+              return renderRunningActionDetailView({
+                  leaf,
+                  snapshot,
+                  existingContainer,
+                  lifecycle,
+                  actions: viewActions,
+              });
+          case "logs":
+              return renderLogView({
+                  leaf,
+                  snapshot,
+                  sortState,
+                  onSort: handleSort,
+                  existingContainer,
+                  actions: viewActions,
+              });
+          case "overlays":
+              return renderOverlayView({
+                  leaf,
+                  snapshot,
+                  sortState,
+                  onSort: handleSort,
+                  existingContainer,
+                  actions: viewActions,
+              });
+          default:
+              return createElement("div", "text-slate-200 text-sm", "Unsupported view");
+      }
   }
 
   const VIEW_OPTIONS = [
@@ -3668,23 +3748,24 @@
       }
       const style = document.createElement("style");
       style.id = SIDEBAR_STYLE_ID;
+      const tableRole = SidebarRole.TableContainer;
       style.textContent = `
-    #openfront-strategic-sidebar [data-sidebar-role="table-container"] {
+    #openfront-strategic-sidebar [data-sidebar-role="${tableRole}"] {
       scrollbar-width: thin;
       scrollbar-color: rgba(148, 163, 184, 0.7) transparent;
     }
 
-    #openfront-strategic-sidebar [data-sidebar-role="table-container"]::-webkit-scrollbar {
+    #openfront-strategic-sidebar [data-sidebar-role="${tableRole}"]::-webkit-scrollbar {
       width: 6px;
       height: 6px;
     }
 
-    #openfront-strategic-sidebar [data-sidebar-role="table-container"]::-webkit-scrollbar-thumb {
+    #openfront-strategic-sidebar [data-sidebar-role="${tableRole}"]::-webkit-scrollbar-thumb {
       background-color: rgba(148, 163, 184, 0.7);
       border-radius: 9999px;
     }
 
-    #openfront-strategic-sidebar [data-sidebar-role="table-container"]::-webkit-scrollbar-track {
+    #openfront-strategic-sidebar [data-sidebar-role="${tableRole}"]::-webkit-scrollbar-track {
       background-color: transparent;
     }
   `;
@@ -4125,7 +4206,8 @@
                   this.scrollLogViewToBottom(leaf);
               }
               const container = leaf.contentContainer;
-              if (container && container.dataset.sidebarRole === "log-view") {
+              if (container &&
+                  container.dataset.sidebarRole === SidebarRole.LogView) {
                   container.dataset.logFollowState = leaf.logFollowEnabled
                       ? "following"
                       : "paused";
@@ -10208,8 +10290,9 @@
               .outgoingAttacks()
               .filter((attack) => !attack.retreating);
           const incomingAttacks = this.mapIncomingAttacks(incomingRaw);
-          const outgoingAttacks = this.mapOutgoingAttacks(outgoingRaw);
-          const expansions = outgoingRaw.filter((attack) => attack.targetID === 0).length;
+          const nonExpansionOutgoing = outgoingRaw.filter((attack) => attack.targetID !== 0);
+          const outgoingAttacks = this.mapOutgoingAttacks(nonExpansionOutgoing);
+          const expansions = outgoingRaw.length - nonExpansionOutgoing.length;
           const alliances = this.mapActiveAlliances(player);
           const goldValue = player.gold();
           const gold = typeof goldValue === "bigint" ? Number(goldValue) : goldValue;
