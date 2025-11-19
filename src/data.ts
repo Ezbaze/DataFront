@@ -20,6 +20,8 @@ import {
   AlliancePact,
   GameSnapshot,
   IncomingAttack,
+  LobbyQueueInfo,
+  LobbyTeamCountConfig,
   OutgoingAttack,
   PlayerRecord,
   ShipRecord,
@@ -43,6 +45,7 @@ import {
   SidebarTroopDonationEvent,
   TileSummary,
 } from "./types";
+import { LOBBY_TEAM_KICKED, predictLobbyTeams } from "./lobbyTeams";
 import { extractClanTag } from "./utils";
 
 const TICK_MILLISECONDS = 100;
@@ -62,6 +65,14 @@ const DONATION_DEDUP_TICK_WINDOW = 5;
 const TROOP_DONATION_OVERLAY_ID = "troop-donations";
 const GOLD_DONATION_OVERLAY_ID = "gold-donations";
 const TRADE_ROUTE_OVERLAY_ID = "trade-routes";
+const PUBLIC_LOBBY_POLL_INTERVAL_MS = 2000;
+const LOBBY_DETAILS_CACHE_MS = 1500;
+const DEFAULT_WORKER_COUNT = 20;
+const WORKER_COUNT_BY_ENV: Record<string, number> = {
+  prod: 20,
+  staging: 2,
+  dev: 2,
+};
 
 // These constants mirror the values defined in src/core/game/GameUpdates.ts and Game.ts.
 const GAME_UPDATE_TYPE_DISPLAY_EVENT = 3;
@@ -73,6 +84,51 @@ const MESSAGE_TYPE_RECEIVED_TROOPS_FROM_PLAYER = 22;
 type GameUpdatesLike = Record<number, unknown> | null;
 
 type ActionExecutionState = Record<string, unknown>;
+
+interface LobbyGameConfigLike {
+  gameMap?: string;
+  gameMode?: string;
+  maxPlayers?: number;
+  playerTeams?: LobbyTeamCountConfig;
+}
+
+interface LobbySummaryLike {
+  gameID?: string;
+  numClients?: number;
+  msUntilStart?: number;
+  gameConfig?: LobbyGameConfigLike;
+}
+
+interface LobbyClientInfoLike {
+  clientID?: string;
+  username?: string;
+}
+
+interface LobbyDetailsLike extends LobbySummaryLike {
+  clients?: LobbyClientInfoLike[];
+}
+
+interface LobbySummary {
+  gameID: string;
+  numClients?: number;
+  msUntilStart?: number;
+  gameConfig?: LobbyGameConfigLike;
+}
+
+interface LobbyDetails extends LobbySummary {
+  clients: LobbyClientInfoLike[];
+}
+
+interface LobbyDetailsCacheEntry {
+  expiresAt: number;
+  details: LobbyDetails;
+}
+
+interface LobbyWorkerInfo {
+  workerCount: number;
+}
+
+type PublicLobbyElement = Element & { lobbies?: LobbySummaryLike[] };
 
 interface DisplayMessageUpdateLike {
   message: string;
@@ -125,6 +181,16 @@ function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
     (typeof value === "object" || typeof value === "function") &&
     typeof (value as PromiseLike<unknown>).then === "function"
   );
+}
+
+function hashString(value: string): number {
+  let hash = 0;
+  for (let i = 0; i < value.length; i++) {
+    const char = value.charCodeAt(i);
+    hash = (hash << 5) - hash + char;
+    hash |= 0;
+  }
+  return Math.abs(hash);
 }
 
 class ActionEventManager implements SidebarActionEventsApi {
@@ -441,6 +507,15 @@ export class DataStore {
   private readonly recentTroopDonations: Map<string, number> = new Map();
   private readonly recentGoldDonations: Map<string, number> = new Map();
   private readonly logSubscriptionCleanup: () => void;
+  private lobbyQueueRefreshHandle: number | undefined;
+  private lobbyQueueRefreshPromise: Promise<void> | null = null;
+  private readonly lobbyDetailsCache = new Map<
+    string,
+    LobbyDetailsCacheEntry
+  >();
+  private lobbyWorkerInfoPromise: Promise<LobbyWorkerInfo> | null = null;
+  private lastLobbyTeamLogKey: string | null = null;
+  private lastLiveGameTeamLogKey: string | null = null;
 
   constructor(initialSnapshot?: GameSnapshot) {
     this.actionsState = this.createInitialActionsState();
@@ -511,6 +586,7 @@ export class DataStore {
 
     if (typeof window !== "undefined") {
       this.scheduleGameDiscovery(true);
+      this.startLobbyQueueUpdates();
     }
 
     this.ensureAllEventActionsRunning();
@@ -2449,6 +2525,7 @@ export class DataStore {
     this.lastProcessedDisplayUpdates = null;
     this.troopDonationOverlay?.clear();
     this.goldDonationOverlay?.clear();
+    this.lastLiveGameTeamLogKey = null;
   }
 
   private getCurrentGameTick(): number {
@@ -2680,6 +2757,22 @@ export class DataStore {
       const recordLookup = new Map<string, PlayerRecord>();
       for (const record of records) {
         recordLookup.set(record.id, record);
+      }
+
+      const hadLivePlayers = this.snapshot.players.some(
+        (player) => !player.isLobbyPlayer,
+      );
+      const livePlayers = records.filter((player) => !player.isLobbyPlayer);
+      if (livePlayers.length === 0) {
+        this.lastLiveGameTeamLogKey = null;
+      } else {
+        const signature = this.buildPlayerTeamSignature(livePlayers);
+        const shouldLog =
+          !hadLivePlayers || this.lastLiveGameTeamLogKey !== signature;
+        this.lastLiveGameTeamLogKey = signature;
+        if (shouldLog) {
+          this.logLiveGameTeams(livePlayers);
+        }
       }
 
       this.detectStructurePlacements(recordLookup);
@@ -4114,5 +4207,520 @@ export class DataStore {
       // ignore
     }
     return `${name} (#${id})`;
+  }
+
+  private startLobbyQueueUpdates(): void {
+    if (typeof window === "undefined") {
+      return;
+    }
+    if (this.lobbyQueueRefreshHandle !== undefined) {
+      window.clearInterval(this.lobbyQueueRefreshHandle);
+    }
+    const tick = () => this.enqueueLobbyQueueRefresh();
+    tick();
+    this.lobbyQueueRefreshHandle = window.setInterval(
+      tick,
+      PUBLIC_LOBBY_POLL_INTERVAL_MS,
+    );
+  }
+
+  private enqueueLobbyQueueRefresh(): void {
+    if (this.lobbyQueueRefreshPromise) {
+      return;
+    }
+    this.lobbyQueueRefreshPromise = this.performLobbyQueueRefresh().finally(
+      () => {
+        this.lobbyQueueRefreshPromise = null;
+      },
+    );
+  }
+
+  private async performLobbyQueueRefresh(): Promise<void> {
+    if (this.game) {
+      this.clearLobbyQueueSnapshot();
+      return;
+    }
+
+    const lobby = await this.resolveFeaturedLobby();
+    if (this.game) {
+      this.clearLobbyQueueSnapshot();
+      return;
+    }
+    if (!lobby) {
+      this.clearLobbyQueueSnapshot();
+      return;
+    }
+
+    const queue = await this.buildLobbyQueueInfo(lobby);
+    if (this.game) {
+      this.clearLobbyQueueSnapshot();
+      return;
+    }
+    if (!queue) {
+      this.clearLobbyQueueSnapshot();
+      return;
+    }
+
+    this.applyLobbyQueue(queue);
+  }
+
+  private clearLobbyQueueSnapshot(): void {
+    const hadQueue = Boolean(this.snapshot.currentLobbyQueue);
+    const shouldDropLobbyPlayers = !this.game;
+    const hadLobbyPlayers = shouldDropLobbyPlayers
+      ? this.snapshot.players.some((player) => player.isLobbyPlayer)
+      : false;
+    if (!hadQueue && !hadLobbyPlayers) {
+      return;
+    }
+    this.lastLobbyTeamLogKey = null;
+    if (shouldDropLobbyPlayers) {
+      this.lastLiveGameTeamLogKey = null;
+    }
+    const players =
+      shouldDropLobbyPlayers && hadLobbyPlayers
+        ? this.snapshot.players.filter((player) => !player.isLobbyPlayer)
+        : this.snapshot.players;
+    const next = this.attachActionsState({
+      ...this.snapshot,
+      players,
+      currentLobbyQueue: undefined,
+    });
+    this.snapshot = next;
+    this.notify();
+  }
+
+  private async resolveFeaturedLobby(): Promise<LobbySummary | null> {
+    const fromElement = this.readLobbyFromElement();
+    if (fromElement) {
+      return fromElement;
+    }
+    const summaries = await this.fetchPublicLobbySummaries();
+    return summaries.length ? summaries[0] : null;
+  }
+
+  private readLobbyFromElement(): LobbySummary | null {
+    const element = document.querySelector(
+      "public-lobby",
+    ) as PublicLobbyElement | null;
+    if (!element) {
+      return null;
+    }
+    const lobbies = element.lobbies;
+    if (!Array.isArray(lobbies) || lobbies.length === 0) {
+      return null;
+    }
+    return this.normalizeLobbySummary(lobbies[0]);
+  }
+
+  private normalizeLobbySummary(
+    input: LobbySummaryLike | null | undefined,
+  ): LobbySummary | null {
+    if (
+      !input ||
+      typeof input.gameID !== "string" ||
+      input.gameID.length === 0
+    ) {
+      return null;
+    }
+    const summary: LobbySummary = {
+      gameID: input.gameID,
+    };
+    if (typeof input.numClients === "number") {
+      summary.numClients = input.numClients;
+    }
+    if (typeof input.msUntilStart === "number") {
+      summary.msUntilStart = input.msUntilStart;
+    }
+    if (input.gameConfig) {
+      summary.gameConfig = {
+        gameMap:
+          typeof input.gameConfig.gameMap === "string"
+            ? input.gameConfig.gameMap
+            : undefined,
+        gameMode:
+          typeof input.gameConfig.gameMode === "string"
+            ? input.gameConfig.gameMode
+            : undefined,
+        maxPlayers:
+          typeof input.gameConfig.maxPlayers === "number"
+            ? input.gameConfig.maxPlayers
+            : undefined,
+        playerTeams:
+          typeof input.gameConfig.playerTeams === "number" ||
+          typeof input.gameConfig.playerTeams === "string"
+            ? (input.gameConfig.playerTeams as LobbyTeamCountConfig)
+            : undefined,
+      };
+    }
+    return summary;
+  }
+
+  private async fetchPublicLobbySummaries(): Promise<LobbySummary[]> {
+    if (typeof fetch !== "function") {
+      return [];
+    }
+    try {
+      const response = await fetch("/api/public_lobbies", {
+        method: "GET",
+        cache: "no-store",
+      });
+      if (!response.ok) {
+        return [];
+      }
+      const payload = (await response.json()) as {
+        lobbies?: LobbySummaryLike[];
+      };
+      if (!payload || !Array.isArray(payload.lobbies)) {
+        return [];
+      }
+      const summaries: LobbySummary[] = [];
+      for (const entry of payload.lobbies) {
+        const normalized = this.normalizeLobbySummary(entry);
+        if (normalized) {
+          summaries.push(normalized);
+        }
+      }
+      return summaries;
+    } catch (error) {
+      console.warn("Failed to fetch public lobby list", error);
+      return [];
+    }
+  }
+
+  private async buildLobbyQueueInfo(
+    summary: LobbySummary,
+  ): Promise<LobbyQueueInfo | null> {
+    const details = await this.fetchLobbyDetails(summary.gameID);
+    if (!details) {
+      return null;
+    }
+    const now = Date.now();
+    const players = this.deriveLobbyPlayerList(details);
+    const playerCount =
+      players.length > 0
+        ? players.length
+        : (summary.numClients ?? details.numClients ?? 0);
+    const mapName =
+      summary.gameConfig?.gameMap ??
+      details.gameConfig?.gameMap ??
+      "Unknown map";
+    const modeName =
+      summary.gameConfig?.gameMode ??
+      details.gameConfig?.gameMode ??
+      "Unknown mode";
+    const playerTeams =
+      summary.gameConfig?.playerTeams ?? details.gameConfig?.playerTeams;
+    const inferredMaxPlayers =
+      summary.gameConfig?.maxPlayers ?? details.gameConfig?.maxPlayers;
+    const maxPlayers =
+      typeof inferredMaxPlayers === "number"
+        ? Math.max(inferredMaxPlayers, playerCount)
+        : Math.max(playerCount, 0);
+    const startsAtMs = this.getLobbyStartTime(summary, details);
+    return {
+      gameId: summary.gameID,
+      mapName,
+      modeName,
+      playerCount,
+      maxPlayers,
+      startsAtMs,
+      updatedAtMs: now,
+      players,
+      playerTeams,
+    };
+  }
+
+  private deriveLobbyPlayerList(
+    details: LobbyDetails,
+  ): LobbyQueueInfo["players"] {
+    const players: LobbyQueueInfo["players"] = [];
+    for (const client of details.clients) {
+      const id =
+        typeof client.clientID === "string" && client.clientID.length > 0
+          ? client.clientID
+          : `client-${players.length}`;
+      const name =
+        typeof client.username === "string" && client.username.trim().length > 0
+          ? client.username.trim()
+          : "Anonymous player";
+      players.push({ id, name });
+    }
+    return players;
+  }
+
+  private createLobbyQueuePlayers(queue: LobbyQueueInfo): PlayerRecord[] {
+    const now = Date.now();
+    const fallbackTeamName =
+      queue.modeName && queue.modeName !== "Unknown mode"
+        ? `${queue.modeName} lobby`
+        : "Lobby queue";
+    const normalizedPlayers = queue.players.map((entry, index) => {
+      const trimmedName = entry.name?.trim() ?? "Anonymous player";
+      const safeName =
+        trimmedName.length > 0 ? trimmedName : "Anonymous player";
+      const playerId =
+        entry.id && entry.id.length > 0
+          ? `lobby:${queue.gameId}:${entry.id}`
+          : `lobby:${queue.gameId}:slot-${index + 1}`;
+      return {
+        id: playerId,
+        name: safeName,
+        clan: extractClanTag(safeName),
+        lobbyPosition: index + 1,
+      };
+    });
+
+    const predictedTeams = predictLobbyTeams(
+      normalizedPlayers.map((player) => ({ id: player.id, name: player.name })),
+      {
+        modeName: queue.modeName,
+        playerTeams: queue.playerTeams,
+        maxPlayers: queue.maxPlayers,
+      },
+    );
+
+    return normalizedPlayers.map((player) => {
+      const predictedTeam = predictedTeams.get(player.id);
+      const wasKicked = predictedTeam === LOBBY_TEAM_KICKED;
+      const teamLabel =
+        !predictedTeam || wasKicked ? fallbackTeamName : predictedTeam;
+      return {
+        id: player.id,
+        name: player.name,
+        clan: player.clan,
+        team: teamLabel,
+        color: undefined,
+        position: undefined,
+        traitorTargets: [],
+        tradeStopped: false,
+        tradeStoppedBySelf: false,
+        tradeStoppedByOther: false,
+        isSelf: false,
+        tiles: 0,
+        gold: 0,
+        troops: 0,
+        incomingAttacks: [],
+        outgoingAttacks: [],
+        defensiveSupports: [],
+        expansions: 0,
+        waiting: true,
+        eliminated: false,
+        disconnected: false,
+        traitor: false,
+        alliances: [],
+        lastUpdatedMs: now,
+        isLobbyPlayer: true,
+        lobbyPosition: player.lobbyPosition,
+        wasKickedFromLobby: wasKicked,
+      };
+    });
+  }
+
+  private async fetchLobbyDetails(
+    gameId: string,
+  ): Promise<LobbyDetails | null> {
+    const now = Date.now();
+    const cached = this.lobbyDetailsCache.get(gameId);
+    if (cached && cached.expiresAt > now) {
+      return cached.details;
+    }
+    const workerPath = await this.resolveWorkerPath(gameId);
+    if (!workerPath || typeof fetch !== "function") {
+      return null;
+    }
+    try {
+      const response = await fetch(`/${workerPath}/api/game/${gameId}`, {
+        method: "GET",
+        cache: "no-store",
+      });
+      if (!response.ok) {
+        return null;
+      }
+      const payload = (await response.json()) as LobbyDetailsLike;
+      const normalized = this.normalizeLobbyDetails(payload);
+      if (normalized) {
+        this.lobbyDetailsCache.set(gameId, {
+          expiresAt: now + LOBBY_DETAILS_CACHE_MS,
+          details: normalized,
+        });
+        return normalized;
+      }
+    } catch (error) {
+      console.warn(`Failed to fetch lobby ${gameId}`, error);
+    }
+    return null;
+  }
+
+  private normalizeLobbyDetails(
+    details: LobbyDetailsLike | null | undefined,
+  ): LobbyDetails | null {
+    const summary = this.normalizeLobbySummary(details);
+    if (!summary) {
+      return null;
+    }
+    const clients: LobbyClientInfoLike[] = [];
+    if (Array.isArray(details?.clients)) {
+      for (const client of details.clients) {
+        clients.push({
+          clientID:
+            typeof client.clientID === "string" && client.clientID.length > 0
+              ? client.clientID
+              : undefined,
+          username:
+            typeof client.username === "string" && client.username.length > 0
+              ? client.username
+              : undefined,
+        });
+      }
+    }
+    return {
+      ...summary,
+      clients,
+    };
+  }
+
+  private async resolveWorkerPath(gameId: string): Promise<string | null> {
+    const info = await this.getLobbyWorkerInfo();
+    const workerCount = Math.max(1, info.workerCount);
+    const index = hashString(gameId) % workerCount;
+    return `w${index}`;
+  }
+
+  private async getLobbyWorkerInfo(): Promise<LobbyWorkerInfo> {
+    if (this.lobbyWorkerInfoPromise) {
+      return this.lobbyWorkerInfoPromise;
+    }
+    this.lobbyWorkerInfoPromise = this.fetchLobbyWorkerInfo();
+    return this.lobbyWorkerInfoPromise;
+  }
+
+  private async fetchLobbyWorkerInfo(): Promise<LobbyWorkerInfo> {
+    if (typeof fetch !== "function") {
+      return { workerCount: DEFAULT_WORKER_COUNT };
+    }
+    try {
+      const response = await fetch("/api/env", {
+        method: "GET",
+        cache: "no-store",
+      });
+      if (!response.ok) {
+        return { workerCount: DEFAULT_WORKER_COUNT };
+      }
+      const payload = (await response.json()) as { game_env?: string };
+      const env = typeof payload?.game_env === "string" ? payload.game_env : "";
+      const workerCount = WORKER_COUNT_BY_ENV[env] ?? DEFAULT_WORKER_COUNT;
+      return { workerCount };
+    } catch (error) {
+      console.warn("Failed to resolve server environment", error);
+      return { workerCount: DEFAULT_WORKER_COUNT };
+    }
+  }
+
+  private applyLobbyQueue(queue: LobbyQueueInfo): void {
+    const players = this.createLobbyQueuePlayers(queue);
+    const nextSnapshot = this.attachActionsState({
+      ...this.snapshot,
+      players,
+      currentLobbyQueue: queue,
+      currentTimeMs: Date.now(),
+    });
+    const queueChanged = !this.areLobbyQueuesEqual(
+      this.snapshot.currentLobbyQueue,
+      queue,
+    );
+    const timeChanged =
+      Math.abs(nextSnapshot.currentTimeMs - this.snapshot.currentTimeMs) >=
+      1000;
+    if (queueChanged || timeChanged) {
+      if (queueChanged) {
+        this.logLobbyTeamPredictions(queue, players);
+      }
+      this.snapshot = nextSnapshot;
+      this.notify();
+    }
+  }
+
+  private logLobbyTeamPredictions(
+    queue: LobbyQueueInfo,
+    players: PlayerRecord[],
+  ): void {
+    if (players.length === 0) {
+      return;
+    }
+    const signature = this.buildPlayerTeamSignature(players, queue.gameId);
+    if (this.lastLobbyTeamLogKey === signature) {
+      return;
+    }
+    this.lastLobbyTeamLogKey = signature;
+  }
+
+  private logLiveGameTeams(players: PlayerRecord[]): void {
+    if (players.length === 0) {
+      return;
+    }
+  }
+
+  private buildPlayerTeamSignature(
+    players: PlayerRecord[],
+    scope?: string,
+  ): string {
+    const prefix = scope ? `${scope}::` : "";
+    const entries = players
+      .map((player) => `${player.id}:${player.team ?? ""}`)
+      .sort();
+    return `${prefix}${entries.join("|")}`;
+  }
+
+  private areLobbyQueuesEqual(
+    previous?: LobbyQueueInfo,
+    next?: LobbyQueueInfo,
+  ): boolean {
+    if (!previous && !next) {
+      return true;
+    }
+    if (!previous || !next) {
+      return false;
+    }
+    if (
+      previous.gameId !== next.gameId ||
+      previous.mapName !== next.mapName ||
+      previous.modeName !== next.modeName ||
+      previous.playerCount !== next.playerCount ||
+      previous.maxPlayers !== next.maxPlayers ||
+      previous.startsAtMs !== next.startsAtMs
+    ) {
+      return false;
+    }
+    if (previous.players.length !== next.players.length) {
+      return false;
+    }
+    for (let i = 0; i < previous.players.length; i++) {
+      const left = previous.players[i];
+      const right = next.players[i];
+      if (left.id !== right.id || left.name !== right.name) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  private getLobbyStartTime(
+    summary: LobbySummary,
+    details?: LobbyDetails,
+  ): number | undefined {
+    if (
+      typeof details?.msUntilStart === "number" &&
+      Number.isFinite(details.msUntilStart)
+    ) {
+      return Date.now() + Math.max(0, details.msUntilStart);
+    }
+    if (
+      typeof summary.msUntilStart === "number" &&
+      Number.isFinite(summary.msUntilStart)
+    ) {
+      return Date.now() + Math.max(0, summary.msUntilStart);
+    }
+    return undefined;
   }
 }

@@ -819,7 +819,10 @@
       { key: "destination", label: "Destination", align: "left" },
       { key: "status", label: "Status", align: "left" },
   ];
-  const DEFAULT_SORT_STATE = { key: "tiles", direction: "desc" };
+  const DEFAULT_SORT_STATE = {
+      key: "tiles",
+      direction: "desc",
+  };
   function ensureSortState(leaf, view) {
       const state = leaf.sortStates[view];
       if (state) {
@@ -1445,26 +1448,69 @@
       const headers = options.headers;
       const metrics = getMetrics(player, snapshot, metricsCache);
       const rowKey = player.id;
+      const isLobbyPlayer = Boolean(player.isLobbyPlayer);
       const tr = createElement("tr", "hover:bg-slate-800/50 transition-colors");
       tr.dataset.rowKey = rowKey;
       applyPersistentHover(tr, leaf, rowKey, "bg-slate-800/50");
-      tr.dataset.contextTarget = "player";
-      playerContextTargets.set(tr, {
-          id: player.id,
-          name: player.name,
-          tradeStopped: player.tradeStopped ?? false,
-          tradeStoppedBySelf: player.tradeStoppedBySelf,
-          tradeStoppedByOther: player.tradeStoppedByOther,
-          isSelf: player.isSelf ?? false,
-      });
+      if (!isLobbyPlayer) {
+          tr.dataset.contextTarget = "player";
+          playerContextTargets.set(tr, {
+              id: player.id,
+              name: player.name,
+              tradeStopped: player.tradeStopped ?? false,
+              tradeStoppedBySelf: player.tradeStoppedBySelf,
+              tradeStoppedByOther: player.tradeStoppedByOther,
+              isSelf: player.isSelf ?? false,
+          });
+      }
       const labelHeader = headers.find((header) => header.key === "label");
       if (labelHeader) {
           const firstCell = createElement("td", cellClassForColumn(labelHeader, "align-top"));
+          let subtitleClassName;
+          const subtitle = (() => {
+              if (isLobbyPlayer) {
+                  if (player.wasKickedFromLobby) {
+                      subtitleClassName =
+                          "text-[0.65rem] uppercase tracking-wide text-rose-400";
+                      return "KICKED";
+                  }
+                  const queue = snapshot.currentLobbyQueue;
+                  const hasPosition = typeof player.lobbyPosition === "number" &&
+                      Number.isFinite(player.lobbyPosition);
+                  const positionLabel = hasPosition
+                      ? `#${player.lobbyPosition}`
+                      : "Queued";
+                  if (!queue) {
+                      return `Queue ${positionLabel}`;
+                  }
+                  const totalSlots = queue.maxPlayers ?? queue.playerCount;
+                  const hasTotalSlots = typeof totalSlots === "number" &&
+                      Number.isFinite(totalSlots) &&
+                      totalSlots > 0;
+                  let label;
+                  if (hasTotalSlots && hasPosition) {
+                      label = `Queue ${positionLabel}/${totalSlots}`;
+                  }
+                  else if (hasTotalSlots) {
+                      label = `Queue ${totalSlots} players`;
+                  }
+                  else {
+                      label = `Queue ${positionLabel}`;
+                  }
+                  if (queue.playerTeams && player.team) {
+                      label = `${label} • ${player.team}`;
+                  }
+                  return label;
+              }
+              return [player.clan, player.team].filter(Boolean).join(" • ") || undefined;
+          })();
+          const focusTarget = isLobbyPlayer ? undefined : player.position;
           firstCell.appendChild(createLabelBlock({
               label: player.name,
-              subtitle: [player.clan, player.team].filter(Boolean).join(" • ") || undefined,
+              subtitle,
+              subtitleClassName,
               indent,
-              focus: player.position,
+              focus: focusTarget,
           }));
           tr.appendChild(firstCell);
       }
@@ -1476,9 +1522,11 @@
           headers,
       });
       tbody.appendChild(tr);
-      tr.addEventListener("click", () => {
-          actions.showPlayerDetails(player.id);
-      });
+      if (!isLobbyPlayer) {
+          tr.addEventListener("click", () => {
+              actions.showPlayerDetails(player.id);
+          });
+      }
   }
   function appendGroupRows(options) {
       const { group, leaf, snapshot, tbody, requestRender, groupType, metricsCache, actions, headers, } = options;
@@ -1487,12 +1535,14 @@
       const row = createElement("tr", "bg-slate-900/70 hover:bg-slate-800/60 transition-colors font-semibold");
       row.dataset.groupKey = groupKey;
       applyPersistentHover(row, leaf, groupKey, "bg-slate-800/60");
-      const eligiblePlayers = group.players.filter((player) => !player.isSelf);
-      row.dataset.contextTarget = "group";
-      groupContextTargets.set(row, {
-          label: group.label,
-          players: eligiblePlayers,
-      });
+      const eligiblePlayers = group.players.filter((player) => !player.isSelf && !player.isLobbyPlayer);
+      if (eligiblePlayers.length > 0) {
+          row.dataset.contextTarget = "group";
+          groupContextTargets.set(row, {
+              label: group.label,
+              players: eligiblePlayers,
+          });
+      }
       const labelHeader = headers.find((header) => header.key === "label");
       if (labelHeader) {
           const firstCell = createElement("td", cellClassForColumn(labelHeader, "align-top", {
@@ -1557,10 +1607,7 @@
               continue;
           }
           const config = getPlayerColumnConfig(column.key);
-          const className = [
-              config?.cellClass,
-              config?.getValueClass?.(context),
-          ]
+          const className = [config?.cellClass, config?.getValueClass?.(context)]
               .filter(Boolean)
               .join(" ");
           const td = createElement("td", cellClassForColumn(column, className));
@@ -1594,7 +1641,7 @@
       }
   }
   function createLabelBlock(options) {
-      const { label, subtitle, indent, expanded, toggleAttribute, rowKey, onToggle, focus, persistHover, onToggleHoverChange, } = options;
+      const { label, subtitle, subtitleClassName, indent, expanded, toggleAttribute, rowKey, onToggle, focus, persistHover, onToggleHoverChange, } = options;
       const container = createElement("div", "flex items-start gap-3");
       container.style.marginLeft = `${indent * 1.5}rem`;
       const labelBlock = createElement("div", "space-y-1");
@@ -1604,7 +1651,8 @@
       });
       labelBlock.appendChild(labelEl);
       if (subtitle) {
-          labelBlock.appendChild(createElement("div", "text-[0.65rem] uppercase tracking-wide text-slate-400", subtitle));
+          const defaultSubtitleClass = "text-[0.65rem] uppercase tracking-wide text-slate-400";
+          labelBlock.appendChild(createElement("div", subtitleClassName ?? defaultSubtitleClass, subtitle));
       }
       if (toggleAttribute && rowKey && typeof expanded === "boolean" && onToggle) {
           const button = createElement("button", "flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-slate-700 bg-slate-800 text-slate-300 hover:text-slate-50 focus:outline-none focus:ring-2 focus:ring-sky-500/60 transition-colors");
@@ -2357,12 +2405,7 @@
       const runningSignature = state.running.length === 0
           ? "none"
           : state.running
-              .map((run) => [
-              run.id,
-              run.actionId,
-              run.status,
-              run.lastUpdatedMs ?? "0",
-          ].join(":"))
+              .map((run) => [run.id, run.actionId, run.status, run.lastUpdatedMs ?? "0"].join(":"))
               .sort()
               .join("|");
       const signature = `${state.revision}:${state.runningRevision}:${state.selectedActionId ?? ""}:${runningSignature}`;
@@ -3247,7 +3290,12 @@
       const logs = snapshot.sidebarLogs ?? [];
       const revision = snapshot.sidebarLogRevision ?? 0;
       const followEnabled = leaf.logFollowEnabled !== false;
-      const supportedSortKeys = ["timestamp", "level", "source", "message"];
+      const supportedSortKeys = [
+          "timestamp",
+          "level",
+          "source",
+          "message",
+      ];
       let activeSortState = sortState;
       if (!supportedSortKeys.includes(sortState.key)) {
           const fallbackDirection = getDefaultDirection("timestamp");
@@ -4206,8 +4254,7 @@
                   this.scrollLogViewToBottom(leaf);
               }
               const container = leaf.contentContainer;
-              if (container &&
-                  container.dataset.sidebarRole === SidebarRole.LogView) {
+              if (container && container.dataset.sidebarRole === SidebarRole.LogView) {
                   container.dataset.logFollowState = leaf.logFollowEnabled
                       ? "following"
                       : "paused";
@@ -7360,6 +7407,148 @@
       }
   }
 
+  const TEAM_COLOR_SEQUENCE = [
+      "Red",
+      "Blue",
+      "Yellow",
+      "Green",
+      "Purple",
+      "Orange",
+      "Teal",
+  ];
+  const TEAM_CONFIG_DUOS = "Duos";
+  const TEAM_CONFIG_TRIOS = "Trios";
+  const TEAM_CONFIG_QUADS = "Quads";
+  const TEAM_CONFIG_HUMANS_VS_NATIONS = "Humans Vs Nations";
+  const LOBBY_TEAM_KICKED = "kicked";
+  function predictLobbyTeams(players, options) {
+      if (!players.length) {
+          return new Map();
+      }
+      const { playerTeams } = options;
+      if (!playerTeams) {
+          return new Map();
+      }
+      if (playerTeams === TEAM_CONFIG_HUMANS_VS_NATIONS) {
+          return new Map();
+      }
+      const configuredMaxPlayers = typeof options.maxPlayers === "number" && Number.isFinite(options.maxPlayers)
+          ? options.maxPlayers
+          : null;
+      const playerCountForTeams = configuredMaxPlayers && configuredMaxPlayers > 0
+          ? Math.max(players.length, configuredMaxPlayers)
+          : players.length;
+      const teamLabels = buildTeamLabels(playerTeams, playerCountForTeams);
+      if (teamLabels.length < 2) {
+          return new Map();
+      }
+      const normalizedPlayers = players.map((player) => ({
+          ...player,
+          clan: extractClanTag(player.name) ?? undefined,
+      }));
+      const assignments = assignTeams(normalizedPlayers, teamLabels, playerCountForTeams);
+      return assignments;
+  }
+  function buildTeamLabels(config, expectedPlayers) {
+      let teamCount = null;
+      if (typeof config === "number") {
+          teamCount = Number.isFinite(config) ? config : null;
+      }
+      else {
+          switch (config) {
+              case TEAM_CONFIG_DUOS:
+                  teamCount = Math.ceil(expectedPlayers / 2);
+                  break;
+              case TEAM_CONFIG_TRIOS:
+                  teamCount = Math.ceil(expectedPlayers / 3);
+                  break;
+              case TEAM_CONFIG_QUADS:
+                  teamCount = Math.ceil(expectedPlayers / 4);
+                  break;
+              default:
+                  teamCount = null;
+                  break;
+          }
+      }
+      if (teamCount === null || !Number.isFinite(teamCount) || teamCount < 2) {
+          return [];
+      }
+      if (teamCount < TEAM_COLOR_SEQUENCE.length + 1) {
+          return TEAM_COLOR_SEQUENCE.slice(0, teamCount);
+      }
+      return Array.from({ length: teamCount }, (_, index) => `Team ${index + 1}`);
+  }
+  function assignTeams(players, teams, playerCount) {
+      const result = new Map();
+      const teamPlayerCount = new Map();
+      const clanGroups = new Map();
+      const unclanned = [];
+      for (const player of players) {
+          if (player.clan) {
+              const clanKey = player.clan;
+              if (!clanGroups.has(clanKey)) {
+                  clanGroups.set(clanKey, []);
+              }
+              clanGroups.get(clanKey).push(player);
+          }
+          else {
+              unclanned.push(player);
+          }
+      }
+      const maxTeamSize = Math.ceil(playerCount / teams.length);
+      if (!Number.isFinite(maxTeamSize) || maxTeamSize <= 0) {
+          return result;
+      }
+      const sortedClans = Array.from(clanGroups.values()).sort((a, b) => b.length - a.length);
+      for (const clanPlayers of sortedClans) {
+          const assignment = pickTeam(teams, teamPlayerCount);
+          if (!assignment) {
+              break;
+          }
+          const { team } = assignment;
+          let { size } = assignment;
+          for (const player of clanPlayers) {
+              if (size < maxTeamSize) {
+                  result.set(player.id, team);
+                  size += 1;
+              }
+              else {
+                  result.set(player.id, LOBBY_TEAM_KICKED);
+              }
+          }
+          teamPlayerCount.set(team, size);
+      }
+      for (const player of unclanned) {
+          const assignment = pickTeam(teams, teamPlayerCount);
+          if (!assignment) {
+              break;
+          }
+          const { team, size } = assignment;
+          if (size >= maxTeamSize) {
+              continue;
+          }
+          teamPlayerCount.set(team, size + 1);
+          result.set(player.id, team);
+      }
+      return result;
+  }
+  function pickTeam(teams, teamPlayerCount) {
+      let chosenTeam = null;
+      let chosenSize = 0;
+      for (const team of teams) {
+          const currentSize = teamPlayerCount.get(team) ?? 0;
+          if (chosenTeam !== null && chosenSize <= currentSize) {
+              continue;
+          }
+          chosenTeam = team;
+          chosenSize = currentSize;
+      }
+      if (chosenTeam === null) {
+          return null;
+      }
+      return { team: chosenTeam, size: chosenSize };
+  }
+
   const TICK_MILLISECONDS = 100;
   const MAX_LOG_ENTRIES = 500;
   const STRUCTURE_UNIT_TYPES = new Set([
@@ -7376,6 +7565,14 @@
   const TROOP_DONATION_OVERLAY_ID = "troop-donations";
   const GOLD_DONATION_OVERLAY_ID = "gold-donations";
   const TRADE_ROUTE_OVERLAY_ID = "trade-routes";
+  const PUBLIC_LOBBY_POLL_INTERVAL_MS = 2000;
+  const LOBBY_DETAILS_CACHE_MS = 1500;
+  const DEFAULT_WORKER_COUNT = 20;
+  const WORKER_COUNT_BY_ENV = {
+      prod: 20,
+      staging: 2,
+      dev: 2,
+  };
   // These constants mirror the values defined in src/core/game/GameUpdates.ts and Game.ts.
   const GAME_UPDATE_TYPE_DISPLAY_EVENT = 3;
   const MESSAGE_TYPE_SENT_GOLD_TO_PLAYER = 18;
@@ -7387,6 +7584,15 @@
       return (value !== null &&
           (typeof value === "object" || typeof value === "function") &&
           typeof value.then === "function");
+  }
+  function hashString(value) {
+      let hash = 0;
+      for (let i = 0; i < value.length; i++) {
+          const char = value.charCodeAt(i);
+          hash = (hash << 5) - hash + char;
+          hash |= 0;
+      }
+      return Math.abs(hash);
   }
   class ActionEventManager {
       constructor(label, register, touch) {
@@ -7507,6 +7713,11 @@
           this.lastProcessedDisplayUpdates = null;
           this.recentTroopDonations = new Map();
           this.recentGoldDonations = new Map();
+          this.lobbyQueueRefreshPromise = null;
+          this.lobbyDetailsCache = new Map();
+          this.lobbyWorkerInfoPromise = null;
+          this.lastLobbyTeamLogKey = null;
+          this.lastLiveGameTeamLogKey = null;
           this.actionsState = this.createInitialActionsState();
           this.sidebarOverlays = [
               {
@@ -7564,6 +7775,7 @@
           }
           if (typeof window !== "undefined") {
               this.scheduleGameDiscovery(true);
+              this.startLobbyQueueUpdates();
           }
           this.ensureAllEventActionsRunning();
       }
@@ -9170,6 +9382,7 @@
           this.lastProcessedDisplayUpdates = null;
           this.troopDonationOverlay?.clear();
           this.goldDonationOverlay?.clear();
+          this.lastLiveGameTeamLogKey = null;
       }
       getCurrentGameTick() {
           if (this.game && typeof this.game.ticks === "function") {
@@ -9368,6 +9581,19 @@
               const recordLookup = new Map();
               for (const record of records) {
                   recordLookup.set(record.id, record);
+              }
+              const hadLivePlayers = this.snapshot.players.some((player) => !player.isLobbyPlayer);
+              const livePlayers = records.filter((player) => !player.isLobbyPlayer);
+              if (livePlayers.length === 0) {
+                  this.lastLiveGameTeamLogKey = null;
+              }
+              else {
+                  const signature = this.buildPlayerTeamSignature(livePlayers);
+                  const shouldLog = !hadLivePlayers || this.lastLiveGameTeamLogKey !== signature;
+                  this.lastLiveGameTeamLogKey = signature;
+                  if (shouldLog) {
+                      this.logLiveGameTeams(livePlayers);
+                  }
               }
               this.detectStructurePlacements(recordLookup);
               this.processRecentDisplayEvents(recordLookup);
@@ -10581,6 +10807,425 @@
               // ignore
           }
           return `${name} (#${id})`;
+      }
+      startLobbyQueueUpdates() {
+          if (typeof window === "undefined") {
+              return;
+          }
+          if (this.lobbyQueueRefreshHandle !== undefined) {
+              window.clearInterval(this.lobbyQueueRefreshHandle);
+          }
+          const tick = () => this.enqueueLobbyQueueRefresh();
+          tick();
+          this.lobbyQueueRefreshHandle = window.setInterval(tick, PUBLIC_LOBBY_POLL_INTERVAL_MS);
+      }
+      enqueueLobbyQueueRefresh() {
+          if (this.lobbyQueueRefreshPromise) {
+              return;
+          }
+          this.lobbyQueueRefreshPromise = this.performLobbyQueueRefresh().finally(() => {
+              this.lobbyQueueRefreshPromise = null;
+          });
+      }
+      async performLobbyQueueRefresh() {
+          if (this.game) {
+              this.clearLobbyQueueSnapshot();
+              return;
+          }
+          const lobby = await this.resolveFeaturedLobby();
+          if (this.game) {
+              this.clearLobbyQueueSnapshot();
+              return;
+          }
+          if (!lobby) {
+              this.clearLobbyQueueSnapshot();
+              return;
+          }
+          const queue = await this.buildLobbyQueueInfo(lobby);
+          if (this.game) {
+              this.clearLobbyQueueSnapshot();
+              return;
+          }
+          if (!queue) {
+              this.clearLobbyQueueSnapshot();
+              return;
+          }
+          this.applyLobbyQueue(queue);
+      }
+      clearLobbyQueueSnapshot() {
+          const hadQueue = Boolean(this.snapshot.currentLobbyQueue);
+          const shouldDropLobbyPlayers = !this.game;
+          const hadLobbyPlayers = shouldDropLobbyPlayers
+              ? this.snapshot.players.some((player) => player.isLobbyPlayer)
+              : false;
+          if (!hadQueue && !hadLobbyPlayers) {
+              return;
+          }
+          this.lastLobbyTeamLogKey = null;
+          if (shouldDropLobbyPlayers) {
+              this.lastLiveGameTeamLogKey = null;
+          }
+          const players = shouldDropLobbyPlayers && hadLobbyPlayers
+              ? this.snapshot.players.filter((player) => !player.isLobbyPlayer)
+              : this.snapshot.players;
+          const next = this.attachActionsState({
+              ...this.snapshot,
+              players,
+              currentLobbyQueue: undefined,
+          });
+          this.snapshot = next;
+          this.notify();
+      }
+      async resolveFeaturedLobby() {
+          const fromElement = this.readLobbyFromElement();
+          if (fromElement) {
+              return fromElement;
+          }
+          const summaries = await this.fetchPublicLobbySummaries();
+          return summaries.length ? summaries[0] : null;
+      }
+      readLobbyFromElement() {
+          const element = document.querySelector("public-lobby");
+          if (!element) {
+              return null;
+          }
+          const lobbies = element.lobbies;
+          if (!Array.isArray(lobbies) || lobbies.length === 0) {
+              return null;
+          }
+          return this.normalizeLobbySummary(lobbies[0]);
+      }
+      normalizeLobbySummary(input) {
+          if (!input || typeof input.gameID !== "string" || input.gameID.length === 0) {
+              return null;
+          }
+          const summary = {
+              gameID: input.gameID,
+          };
+          if (typeof input.numClients === "number") {
+              summary.numClients = input.numClients;
+          }
+          if (typeof input.msUntilStart === "number") {
+              summary.msUntilStart = input.msUntilStart;
+          }
+          if (input.gameConfig) {
+              summary.gameConfig = {
+                  gameMap: typeof input.gameConfig.gameMap === "string"
+                      ? input.gameConfig.gameMap
+                      : undefined,
+                  gameMode: typeof input.gameConfig.gameMode === "string"
+                      ? input.gameConfig.gameMode
+                      : undefined,
+                  maxPlayers: typeof input.gameConfig.maxPlayers === "number"
+                      ? input.gameConfig.maxPlayers
+                      : undefined,
+                  playerTeams: typeof input.gameConfig.playerTeams === "number" ||
+                      typeof input.gameConfig.playerTeams === "string"
+                      ? input.gameConfig.playerTeams
+                      : undefined,
+              };
+          }
+          return summary;
+      }
+      async fetchPublicLobbySummaries() {
+          if (typeof fetch !== "function") {
+              return [];
+          }
+          try {
+              const response = await fetch("/api/public_lobbies", {
+                  method: "GET",
+                  cache: "no-store",
+              });
+              if (!response.ok) {
+                  return [];
+              }
+              const payload = (await response.json());
+              if (!payload || !Array.isArray(payload.lobbies)) {
+                  return [];
+              }
+              const summaries = [];
+              for (const entry of payload.lobbies) {
+                  const normalized = this.normalizeLobbySummary(entry);
+                  if (normalized) {
+                      summaries.push(normalized);
+                  }
+              }
+              return summaries;
+          }
+          catch (error) {
+              console.warn("Failed to fetch public lobby list", error);
+              return [];
+          }
+      }
+      async buildLobbyQueueInfo(summary) {
+          const details = await this.fetchLobbyDetails(summary.gameID);
+          if (!details) {
+              return null;
+          }
+          const now = Date.now();
+          const players = this.deriveLobbyPlayerList(details);
+          const playerCount = players.length > 0
+              ? players.length
+              : summary.numClients ?? details.numClients ?? 0;
+          const mapName = summary.gameConfig?.gameMap ?? details.gameConfig?.gameMap ?? "Unknown map";
+          const modeName = summary.gameConfig?.gameMode ?? details.gameConfig?.gameMode ?? "Unknown mode";
+          const playerTeams = summary.gameConfig?.playerTeams ?? details.gameConfig?.playerTeams;
+          const inferredMaxPlayers = summary.gameConfig?.maxPlayers ?? details.gameConfig?.maxPlayers;
+          const maxPlayers = typeof inferredMaxPlayers === "number"
+              ? Math.max(inferredMaxPlayers, playerCount)
+              : Math.max(playerCount, 0);
+          const startsAtMs = this.getLobbyStartTime(summary, details);
+          return {
+              gameId: summary.gameID,
+              mapName,
+              modeName,
+              playerCount,
+              maxPlayers,
+              startsAtMs,
+              updatedAtMs: now,
+              players,
+              playerTeams,
+          };
+      }
+      deriveLobbyPlayerList(details) {
+          const players = [];
+          for (const client of details.clients) {
+              const id = typeof client.clientID === "string" && client.clientID.length > 0
+                  ? client.clientID
+                  : `client-${players.length}`;
+              const name = typeof client.username === "string" && client.username.trim().length > 0
+                  ? client.username.trim()
+                  : "Anonymous player";
+              players.push({ id, name });
+          }
+          return players;
+      }
+      createLobbyQueuePlayers(queue) {
+          const now = Date.now();
+          const fallbackTeamName = queue.modeName && queue.modeName !== "Unknown mode"
+              ? `${queue.modeName} lobby`
+              : "Lobby queue";
+          const normalizedPlayers = queue.players.map((entry, index) => {
+              const trimmedName = entry.name?.trim() ?? "Anonymous player";
+              const safeName = trimmedName.length > 0 ? trimmedName : "Anonymous player";
+              const playerId = entry.id && entry.id.length > 0
+                  ? `lobby:${queue.gameId}:${entry.id}`
+                  : `lobby:${queue.gameId}:slot-${index + 1}`;
+              return {
+                  id: playerId,
+                  name: safeName,
+                  clan: extractClanTag(safeName),
+                  lobbyPosition: index + 1,
+              };
+          });
+          const predictedTeams = predictLobbyTeams(normalizedPlayers.map((player) => ({ id: player.id, name: player.name })), {
+              modeName: queue.modeName,
+              playerTeams: queue.playerTeams,
+              maxPlayers: queue.maxPlayers,
+          });
+          return normalizedPlayers.map((player) => {
+              const predictedTeam = predictedTeams.get(player.id);
+              const wasKicked = predictedTeam === LOBBY_TEAM_KICKED;
+              const teamLabel = !predictedTeam || wasKicked ? fallbackTeamName : predictedTeam;
+              return {
+                  id: player.id,
+                  name: player.name,
+                  clan: player.clan,
+                  team: teamLabel,
+                  color: undefined,
+                  position: undefined,
+                  traitorTargets: [],
+                  tradeStopped: false,
+                  tradeStoppedBySelf: false,
+                  tradeStoppedByOther: false,
+                  isSelf: false,
+                  tiles: 0,
+                  gold: 0,
+                  troops: 0,
+                  incomingAttacks: [],
+                  outgoingAttacks: [],
+                  defensiveSupports: [],
+                  expansions: 0,
+                  waiting: true,
+                  eliminated: false,
+                  disconnected: false,
+                  traitor: false,
+                  alliances: [],
+                  lastUpdatedMs: now,
+                  isLobbyPlayer: true,
+                  lobbyPosition: player.lobbyPosition,
+                  wasKickedFromLobby: wasKicked,
+              };
+          });
+      }
+      async fetchLobbyDetails(gameId) {
+          const now = Date.now();
+          const cached = this.lobbyDetailsCache.get(gameId);
+          if (cached && cached.expiresAt > now) {
+              return cached.details;
+          }
+          const workerPath = await this.resolveWorkerPath(gameId);
+          if (!workerPath || typeof fetch !== "function") {
+              return null;
+          }
+          try {
+              const response = await fetch(`/${workerPath}/api/game/${gameId}`, {
+                  method: "GET",
+                  cache: "no-store",
+              });
+              if (!response.ok) {
+                  return null;
+              }
+              const payload = (await response.json());
+              const normalized = this.normalizeLobbyDetails(payload);
+              if (normalized) {
+                  this.lobbyDetailsCache.set(gameId, {
+                      expiresAt: now + LOBBY_DETAILS_CACHE_MS,
+                      details: normalized,
+                  });
+                  return normalized;
+              }
+          }
+          catch (error) {
+              console.warn(`Failed to fetch lobby ${gameId}`, error);
+          }
+          return null;
+      }
+      normalizeLobbyDetails(details) {
+          const summary = this.normalizeLobbySummary(details);
+          if (!summary) {
+              return null;
+          }
+          const clients = [];
+          if (Array.isArray(details?.clients)) {
+              for (const client of details.clients) {
+                  clients.push({
+                      clientID: typeof client.clientID === "string" && client.clientID.length > 0
+                          ? client.clientID
+                          : undefined,
+                      username: typeof client.username === "string" && client.username.length > 0
+                          ? client.username
+                          : undefined,
+                  });
+              }
+          }
+          return {
+              ...summary,
+              clients,
+          };
+      }
+      async resolveWorkerPath(gameId) {
+          const info = await this.getLobbyWorkerInfo();
+          const workerCount = Math.max(1, info.workerCount);
+          const index = hashString(gameId) % workerCount;
+          return `w${index}`;
+      }
+      async getLobbyWorkerInfo() {
+          if (this.lobbyWorkerInfoPromise) {
+              return this.lobbyWorkerInfoPromise;
+          }
+          this.lobbyWorkerInfoPromise = this.fetchLobbyWorkerInfo();
+          return this.lobbyWorkerInfoPromise;
+      }
+      async fetchLobbyWorkerInfo() {
+          if (typeof fetch !== "function") {
+              return { workerCount: DEFAULT_WORKER_COUNT };
+          }
+          try {
+              const response = await fetch("/api/env", {
+                  method: "GET",
+                  cache: "no-store",
+              });
+              if (!response.ok) {
+                  return { workerCount: DEFAULT_WORKER_COUNT };
+              }
+              const payload = (await response.json());
+              const env = typeof payload?.game_env === "string" ? payload.game_env : "";
+              const workerCount = WORKER_COUNT_BY_ENV[env] ?? DEFAULT_WORKER_COUNT;
+              return { workerCount };
+          }
+          catch (error) {
+              console.warn("Failed to resolve server environment", error);
+              return { workerCount: DEFAULT_WORKER_COUNT };
+          }
+      }
+      applyLobbyQueue(queue) {
+          const players = this.createLobbyQueuePlayers(queue);
+          const nextSnapshot = this.attachActionsState({
+              ...this.snapshot,
+              players,
+              currentLobbyQueue: queue,
+              currentTimeMs: Date.now(),
+          });
+          const queueChanged = !this.areLobbyQueuesEqual(this.snapshot.currentLobbyQueue, queue);
+          const timeChanged = Math.abs(nextSnapshot.currentTimeMs - this.snapshot.currentTimeMs) >= 1000;
+          if (queueChanged || timeChanged) {
+              if (queueChanged) {
+                  this.logLobbyTeamPredictions(queue, players);
+              }
+              this.snapshot = nextSnapshot;
+              this.notify();
+          }
+      }
+      logLobbyTeamPredictions(queue, players) {
+          if (players.length === 0) {
+              return;
+          }
+          const signature = this.buildPlayerTeamSignature(players, queue.gameId);
+          if (this.lastLobbyTeamLogKey === signature) {
+              return;
+          }
+          this.lastLobbyTeamLogKey = signature;
+      }
+      logLiveGameTeams(players) {
+          if (players.length === 0) {
+              return;
+          }
+      }
+      buildPlayerTeamSignature(players, scope) {
+          const prefix = scope ? `${scope}::` : "";
+          const entries = players
+              .map((player) => `${player.id}:${player.team ?? ""}`)
+              .sort();
+          return `${prefix}${entries.join("|")}`;
+      }
+      areLobbyQueuesEqual(previous, next) {
+          if (!previous && !next) {
+              return true;
+          }
+          if (!previous || !next) {
+              return false;
+          }
+          if (previous.gameId !== next.gameId ||
+              previous.mapName !== next.mapName ||
+              previous.modeName !== next.modeName ||
+              previous.playerCount !== next.playerCount ||
+              previous.maxPlayers !== next.maxPlayers ||
+              previous.startsAtMs !== next.startsAtMs) {
+              return false;
+          }
+          if (previous.players.length !== next.players.length) {
+              return false;
+          }
+          for (let i = 0; i < previous.players.length; i++) {
+              const left = previous.players[i];
+              const right = next.players[i];
+              if (left.id !== right.id || left.name !== right.name) {
+                  return false;
+              }
+          }
+          return true;
+      }
+      getLobbyStartTime(summary, details) {
+          if (typeof details?.msUntilStart === "number" &&
+              Number.isFinite(details.msUntilStart)) {
+              return Date.now() + Math.max(0, details.msUntilStart);
+          }
+          if (typeof summary.msUntilStart === "number" &&
+              Number.isFinite(summary.msUntilStart)) {
+              return Date.now() + Math.max(0, summary.msUntilStart);
+          }
+          return undefined;
       }
   }
 

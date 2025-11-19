@@ -370,20 +370,23 @@ function appendPlayerRows(options: {
   const headers = options.headers;
   const metrics = getMetrics(player, snapshot, metricsCache);
   const rowKey = player.id;
+  const isLobbyPlayer = Boolean(player.isLobbyPlayer);
 
   const tr = createElement("tr", "hover:bg-slate-800/50 transition-colors");
   tr.dataset.rowKey = rowKey;
   applyPersistentHover(tr, leaf, rowKey, "bg-slate-800/50");
 
-  tr.dataset.contextTarget = "player";
-  playerContextTargets.set(tr, {
-    id: player.id,
-    name: player.name,
-    tradeStopped: player.tradeStopped ?? false,
-    tradeStoppedBySelf: player.tradeStoppedBySelf,
-    tradeStoppedByOther: player.tradeStoppedByOther,
-    isSelf: player.isSelf ?? false,
-  });
+  if (!isLobbyPlayer) {
+    tr.dataset.contextTarget = "player";
+    playerContextTargets.set(tr, {
+      id: player.id,
+      name: player.name,
+      tradeStopped: player.tradeStopped ?? false,
+      tradeStoppedBySelf: player.tradeStoppedBySelf,
+      tradeStoppedByOther: player.tradeStoppedByOther,
+      isSelf: player.isSelf ?? false,
+    });
+  }
 
   const labelHeader = headers.find((header) => header.key === "label");
   if (labelHeader) {
@@ -391,13 +394,54 @@ function appendPlayerRows(options: {
       "td",
       cellClassForColumn(labelHeader, "align-top"),
     );
+    let subtitleClassName: string | undefined;
+    const subtitle = (() => {
+      if (isLobbyPlayer) {
+        if (player.wasKickedFromLobby) {
+          subtitleClassName =
+            "text-[0.65rem] uppercase tracking-wide text-rose-400";
+          return "KICKED";
+        }
+        const queue = snapshot.currentLobbyQueue;
+        const hasPosition =
+          typeof player.lobbyPosition === "number" &&
+          Number.isFinite(player.lobbyPosition);
+        const positionLabel = hasPosition
+          ? `#${player.lobbyPosition}`
+          : "Queued";
+        if (!queue) {
+          return `Queue ${positionLabel}`;
+        }
+        const totalSlots = queue.maxPlayers ?? queue.playerCount;
+        const hasTotalSlots =
+          typeof totalSlots === "number" &&
+          Number.isFinite(totalSlots) &&
+          totalSlots > 0;
+        let label: string;
+        if (hasTotalSlots && hasPosition) {
+          label = `Queue ${positionLabel}/${totalSlots}`;
+        } else if (hasTotalSlots) {
+          label = `Queue ${totalSlots} players`;
+        } else {
+          label = `Queue ${positionLabel}`;
+        }
+        if (queue.playerTeams && player.team) {
+          label = `${label} • ${player.team}`;
+        }
+        return label;
+      }
+      return (
+        [player.clan, player.team].filter(Boolean).join(" • ") || undefined
+      );
+    })();
+    const focusTarget = isLobbyPlayer ? undefined : player.position;
     firstCell.appendChild(
       createLabelBlock({
         label: player.name,
-        subtitle:
-          [player.clan, player.team].filter(Boolean).join(" • ") || undefined,
+        subtitle,
+        subtitleClassName,
         indent,
-        focus: player.position,
+        focus: focusTarget,
       }),
     );
     tr.appendChild(firstCell);
@@ -412,9 +456,11 @@ function appendPlayerRows(options: {
   });
   tbody.appendChild(tr);
 
-  tr.addEventListener("click", () => {
-    actions.showPlayerDetails(player.id);
-  });
+  if (!isLobbyPlayer) {
+    tr.addEventListener("click", () => {
+      actions.showPlayerDetails(player.id);
+    });
+  }
 }
 
 function appendGroupRows(options: {
@@ -449,12 +495,16 @@ function appendGroupRows(options: {
   row.dataset.groupKey = groupKey;
   applyPersistentHover(row, leaf, groupKey, "bg-slate-800/60");
 
-  const eligiblePlayers = group.players.filter((player) => !player.isSelf);
-  row.dataset.contextTarget = "group";
-  groupContextTargets.set(row, {
-    label: group.label,
-    players: eligiblePlayers,
-  });
+  const eligiblePlayers = group.players.filter(
+    (player) => !player.isSelf && !player.isLobbyPlayer,
+  );
+  if (eligiblePlayers.length > 0) {
+    row.dataset.contextTarget = "group";
+    groupContextTargets.set(row, {
+      label: group.label,
+      players: eligiblePlayers,
+    });
+  }
 
   const labelHeader = headers.find((header) => header.key === "label");
   if (labelHeader) {
@@ -579,6 +629,7 @@ function appendAggregateCells(options: {
 function createLabelBlock(options: {
   label: string;
   subtitle?: string;
+  subtitleClassName?: string;
   indent: number;
   expanded?: boolean;
   toggleAttribute?: string;
@@ -591,6 +642,7 @@ function createLabelBlock(options: {
   const {
     label,
     subtitle,
+    subtitleClassName,
     indent,
     expanded,
     toggleAttribute,
@@ -611,12 +663,10 @@ function createLabelBlock(options: {
   });
   labelBlock.appendChild(labelEl);
   if (subtitle) {
+    const defaultSubtitleClass =
+      "text-[0.65rem] uppercase tracking-wide text-slate-400";
     labelBlock.appendChild(
-      createElement(
-        "div",
-        "text-[0.65rem] uppercase tracking-wide text-slate-400",
-        subtitle,
-      ),
+      createElement("div", subtitleClassName ?? defaultSubtitleClass, subtitle),
     );
   }
 

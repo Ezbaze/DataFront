@@ -131,6 +131,33 @@ export interface PlayerRecord {
   traitor: boolean;
   alliances: AlliancePact[];
   lastUpdatedMs: number;
+  isLobbyPlayer?: boolean;
+  lobbyPosition?: number;
+  wasKickedFromLobby?: boolean;
+}
+
+export interface LobbyQueuePlayer {
+  id: string;
+  name: string;
+}
+
+export type LobbyTeamCountConfig =
+  | number
+  | "Duos"
+  | "Trios"
+  | "Quads"
+  | "Humans Vs Nations";
+
+export interface LobbyQueueInfo {
+  gameId: string;
+  mapName: string;
+  modeName: string;
+  playerCount: number;
+  maxPlayers: number;
+  startsAtMs?: number;
+  updatedAtMs: number;
+  players: LobbyQueuePlayer[];
+  playerTeams?: LobbyTeamCountConfig;
 }
 
 export interface GameSnapshot {
@@ -138,6 +165,7 @@ export interface GameSnapshot {
   allianceDurationMs: number;
   currentTimeMs: number;
   ships: ShipRecord[];
+  currentLobbyQueue?: LobbyQueueInfo;
   sidebarActions?: SidebarActionsState;
   sidebarLogs?: SidebarLogEntry[];
   sidebarLogRevision?: number;
