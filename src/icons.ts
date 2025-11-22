@@ -3,6 +3,8 @@ import {
   Columns3,
   createElement,
   Plus,
+  Search,
+  Radar,
   SquareSplitHorizontal,
   SquareSplitVertical,
   Trash,
@@ -17,6 +19,8 @@ const ICONS = {
   trash: Trash,
   "arrow-down": ArrowDown,
   columns: Columns3,
+  radar: Radar,
+  search: Search,
 } as const;
 
 type IconKind = keyof typeof ICONS;

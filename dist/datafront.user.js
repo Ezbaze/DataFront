@@ -123,6 +123,36 @@
    * See the LICENSE file in the root directory of this source tree.
    */
 
+  const Radar = [
+    ["path", { d: "M19.07 4.93A10 10 0 0 0 6.99 3.34" }],
+    ["path", { d: "M4 6h.01" }],
+    ["path", { d: "M2.29 9.62A10 10 0 1 0 21.31 8.35" }],
+    ["path", { d: "M16.24 7.76A6 6 0 1 0 8.23 16.67" }],
+    ["path", { d: "M12 18h.01" }],
+    ["path", { d: "M17.99 11.66A6 6 0 0 1 15.77 16.67" }],
+    ["circle", { cx: "12", cy: "12", r: "2" }],
+    ["path", { d: "m13.41 10.59 5.66-5.66" }]
+  ];
+
+  /**
+   * @license lucide v0.545.0 - ISC
+   *
+   * This source code is licensed under the ISC license.
+   * See the LICENSE file in the root directory of this source tree.
+   */
+
+  const Search = [
+    ["path", { d: "m21 21-4.34-4.34" }],
+    ["circle", { cx: "11", cy: "11", r: "8" }]
+  ];
+
+  /**
+   * @license lucide v0.545.0 - ISC
+   *
+   * This source code is licensed under the ISC license.
+   * See the LICENSE file in the root directory of this source tree.
+   */
+
   const Ship = [
     ["path", { d: "M12 10.189V14" }],
     ["path", { d: "M12 2v3" }],
@@ -214,6 +244,8 @@
       trash: Trash,
       "arrow-down": ArrowDown,
       columns: Columns3,
+      radar: Radar,
+      search: Search,
   };
   function renderIcon(kind, className) {
       const iconNode = ICONS[kind];
@@ -1502,7 +1534,7 @@
                   }
                   return label;
               }
-              return [player.clan, player.team].filter(Boolean).join(" • ") || undefined;
+              return ([player.clan, player.team].filter(Boolean).join(" • ") || undefined);
           })();
           const focusTarget = isLobbyPlayer ? undefined : player.position;
           firstCell.appendChild(createLabelBlock({
@@ -3285,7 +3317,7 @@
   }
 
   function renderLogView(options) {
-      const { leaf, snapshot, existingContainer, actions, sortState, onSort } = options;
+      const { leaf, snapshot, existingContainer, actions, sortState, onSort, searchFilter, } = options;
       const logActions = actions;
       const logs = snapshot.sidebarLogs ?? [];
       const revision = snapshot.sidebarLogRevision ?? 0;
@@ -3317,12 +3349,15 @@
           const previousRevision = Number(existingContainer.dataset.logRevision ?? "-1");
           const previousSortState = existingContainer.dataset.sortState ?? "";
           const previousVisibility = existingContainer.dataset.columnVisibilitySignature ?? "";
+          const previousSearchFilter = existingContainer.dataset.searchFilter ?? "";
           if (previousRevision === revision &&
               previousSortState === sortSignature &&
-              previousVisibility === visibilitySignature) {
+              previousVisibility === visibilitySignature &&
+              previousSearchFilter === (searchFilter ?? "")) {
               existingContainer.dataset.logRevision = String(revision);
               existingContainer.dataset.sortState = sortSignature;
               existingContainer.dataset.columnVisibilitySignature = visibilitySignature;
+              existingContainer.dataset.searchFilter = searchFilter ?? "";
               return existingContainer;
           }
       }
@@ -3339,6 +3374,7 @@
       container.dataset.logRevision = String(revision);
       container.dataset.sortState = sortSignature;
       container.dataset.columnVisibilitySignature = visibilitySignature;
+      container.dataset.searchFilter = searchFilter ?? "";
       const visibleKeys = new Set(visibleHeaders.map((header) => header.key));
       if (logs.length === 0) {
           const emptyRow = createElement("tr");
@@ -3637,7 +3673,7 @@
       clearLogs: () => undefined,
       setOverlayEnabled: () => undefined,
   };
-  function buildViewContent(leaf, snapshot, requestRender, existingContainer, lifecycle, actions) {
+  function buildViewContent(leaf, snapshot, requestRender, existingContainer, lifecycle, actions, searchFilter) {
       const view = leaf.view;
       const sortState = ensureSortState(leaf, view);
       const viewActions = actions ?? DEFAULT_ACTIONS;
@@ -3749,6 +3785,7 @@
                   onSort: handleSort,
                   existingContainer,
                   actions: viewActions,
+                  searchFilter,
               });
           case "overlays":
               return renderOverlayView({
@@ -3825,6 +3862,7 @@
           this.overlayElements = new Map();
           this.handleOverlayRealign = () => this.repositionGameOverlay();
           this.handleGlobalKeyDown = (event) => this.onGlobalKeyDown(event);
+          this.searchFilter = "";
           this.isSidebarHidden = false;
           this.store = store;
           this.snapshot = store.getSnapshot();
@@ -4182,18 +4220,179 @@
           return null;
       }
       renderLayout() {
+          this.searchInput = undefined;
           this.layoutContainer.innerHTML = "";
+          this.layoutContainer.appendChild(this.buildSidebarTopBars());
           const rootElement = this.buildNodeElement(this.rootNode);
           rootElement.classList.add("flex-1", "min-h-0");
           rootElement.style.flex = "1 1 0%";
           this.layoutContainer.appendChild(rootElement);
           this.refreshAllLeaves();
       }
+      buildSidebarTopBars() {
+          const container = createElement("div", "flex gap-3");
+          const radarTile = createElement("div", "flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-slate-800/70 bg-slate-900/70 shadow-inner");
+          radarTile.appendChild(renderIcon("radar", "h-5 w-5 text-slate-200"));
+          container.appendChild(radarTile);
+          const searchWrapper = createElement("div", "relative flex-1 min-w-0 space-y-1");
+          const searchBar = createElement("label", "flex h-10 items-center rounded-lg border border-slate-800/70 bg-slate-900/70 px-2 shadow-inner");
+          const searchInput = createElement("input", "flex-1 min-w-0 bg-transparent text-sm text-slate-100 placeholder:text-slate-500 appearance-none border-none ring-0 focus:outline-none focus:ring-0 focus:border-transparent");
+          if (searchInput instanceof HTMLInputElement) {
+              searchInput.type = "search";
+              searchInput.autocomplete = "off";
+              searchInput.placeholder =
+                  "Search players, clans, teams, or coordinates…";
+              this.searchInput = searchInput;
+              searchInput.value = this.searchFilter;
+              searchInput.addEventListener("input", () => this.handleSearchInput(searchInput.value));
+              searchInput.addEventListener("keydown", (event) => {
+                  if (event.key === "Enter") {
+                      event.preventDefault();
+                      this.handleSearchSubmit();
+                  }
+              });
+          }
+          searchBar.appendChild(searchInput);
+          searchWrapper.appendChild(searchBar);
+          container.appendChild(searchWrapper);
+          return container;
+      }
+      handleSearchInput(raw) {
+          const trimmed = raw.trim();
+          this.updateSearchFilter(trimmed.length >= 2 ? trimmed : "");
+      }
+      handleSearchSubmit() {
+          const query = this.searchInput?.value ?? "";
+          const trimmed = query.trim();
+          if (!trimmed) {
+              return;
+          }
+          this.updateSearchFilter(trimmed.length >= 2 ? trimmed : "");
+          const coordinates = this.parseCoordinates(trimmed);
+          if (coordinates) {
+              focusTile(coordinates);
+          }
+      }
+      parseCoordinates(query) {
+          const match = /^-?\d{1,5}\s*[, ]\s*-?\d{1,5}$/.exec(query);
+          if (!match) {
+              return null;
+          }
+          const [xRaw, yRaw] = query.split(/[, ]/).filter(Boolean);
+          const x = Number(xRaw);
+          const y = Number(yRaw);
+          if (!Number.isFinite(x) || !Number.isFinite(y)) {
+              return null;
+          }
+          return { x, y };
+      }
       buildNodeElement(node) {
           if (node.type === "leaf") {
               return this.buildLeafElement(node);
           }
           return this.buildGroupElement(node);
+      }
+      updateSearchFilter(next) {
+          const normalized = next.trim().toLowerCase();
+          if (this.searchFilter === normalized) {
+              return;
+          }
+          this.searchFilter = normalized;
+          this.refreshAllLeaves();
+      }
+      getFilteredSnapshot(view) {
+          const filter = this.searchFilter.trim().toLowerCase();
+          if (!filter) {
+              return this.snapshot;
+          }
+          const matchesPlayer = (player) => {
+              const fields = [
+                  player.name,
+                  player.id,
+                  player.team ?? "",
+                  player.clan ? `[${player.clan}]` : "",
+              ];
+              return fields.some((field) => field.toString().toLowerCase().includes(filter));
+          };
+          if (view === "players" || view === "clanmates" || view === "teams") {
+              const players = this.snapshot.players.filter(matchesPlayer);
+              return { ...this.snapshot, players };
+          }
+          if (view === "ships") {
+              const ships = this.snapshot.ships.filter((ship) => {
+                  const computedStatus = ship.retreating
+                      ? "Retreating"
+                      : ship.reachedTarget
+                          ? "Arrived"
+                          : ship.destination
+                              ? "En route"
+                              : "Unknown";
+                  const fields = [
+                      `${ship.type} #${ship.id}`,
+                      ship.ownerName,
+                      ship.type,
+                      computedStatus,
+                      ship.origin ? `${ship.origin.x},${ship.origin.y}` : "",
+                      ship.destination ? `${ship.destination.x},${ship.destination.y}` : "",
+                  ];
+                  return fields.some((field) => `${field ?? ""}`.toLowerCase().includes(filter));
+              });
+              return { ...this.snapshot, ships };
+          }
+          if (view === "logs") {
+              const sidebarLogs = this.snapshot.sidebarLogs?.filter((entry) => {
+                  const message = entry.message?.toLowerCase() ?? "";
+                  const source = entry.source?.toLowerCase() ?? "";
+                  const level = entry.level?.toLowerCase() ?? "";
+                  const tokenText = (entry.tokens ?? [])
+                      .map((token) => token.type === "text" ? token.text : token.label ?? "")
+                      .join(" ")
+                      .toLowerCase();
+                  return (message.includes(filter) ||
+                      source.includes(filter) ||
+                      level.includes(filter) ||
+                      tokenText.includes(filter));
+              }) ?? [];
+              return { ...this.snapshot, sidebarLogs };
+          }
+          if (view === "actions") {
+              const state = this.snapshot.sidebarActions;
+              if (!state) {
+                  return this.snapshot;
+              }
+              const filteredActions = state.actions.filter((action) => {
+                  const description = action.description?.toLowerCase() ?? "";
+                  return (action.name.toLowerCase().includes(filter) ||
+                      description.includes(filter));
+              });
+              const filteredRunning = state.running.filter((run) => {
+                  const fields = [run.name, run.status, run.runMode];
+                  return fields.some((field) => `${field ?? ""}`.toLowerCase().includes(filter));
+              });
+              const sidebarActions = {
+                  ...state,
+                  actions: filteredActions,
+                  running: filteredRunning,
+              };
+              return { ...this.snapshot, sidebarActions };
+          }
+          if (view === "runningActions") {
+              const state = this.snapshot.sidebarActions;
+              if (!state) {
+                  return this.snapshot;
+              }
+              const filteredRunning = state.running.filter((run) => {
+                  const fields = [
+                      run.name,
+                      run.status,
+                      run.runMode,
+                  ];
+                  return fields.some((field) => field.toString().toLowerCase().includes(filter));
+              });
+              const sidebarActions = { ...state, running: filteredRunning };
+              return { ...this.snapshot, sidebarActions };
+          }
+          return this.snapshot;
       }
       buildLeafElement(leaf) {
           const wrapper = createElement("div", "flex min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-slate-800/70 bg-slate-900/70 shadow-inner");
@@ -4493,7 +4692,7 @@
           const previousScrollTop = leaf.scrollTop ?? previousContainer?.scrollTop ?? 0;
           const previousScrollLeft = leaf.scrollLeft ?? previousContainer?.scrollLeft ?? 0;
           const lifecycle = this.createViewLifecycle(leaf);
-          const nextContainer = buildViewContent(leaf, this.snapshot, () => this.refreshLeafContent(leaf), previousContainer ?? undefined, lifecycle.callbacks, this.viewActions);
+          const nextContainer = buildViewContent(leaf, this.getFilteredSnapshot(leaf.view), () => this.refreshLeafContent(leaf), previousContainer ?? undefined, lifecycle.callbacks, this.viewActions, this.searchFilter);
           const replaced = !!previousContainer && nextContainer !== previousContainer;
           if (replaced) {
               if (previousCleanup) {
@@ -7432,7 +7631,8 @@
       if (playerTeams === TEAM_CONFIG_HUMANS_VS_NATIONS) {
           return new Map();
       }
-      const configuredMaxPlayers = typeof options.maxPlayers === "number" && Number.isFinite(options.maxPlayers)
+      const configuredMaxPlayers = typeof options.maxPlayers === "number" &&
+          Number.isFinite(options.maxPlayers)
           ? options.maxPlayers
           : null;
       const playerCountForTeams = configuredMaxPlayers && configuredMaxPlayers > 0
@@ -10896,7 +11096,9 @@
           return this.normalizeLobbySummary(lobbies[0]);
       }
       normalizeLobbySummary(input) {
-          if (!input || typeof input.gameID !== "string" || input.gameID.length === 0) {
+          if (!input ||
+              typeof input.gameID !== "string" ||
+              input.gameID.length === 0) {
               return null;
           }
           const summary = {
@@ -10966,9 +11168,13 @@
           const players = this.deriveLobbyPlayerList(details);
           const playerCount = players.length > 0
               ? players.length
-              : summary.numClients ?? details.numClients ?? 0;
-          const mapName = summary.gameConfig?.gameMap ?? details.gameConfig?.gameMap ?? "Unknown map";
-          const modeName = summary.gameConfig?.gameMode ?? details.gameConfig?.gameMode ?? "Unknown mode";
+              : (summary.numClients ?? details.numClients ?? 0);
+          const mapName = summary.gameConfig?.gameMap ??
+              details.gameConfig?.gameMap ??
+              "Unknown map";
+          const modeName = summary.gameConfig?.gameMode ??
+              details.gameConfig?.gameMode ??
+              "Unknown mode";
           const playerTeams = summary.gameConfig?.playerTeams ?? details.gameConfig?.playerTeams;
           const inferredMaxPlayers = summary.gameConfig?.maxPlayers ?? details.gameConfig?.maxPlayers;
           const maxPlayers = typeof inferredMaxPlayers === "number"
@@ -11158,7 +11364,8 @@
               currentTimeMs: Date.now(),
           });
           const queueChanged = !this.areLobbyQueuesEqual(this.snapshot.currentLobbyQueue, queue);
-          const timeChanged = Math.abs(nextSnapshot.currentTimeMs - this.snapshot.currentTimeMs) >= 1000;
+          const timeChanged = Math.abs(nextSnapshot.currentTimeMs - this.snapshot.currentTimeMs) >=
+              1000;
           if (queueChanged || timeChanged) {
               if (queueChanged) {
                   this.logLobbyTeamPredictions(queue, players);

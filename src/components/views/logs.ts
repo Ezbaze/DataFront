@@ -32,12 +32,21 @@ export function renderLogView(options: {
   onSort: (key: SortKey) => void;
   existingContainer?: HTMLElement;
   actions: ViewActionHandlers;
+  searchFilter?: string;
 }): HTMLElement {
-  const { leaf, snapshot, existingContainer, actions, sortState, onSort } =
-    options;
+  const {
+    leaf,
+    snapshot,
+    existingContainer,
+    actions,
+    sortState,
+    onSort,
+    searchFilter,
+  } = options;
   const logActions = actions;
   const logs = snapshot.sidebarLogs ?? [];
   const revision = snapshot.sidebarLogRevision ?? 0;
+
   const followEnabled = leaf.logFollowEnabled !== false;
   const supportedSortKeys: SortKey[] = [
     "timestamp",
@@ -70,14 +79,19 @@ export function renderLogView(options: {
     const previousSortState = existingContainer.dataset.sortState ?? "";
     const previousVisibility =
       existingContainer.dataset.columnVisibilitySignature ?? "";
+    const previousSearchFilter = existingContainer.dataset.searchFilter ?? "";
+
     if (
       previousRevision === revision &&
       previousSortState === sortSignature &&
-      previousVisibility === visibilitySignature
+      previousVisibility === visibilitySignature &&
+      previousSearchFilter === (searchFilter ?? "")
     ) {
       existingContainer.dataset.logRevision = String(revision);
       existingContainer.dataset.sortState = sortSignature;
       existingContainer.dataset.columnVisibilitySignature = visibilitySignature;
+      existingContainer.dataset.searchFilter = searchFilter ?? "";
+
       return existingContainer;
     }
   }
@@ -95,6 +109,7 @@ export function renderLogView(options: {
   container.dataset.logRevision = String(revision);
   container.dataset.sortState = sortSignature;
   container.dataset.columnVisibilitySignature = visibilitySignature;
+  container.dataset.searchFilter = searchFilter ?? "";
 
   const visibleKeys = new Set(visibleHeaders.map((header) => header.key));
   if (logs.length === 0) {

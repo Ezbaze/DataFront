@@ -84,6 +84,7 @@ export interface ViewRenderOptions {
   existingContainer?: HTMLElement;
   actions: ViewActionHandlers;
   lifecycle?: ViewLifecycleCallbacks;
+  searchFilter?: string;
 }
 
 export interface LogViewRenderOptions {
@@ -93,6 +94,7 @@ export interface LogViewRenderOptions {
   onSort: (key: SortKey) => void;
   existingContainer?: HTMLElement;
   actions?: ViewActionHandlers;
+  searchFilter?: string;
 }
 
 export interface ColumnVisibilityMenuOptions {

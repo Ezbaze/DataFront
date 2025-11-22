@@ -61,6 +61,7 @@ export function buildViewContent(
   existingContainer?: HTMLElement,
   lifecycle?: ViewLifecycleCallbacks,
   actions?: ViewActionHandlers,
+  searchFilter?: string,
 ): HTMLElement {
   const view = leaf.view;
   const sortState = ensureSortState(leaf, view);
@@ -175,6 +176,7 @@ export function buildViewContent(
         onSort: handleSort,
         existingContainer,
         actions: viewActions,
+        searchFilter,
       });
     case "overlays":
       return renderOverlayView({

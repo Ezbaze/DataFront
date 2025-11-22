@@ -112,6 +112,8 @@ export class SidebarApp {
   private readonly handleGlobalKeyDown = (event: KeyboardEvent) =>
     this.onGlobalKeyDown(event);
   private readonly viewActions: ViewActionHandlers;
+  private searchInput?: HTMLInputElement;
+  private searchFilter = "";
   private isSidebarHidden = false;
 
   constructor(store: DataStore) {
@@ -552,7 +554,9 @@ export class SidebarApp {
   }
 
   private renderLayout(): void {
+    this.searchInput = undefined;
     this.layoutContainer.innerHTML = "";
+    this.layoutContainer.appendChild(this.buildSidebarTopBars());
     const rootElement = this.buildNodeElement(this.rootNode);
     rootElement.classList.add("flex-1", "min-h-0");
     rootElement.style.flex = "1 1 0%";
@@ -560,11 +564,210 @@ export class SidebarApp {
     this.refreshAllLeaves();
   }
 
+  private buildSidebarTopBars(): HTMLElement {
+    const container = createElement("div", "flex gap-3");
+    const radarTile = createElement(
+      "div",
+      "flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-slate-800/70 bg-slate-900/70 shadow-inner",
+    );
+    radarTile.appendChild(renderIcon("radar", "h-5 w-5 text-slate-200"));
+    container.appendChild(radarTile);
+
+    const searchWrapper = createElement(
+      "div",
+      "relative flex-1 min-w-0 space-y-1",
+    );
+    const searchBar = createElement(
+      "label",
+      "flex h-10 items-center rounded-lg border border-slate-800/70 bg-slate-900/70 px-2 shadow-inner",
+    );
+    const searchInput = createElement(
+      "input",
+      "flex-1 min-w-0 bg-transparent text-sm text-slate-100 placeholder:text-slate-500 appearance-none border-none ring-0 focus:outline-none focus:ring-0 focus:border-transparent",
+    );
+    if (searchInput instanceof HTMLInputElement) {
+      searchInput.type = "search";
+      searchInput.autocomplete = "off";
+      searchInput.placeholder = "Search players, clans, teams, or coordinates…";
+      this.searchInput = searchInput;
+      searchInput.value = this.searchFilter;
+      searchInput.addEventListener("input", () =>
+        this.handleSearchInput(searchInput.value),
+      );
+      searchInput.addEventListener("keydown", (event) => {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          this.handleSearchSubmit();
+        }
+      });
+    }
+    searchBar.appendChild(searchInput);
+
+    searchWrapper.appendChild(searchBar);
+
+    container.appendChild(searchWrapper);
+    return container;
+  }
+
+  private handleSearchInput(raw: string): void {
+    const trimmed = raw.trim();
+    this.updateSearchFilter(trimmed.length >= 2 ? trimmed : "");
+  }
+
+  private handleSearchSubmit(): void {
+    const query = this.searchInput?.value ?? "";
+    const trimmed = query.trim();
+    if (!trimmed) {
+      return;
+    }
+    this.updateSearchFilter(trimmed.length >= 2 ? trimmed : "");
+    const coordinates = this.parseCoordinates(trimmed);
+    if (coordinates) {
+      focusTile(coordinates);
+    }
+  }
+
+  private parseCoordinates(query: string): { x: number; y: number } | null {
+    const match = /^-?\d{1,5}\s*[, ]\s*-?\d{1,5}$/.exec(query);
+    if (!match) {
+      return null;
+    }
+    const [xRaw, yRaw] = query.split(/[, ]/).filter(Boolean);
+    const x = Number(xRaw);
+    const y = Number(yRaw);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+      return null;
+    }
+    return { x, y };
+  }
+
   private buildNodeElement(node: PanelNode): HTMLElement {
     if (node.type === "leaf") {
       return this.buildLeafElement(node);
     }
     return this.buildGroupElement(node);
+  }
+
+  private updateSearchFilter(next: string): void {
+    const normalized = next.trim().toLowerCase();
+    if (this.searchFilter === normalized) {
+      return;
+    }
+    this.searchFilter = normalized;
+    this.refreshAllLeaves();
+  }
+
+  private getFilteredSnapshot(view: ViewType): GameSnapshot {
+    const filter = this.searchFilter.trim().toLowerCase();
+    if (!filter) {
+      return this.snapshot;
+    }
+
+    const matchesPlayer = (player: PlayerRecord): boolean => {
+      const fields = [
+        player.name,
+        player.id,
+        player.team ?? "",
+        player.clan ? `[${player.clan}]` : "",
+      ];
+      return fields.some((field) =>
+        field.toString().toLowerCase().includes(filter),
+      );
+    };
+
+    if (view === "players" || view === "clanmates" || view === "teams") {
+      const players = this.snapshot.players.filter(matchesPlayer);
+      return { ...this.snapshot, players };
+    }
+
+    if (view === "ships") {
+      const ships = this.snapshot.ships.filter((ship) => {
+        const computedStatus = ship.retreating
+          ? "Retreating"
+          : ship.reachedTarget
+            ? "Arrived"
+            : ship.destination
+              ? "En route"
+              : "Unknown";
+        const fields = [
+          `${ship.type} #${ship.id}`,
+          ship.ownerName,
+          ship.type,
+          computedStatus,
+          ship.origin ? `${ship.origin.x},${ship.origin.y}` : "",
+          ship.destination ? `${ship.destination.x},${ship.destination.y}` : "",
+        ];
+        return fields.some((field) =>
+          `${field ?? ""}`.toLowerCase().includes(filter),
+        );
+      });
+      return { ...this.snapshot, ships };
+    }
+
+    if (view === "logs") {
+      const sidebarLogs =
+        this.snapshot.sidebarLogs?.filter((entry) => {
+          const message = entry.message?.toLowerCase() ?? "";
+          const source = entry.source?.toLowerCase() ?? "";
+          const level = entry.level?.toLowerCase() ?? "";
+          const tokenText = (entry.tokens ?? [])
+            .map((token) =>
+              token.type === "text" ? token.text : (token.label ?? ""),
+            )
+            .join(" ")
+            .toLowerCase();
+          return (
+            message.includes(filter) ||
+            source.includes(filter) ||
+            level.includes(filter) ||
+            tokenText.includes(filter)
+          );
+        }) ?? [];
+      return { ...this.snapshot, sidebarLogs };
+    }
+
+    if (view === "actions") {
+      const state = this.snapshot.sidebarActions;
+      if (!state) {
+        return this.snapshot;
+      }
+      const filteredActions = state.actions.filter((action) => {
+        const description = action.description?.toLowerCase() ?? "";
+        return (
+          action.name.toLowerCase().includes(filter) ||
+          description.includes(filter)
+        );
+      });
+      const filteredRunning = state.running.filter((run) => {
+        const fields = [run.name, run.status, run.runMode];
+        return fields.some((field) =>
+          `${field ?? ""}`.toLowerCase().includes(filter),
+        );
+      });
+      const sidebarActions = {
+        ...state,
+        actions: filteredActions,
+        running: filteredRunning,
+      };
+      return { ...this.snapshot, sidebarActions };
+    }
+
+    if (view === "runningActions") {
+      const state = this.snapshot.sidebarActions;
+      if (!state) {
+        return this.snapshot;
+      }
+      const filteredRunning = state.running.filter((run) => {
+        const fields = [run.name, run.status, run.runMode];
+        return fields.some((field) =>
+          field.toString().toLowerCase().includes(filter),
+        );
+      });
+      const sidebarActions = { ...state, running: filteredRunning };
+      return { ...this.snapshot, sidebarActions };
+    }
+
+    return this.snapshot;
   }
 
   private buildLeafElement(leaf: PanelLeafNode): HTMLElement {
@@ -960,11 +1163,12 @@ export class SidebarApp {
     const lifecycle = this.createViewLifecycle(leaf);
     const nextContainer = buildViewContent(
       leaf,
-      this.snapshot,
+      this.getFilteredSnapshot(leaf.view),
       () => this.refreshLeafContent(leaf),
       previousContainer ?? undefined,
       lifecycle.callbacks,
       this.viewActions,
+      this.searchFilter,
     );
     const replaced = !!previousContainer && nextContainer !== previousContainer;
     if (replaced) {
