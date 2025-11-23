@@ -36,6 +36,7 @@ import {
   SidebarActionsState,
   SidebarDonationEvent,
   SidebarGoldDonationEvent,
+  SidebarLobbyApi,
   SidebarLogEntry,
   SidebarLogger,
   SidebarOverlayDefinition,
@@ -68,6 +69,7 @@ const TRADE_ROUTE_OVERLAY_ID = "trade-routes";
 const PUBLIC_LOBBY_POLL_INTERVAL_MS = 2000;
 const LOBBY_DETAILS_CACHE_MS = 1500;
 const DEFAULT_WORKER_COUNT = 20;
+const USERNAME_STORAGE_KEY = "username";
 const WORKER_COUNT_BY_ENV: Record<string, number> = {
   prod: 20,
   staging: 2,
@@ -128,7 +130,10 @@ interface LobbyWorkerInfo {
   workerCount: number;
 }
 
-type PublicLobbyElement = Element & { lobbies?: LobbySummaryLike[] };
+type PublicLobbyElement = Element & {
+  lobbies?: LobbySummaryLike[];
+  lobbyClicked?: (lobby: LobbySummaryLike) => void;
+};
 
 interface DisplayMessageUpdateLike {
   message: string;
@@ -156,6 +161,7 @@ interface ActionGameApi {
 
 interface ActionExecutionContext {
   game: ActionGameApi;
+  lobby: SidebarLobbyApi;
   settings: Record<string, SidebarActionSettingValue>;
   state: ActionExecutionState;
   run: SidebarRunningAction;
@@ -1447,12 +1453,129 @@ export class DataStore {
       timestamp: now,
     });
 
+    const autoJoinClanLobby = this.createActionDefinition({
+      name: "Join lobby with largest clan",
+      code:
+        "exports.run = ({ lobby, logger, state, events, snapshot }) => {\n" +
+        "  let inGame = snapshot.players.some(p => !p.isLobbyPlayer);\n" +
+        '  events.on("gameAttached", () => {\n' +
+        "    inGame = true;\n" +
+        "    state.lastJoinGameId = undefined;\n" +
+        "  });\n" +
+        '  events.on("gameDetached", () => {\n' +
+        "    inGame = false;\n" +
+        "    state.lastJoinGameId = undefined;\n" +
+        "    state.lastJoinedGameId = undefined;\n" +
+        "  });\n" +
+        "  const apply = (queue) => {\n" +
+        "    if (!queue) {\n" +
+        "      state.lastJoinGameId = undefined;\n" +
+        "      state.lastJoinedGameId = undefined;\n" +
+        "      state.lastAppliedDisplayName = undefined;\n" +
+        "      return;\n" +
+        "    }\n" +
+        "    if (state.lastJoinedGameId === queue.gameId) {\n" +
+        "      return;\n" +
+        "    }\n" +
+        "    if (inGame) {\n" +
+        '      logger.info("Already in an active game; skipping join.");\n' +
+        "      state.lastJoinGameId = undefined;\n" +
+        "      return;\n" +
+        "    }\n" +
+        "    if (!queue.playerTeams) {\n" +
+        '      logger.info("Skipping FFA lobby (not a team game)");\n' +
+        "      return;\n" +
+        "    }\n" +
+        "    if (queue.playerCount >= queue.maxPlayers) {\n" +
+        '      logger.info("Lobby is full; skipping join.");\n' +
+        "      return;\n" +
+        "    }\n" +
+        "    const players = Array.isArray(queue.players) ? queue.players : [];\n" +
+        "    if (players.length === 0) {\n" +
+        '      logger.info("Lobby has no visible players; skipping join.");\n' +
+        "      return;\n" +
+        "    }\n" +
+        "    const counts = new Map();\n" +
+        "    for (const entry of players) {\n" +
+        "      const tag = lobby.extractClanTag(entry.name);\n" +
+        "      if (!tag) continue;\n" +
+        "      counts.set(tag, (counts.get(tag) ?? 0) + 1);\n" +
+        "    }\n" +
+        "    if (counts.size === 0) {\n" +
+        '      logger.info("No clans detected in lobby; keeping existing name.");\n' +
+        "    }\n" +
+        "    let best = null;\n" +
+        "    for (const [tag, count] of counts.entries()) {\n" +
+        "      if (!best || count > best.count || (count === best.count && tag < best.tag)) {\n" +
+        "        best = { tag, count };\n" +
+        "      }\n" +
+        "    }\n" +
+        "    let teamSize = 0;\n" +
+        "    if (typeof queue.playerTeams === 'number') {\n" +
+        "      teamSize = Math.floor(queue.maxPlayers / queue.playerTeams);\n" +
+        "    } else if (queue.playerTeams === 'Duos') {\n" +
+        "      teamSize = 2;\n" +
+        "    } else if (queue.playerTeams === 'Trios') {\n" +
+        "      teamSize = 3;\n" +
+        "    } else if (queue.playerTeams === 'Quads') {\n" +
+        "      teamSize = 4;\n" +
+        "    } else if (queue.playerTeams === 'Humans Vs Nations') {\n" +
+        "      teamSize = Math.floor(queue.maxPlayers / 2);\n" +
+        "    }\n" +
+        "    if (best && teamSize > 0 && best.count >= teamSize) {\n" +
+        "      logger.info(`Clan ${best.tag} already has ${best.count} players (team size: ${teamSize}); skipping join to avoid overfilling.`);\n" +
+        "      return;\n" +
+        "    }\n" +
+        "    const slotsLeft = queue.maxPlayers - queue.playerCount;\n" +
+        "    const slotThreshold = Math.ceil(queue.maxPlayers * 0.2);\n" +
+        "    if (slotsLeft > slotThreshold) {\n" +
+        "      logger.info(`Waiting for lobby to fill more (${slotsLeft} slots remaining, waiting for ${slotThreshold} or fewer)`);\n" +
+        "      return;\n" +
+        "    }\n" +
+        '    const currentName = (typeof lobby.getDisplayName === "function" && lobby.getDisplayName()) || "";\n' +
+        '    const baseName = currentName.replace(/^\\s*\\[[^\\]]+\\]\\s*/, "").trim() || currentName.trim() || "Player";\n' +
+        "    const nextName = lobby.buildNameWithClanTag(baseName, best?.tag);\n" +
+        "    if (state.lastAppliedDisplayName !== nextName) {\n" +
+        "      if (lobby.setDisplayName(nextName)) {\n" +
+        "        state.lastAppliedDisplayName = nextName;\n" +
+        '        logger.info(`Set lobby name to "${nextName}"`);\n' +
+        "      } else {\n" +
+        '        logger.warn("Failed to update lobby display name.");\n' +
+        "      }\n" +
+        "    }\n" +
+        "    const alreadyAttempted = state.lastJoinGameId === queue.gameId;\n" +
+        "    if (!alreadyAttempted) {\n" +
+        "      const joined = lobby.join(queue.gameId);\n" +
+        "      state.lastJoinGameId = queue.gameId;\n" +
+        "      if (joined) {\n" +
+        "        logger.info(`Joining lobby ${queue.gameId} with ${nextName}`);\n" +
+        "        state.lastJoinedGameId = queue.gameId;\n" +
+        "      } else {\n" +
+        '        logger.warn("Could not request lobby join (maybe already in-game?)");\n' +
+        "      }\n" +
+        "    }\n" +
+        "  };\n" +
+        "  apply(snapshot.currentLobbyQueue);\n" +
+        '  events.on("lobbyUpdated", (queue) => {\n' +
+        "    apply(queue || lobby.queue);\n" +
+        "  });\n" +
+        "};",
+      runMode: "event",
+      description:
+        "Automatically joins team game lobbies with the largest clan when 20% or fewer slots remain and the clan won't exceed team size. Once joined, stays in that game.",
+      runIntervalTicks: 1,
+      enabled: false,
+      settings: [],
+      timestamp: now,
+    });
+
     const actions = [
       tradeBan,
       enableTrade,
       missileSiloAlerts,
       troopDonationLogger,
       goldDonationLogger,
+      autoJoinClanLobby,
     ];
     return {
       revision: 1,
@@ -2462,6 +2585,7 @@ export class DataStore {
     const logger = createSidebarLogger(`Action ${run.name} [${run.id}]`);
     return {
       game: this.buildActionGameApi(),
+      lobby: this.buildActionLobbyApi(),
       settings,
       state,
       run,
@@ -2496,6 +2620,171 @@ export class DataStore {
       stopTrade: createHandler(true),
       startTrade: createHandler(false),
     };
+  }
+
+  private buildActionLobbyApi(): SidebarLobbyApi {
+    return {
+      queue: this.snapshot.currentLobbyQueue,
+      extractClanTag,
+      buildNameWithClanTag: (baseName, clanTag) =>
+        this.buildDisplayNameWithClan(baseName, clanTag),
+      join: (gameId?: string) => this.requestLobbyJoin(gameId),
+      setDisplayName: (name: string) => this.applyLobbyDisplayName(name),
+      getDisplayName: () => this.readLobbyDisplayName(),
+    };
+  }
+
+  private buildDisplayNameWithClan(baseName: string, clanTag?: string): string {
+    const trimmedBase = (baseName ?? "").toString().trim();
+    const safeBase = trimmedBase.length > 0 ? trimmedBase : "Player";
+    const tag = (clanTag ?? "").trim();
+    const candidate = tag ? `[${tag}] ${safeBase}` : safeBase;
+    return Array.from(candidate).slice(0, 27).join("");
+  }
+
+  private readLobbyDisplayName(): string | undefined {
+    if (typeof window === "undefined") {
+      return undefined;
+    }
+
+    const readFromInput = (): string | undefined => {
+      const usernameInput = document.querySelector(
+        "username-input",
+      ) as HTMLElement | null;
+      const input = usernameInput?.querySelector("input") as
+        | HTMLInputElement
+        | null
+        | undefined;
+      const value = input?.value?.trim();
+      return value && value.length > 0 ? value : undefined;
+    };
+
+    const liveValue = readFromInput();
+    if (liveValue) {
+      return liveValue;
+    }
+
+    try {
+      const stored = window.localStorage?.getItem(USERNAME_STORAGE_KEY);
+      const trimmed = stored?.trim();
+      return trimmed && trimmed.length > 0 ? trimmed : undefined;
+    } catch (error) {
+      console.warn("Failed to read stored username", error);
+      return undefined;
+    }
+  }
+
+  private requestLobbyJoin(gameId?: string): boolean {
+    if (typeof document === "undefined") {
+      return false;
+    }
+    if (this.game) {
+      sidebarLogger.warn(
+        "Cannot join a lobby while already attached to a live game.",
+      );
+      return false;
+    }
+    const target = (gameId ?? this.snapshot.currentLobbyQueue?.gameId)?.trim();
+    if (!target) {
+      return false;
+    }
+    if (this.tryJoinViaLobbyElement(target)) {
+      return true;
+    }
+    const clientID = this.generateLobbyClientId();
+    try {
+      const event = new CustomEvent("join-lobby", {
+        detail: { gameID: target, clientID },
+        bubbles: true,
+        composed: true,
+      });
+      document.dispatchEvent(event);
+      sidebarLogger.info(
+        `Requested lobby join for ${target} (client ${clientID}).`,
+      );
+      return true;
+    } catch (error) {
+      sidebarLogger.error("Failed to dispatch lobby join request", error);
+      return false;
+    }
+  }
+
+  private tryJoinViaLobbyElement(target: string): boolean {
+    const element = document.querySelector(
+      "public-lobby",
+    ) as PublicLobbyElement | null;
+    if (!element) {
+      return false;
+    }
+    const lobbies = element.lobbies;
+    if (!Array.isArray(lobbies)) {
+      return false;
+    }
+    const match = lobbies.find(
+      (entry) => typeof entry?.gameID === "string" && entry.gameID === target,
+    );
+    const clickHandler = element.lobbyClicked;
+    if (!match || typeof clickHandler !== "function") {
+      return false;
+    }
+    try {
+      clickHandler.call(element, match);
+      sidebarLogger.info(
+        `Requested lobby join for ${target} via lobby component interaction.`,
+      );
+      return true;
+    } catch (error) {
+      sidebarLogger.warn(
+        "Failed to trigger lobby join via lobby component",
+        error,
+      );
+      return false;
+    }
+  }
+
+  private generateLobbyClientId(): string {
+    // Generate an 8-character ID using the same alphabet as the game's generateID()
+    // Excludes confusing characters: 0, O, l, I
+    // Matches the game server validation pattern: /^[a-zA-Z0-9]+$/
+    const alphabet =
+      "123456789abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ";
+    let result = "";
+    for (let i = 0; i < 8; i++) {
+      result += alphabet.charAt(Math.floor(Math.random() * alphabet.length));
+    }
+    return result;
+  }
+
+  private applyLobbyDisplayName(name: string): boolean {
+    if (typeof window === "undefined") {
+      return false;
+    }
+    if (typeof name !== "string") {
+      return false;
+    }
+    const trimmed = name.trim();
+    if (!trimmed) {
+      return false;
+    }
+    const normalized = Array.from(trimmed).slice(0, 27).join("");
+    try {
+      window.localStorage?.setItem(USERNAME_STORAGE_KEY, normalized);
+    } catch (error) {
+      console.warn("Failed to persist username", error);
+    }
+    const usernameInput = document.querySelector(
+      "username-input",
+    ) as HTMLElement | null;
+    const input = usernameInput?.querySelector("input") as
+      | HTMLInputElement
+      | null
+      | undefined;
+    if (input) {
+      input.value = normalized;
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+    sidebarLogger.info(`Updated lobby display name to "${normalized}".`);
+    return true;
   }
 
   private normalizeTargetIds(
@@ -2693,8 +2982,12 @@ export class DataStore {
     const attemptAttach = () => {
       const discovered = this.findLiveGame();
       if (discovered) {
+        const wasAttached = Boolean(this.game);
         this.stopDisplayEventPolling();
         this.game = discovered;
+        if (!wasAttached) {
+          this.emitActionEvent("gameAttached", null);
+        }
         this.resetLiveGameTracking();
         this.refreshFromGame();
         if (this.attachHandle !== undefined) {
@@ -2794,6 +3087,7 @@ export class DataStore {
       // If the game context changes while we're reading from it, try attaching again.
       console.warn("Failed to refresh sidebar data", error);
       this.game = null;
+      this.emitActionEvent("gameDetached", null);
       this.resetLiveGameTracking();
       this.troopDonationOverlay?.clear();
       this.goldDonationOverlay?.clear();
@@ -4286,6 +4580,9 @@ export class DataStore {
       players,
       currentLobbyQueue: undefined,
     });
+    if (hadQueue) {
+      this.emitActionEvent("lobbyUpdated", null);
+    }
     this.snapshot = next;
     this.notify();
   }
@@ -4635,6 +4932,7 @@ export class DataStore {
     if (queueChanged || timeChanged) {
       if (queueChanged) {
         this.logLobbyTeamPredictions(queue, players);
+        this.emitActionEvent("lobbyUpdated", queue);
       }
       this.snapshot = nextSnapshot;
       this.notify();

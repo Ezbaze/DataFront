@@ -160,6 +160,36 @@ export interface LobbyQueueInfo {
   playerTeams?: LobbyTeamCountConfig;
 }
 
+export interface SidebarLobbyApi {
+  /**
+   * Latest lobby queue snapshot from the sidebar, if any.
+   */
+  queue?: LobbyQueueInfo;
+  /**
+   * Extracts a clan tag in the format [TAG] from a player name, if present.
+   */
+  extractClanTag: (name: string) => string | undefined;
+  /**
+   * Builds a display name prefixed with the given clan tag, trimming to allowed
+   * length.
+   */
+  buildNameWithClanTag: (baseName: string, clanTag?: string) => string;
+  /**
+   * Attempts to join the given lobby (or the current featured lobby if omitted).
+   * Returns true if a join was requested.
+   */
+  join: (gameId?: string) => boolean;
+  /**
+   * Updates the stored display name used when joining games.
+   * Returns true when the value was applied.
+   */
+  setDisplayName: (name: string) => boolean;
+  /**
+   * Returns the current display name from the lobby input or storage, if known.
+   */
+  getDisplayName: () => string | undefined;
+}
+
 export interface GameSnapshot {
   players: PlayerRecord[];
   allianceDurationMs: number;
