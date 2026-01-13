@@ -21,6 +21,7 @@ import {
   ViewActionHandlers,
   ViewLifecycleCallbacks,
 } from "./components/views";
+import { SIDEBAR_ID, SIDEBAR_STYLE_ID } from "./constants";
 import { SidebarRole } from "./sidebarRoles";
 
 interface SidebarAppOptions {
@@ -59,41 +60,40 @@ function getPanelActionButtonClass(extra?: string): string {
     : PANEL_ACTION_BUTTON_BASE_CLASS;
 }
 
-const SIDEBAR_STYLE_ID = "openfront-strategic-sidebar-styles";
-
 function ensureSidebarStyles(targetDocument: Document): void {
-  if (targetDocument.getElementById(SIDEBAR_STYLE_ID)) {
+  const style = targetDocument.getElementById(SIDEBAR_STYLE_ID);
+  if (style) {
     return;
   }
 
-  const style = targetDocument.createElement("style");
-  style.id = SIDEBAR_STYLE_ID;
+  const nextStyle = targetDocument.createElement("style");
+  nextStyle.id = SIDEBAR_STYLE_ID;
   const roles = [SidebarRole.TableContainer, SidebarRole.LogView];
-  style.textContent = roles
+  nextStyle.textContent = roles
     .map(
       (role) => `
-    #openfront-strategic-sidebar [data-sidebar-role="${role}"] {
+    #${SIDEBAR_ID} [data-sidebar-role="${role}"] {
       scrollbar-width: thin;
       scrollbar-color: rgba(148, 163, 184, 0.7) transparent;
     }
 
-    #openfront-strategic-sidebar [data-sidebar-role="${role}"]::-webkit-scrollbar {
+    #${SIDEBAR_ID} [data-sidebar-role="${role}"]::-webkit-scrollbar {
       width: 6px;
       height: 6px;
     }
 
-    #openfront-strategic-sidebar [data-sidebar-role="${role}"]::-webkit-scrollbar-thumb {
+    #${SIDEBAR_ID} [data-sidebar-role="${role}"]::-webkit-scrollbar-thumb {
       background-color: rgba(148, 163, 184, 0.7);
       border-radius: 9999px;
     }
 
-    #openfront-strategic-sidebar [data-sidebar-role="${role}"]::-webkit-scrollbar-track {
+    #${SIDEBAR_ID} [data-sidebar-role="${role}"]::-webkit-scrollbar-track {
       background-color: transparent;
     }`,
     )
     .join("\n");
 
-  targetDocument.head.appendChild(style);
+  targetDocument.head.appendChild(nextStyle);
 }
 
 const OVERLAY_SELECTORS = ["game-left-sidebar", "control-panel"] as const;
@@ -349,18 +349,13 @@ export class SidebarApp {
   }
 
   private createSidebarShell(): HTMLElement {
-    const existing = this.uiDocument.getElementById(
-      "openfront-strategic-sidebar",
-    );
-    if (existing) {
-      existing.remove();
-    }
+    this.uiDocument.getElementById(SIDEBAR_ID)?.remove();
 
     const sidebar = this.createUiElement(
       "aside",
       "fixed top-0 left-0 z-[2147483646] flex h-full max-w-[90vw] flex-col border-r border-slate-800/80 bg-slate-950/95 text-slate-100 shadow-2xl backdrop-blur",
     );
-    sidebar.id = "openfront-strategic-sidebar";
+    sidebar.id = SIDEBAR_ID;
     sidebar.style.width = this.windowMode === "standalone" ? "100%" : "420px";
     sidebar.style.maxWidth = this.windowMode === "standalone" ? "100%" : "90vw";
     sidebar.style.fontFamily = `'Inter', 'Segoe UI', system-ui, sans-serif`;
@@ -858,6 +853,11 @@ export class SidebarApp {
     list.appendChild(
       this.createQuickActionItem("New window", "external-link", () =>
         this.onRequestNewWindow?.(),
+      ),
+    );
+    list.appendChild(
+      this.createQuickActionItem("Save state", "save", () =>
+        this.store.saveSidebarState(),
       ),
     );
     menu.appendChild(list);

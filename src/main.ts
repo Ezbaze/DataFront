@@ -5,7 +5,7 @@ import { SidebarWindowHandle } from "./types";
 
 declare global {
   interface Window {
-    openFrontStrategicSidebar?: SidebarWindowHandle;
+    dataFront?: SidebarWindowHandle;
     tailwind?: {
       config?: unknown;
     };
@@ -106,7 +106,7 @@ class SidebarWindowManager {
     targetDocument.write(
       `<!doctype html>
 <meta charset="utf-8">
-<title>OpenFront Sidebar</title>
+<title>DataFront</title>
 <style>
   html,body{height:100%;margin:0;background:#020617;color:#e2e8f0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
   .df-status{display:flex;align-items:center;justify-content:center;height:100%;padding:16px;box-sizing:border-box}
@@ -119,7 +119,7 @@ class SidebarWindowManager {
   const attemptRegister = () => {
     try {
       const opener = window.opener;
-      const api = opener && opener.openFrontStrategicSidebar;
+      const api = opener && opener.dataFront;
       if (!api || typeof api.registerPopup !== "function") {
         return;
       }
@@ -144,7 +144,7 @@ class SidebarWindowManager {
   window.addEventListener("beforeunload", () => {
     try {
       const opener = window.opener;
-      const api = opener && opener.openFrontStrategicSidebar;
+      const api = opener && opener.dataFront;
       if (api && typeof api.unregisterPopup === "function") {
         api.unregisterPopup(window.name);
       }
@@ -279,7 +279,7 @@ class SidebarWindowManager {
   openAdditionalWindow(): void {
     const popup = window.open(
       "",
-      `openfront-strategic-sidebar-${Date.now()}`,
+      `datafront-${Date.now()}`,
       "width=460,height=900,resizable=yes,scrollbars=yes",
     );
     if (!popup) {
@@ -297,13 +297,14 @@ class SidebarWindowManager {
 let windowManager: SidebarWindowManager | null = null;
 
 async function initializeSidebar(): Promise<void> {
-  if (window.openFrontStrategicSidebar) {
+  const hostWindow = unsafeWindow ?? window;
+  if (hostWindow.dataFront) {
     return;
   }
   await ensureTailwind(document);
   windowManager = new SidebarWindowManager();
   const sessionId = createSessionId();
-  window.openFrontStrategicSidebar = {
+  hostWindow.dataFront = {
     updateData: (snapshot) => windowManager?.updateData(snapshot),
     logger: sidebarLogger,
     sessionId,

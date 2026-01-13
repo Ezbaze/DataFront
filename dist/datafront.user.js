@@ -2,11 +2,14 @@
 // ==UserScript==
 // @name			DataFront
 // @namespace		https://openfront.io/
-// @version			0.1.0
+// @version			0.1.1
 // @description		Adds a resizable, splittable strategic sidebar for OpenFront players, clans, and teams.
 // @author			ezbaze
 // @match			https://*.openfront.io/*
 // @match			https://openfront.io/*
+// @grant			GM_getValue
+// @grant			GM_setValue
+// @grant			unsafeWindow
 // @license			MIT
 // @updateURL		https://github.com/Ezbaze/DataFront/raw/refs/heads/main/dist/datafront.user.js
 // @downloadURL		https://github.com/Ezbaze/DataFront/raw/refs/heads/main/dist/datafront.user.js
@@ -154,6 +157,24 @@
    * See the LICENSE file in the root directory of this source tree.
    */
 
+  const Save = [
+    [
+      "path",
+      {
+        d: "M15.2 3a2 2 0 0 1 1.4.6l3.8 3.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"
+      }
+    ],
+    ["path", { d: "M17 21v-7a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v7" }],
+    ["path", { d: "M7 3v4a1 1 0 0 0 1 1h7" }]
+  ];
+
+  /**
+   * @license lucide v0.545.0 - ISC
+   *
+   * This source code is licensed under the ISC license.
+   * See the LICENSE file in the root directory of this source tree.
+   */
+
   const Search = [
     ["path", { d: "m21 21-4.34-4.34" }],
     ["circle", { cx: "11", cy: "11", r: "8" }]
@@ -254,6 +275,7 @@
       "split-vertical": SquareSplitHorizontal,
       close: X,
       plus: Plus,
+      save: Save,
       trash: Trash,
       "arrow-down": ArrowDown,
       columns: Columns3,
@@ -662,12 +684,13 @@
       if (!wrapper) {
           return;
       }
-      const HtmlElementCtor = (doc.defaultView?.HTMLElement ?? HTMLElement);
+      const HtmlElementCtor = doc.defaultView?.HTMLElement ?? HTMLElement;
       const findChildWrapper = (targetIndex) => {
           const targetValue = String(targetIndex);
           for (let i = 0; i < wrapper.children.length; i += 1) {
               const child = wrapper.children[i];
-              if (child instanceof HtmlElementCtor && child.dataset.panelChild === targetValue) {
+              if (child instanceof HtmlElementCtor &&
+                  child.dataset.panelChild === targetValue) {
                   return child;
               }
           }
@@ -2572,7 +2595,8 @@
           if (isDirectoryContainer &&
               existingContainer.dataset.signature === signature &&
               existingContainer.dataset.sortState === sortSignature &&
-              existingContainer.dataset.columnVisibilitySignature === visibilitySignature) {
+              existingContainer.dataset.columnVisibilitySignature ===
+                  visibilitySignature) {
               existingContainer.dataset.columnVisibilitySignature = visibilitySignature;
               return existingContainer;
           }
@@ -3192,7 +3216,8 @@
           if (isContainer &&
               existingContainer.dataset.signature === signature &&
               existingContainer.dataset.sortState === sortSignature &&
-              existingContainer.dataset.columnVisibilitySignature === visibilitySignature) {
+              existingContainer.dataset.columnVisibilitySignature ===
+                  visibilitySignature) {
               existingContainer.dataset.columnVisibilitySignature = visibilitySignature;
               return existingContainer;
           }
@@ -3519,7 +3544,8 @@
                   previousSearchFilter === (searchFilter ?? "")) {
                   existingContainer.dataset.logRevision = String(revision);
                   existingContainer.dataset.sortState = sortSignature;
-                  existingContainer.dataset.columnVisibilitySignature = visibilitySignature;
+                  existingContainer.dataset.columnVisibilitySignature =
+                      visibilitySignature;
                   existingContainer.dataset.searchFilter = searchFilter ?? "";
                   return existingContainer;
               }
@@ -3997,6 +4023,9 @@
       }
   }
 
+  const SIDEBAR_ID = "datafront";
+  const SIDEBAR_STYLE_ID = "datafront-styles";
+
   const VIEW_OPTIONS = [
       { value: "players", label: "Players" },
       { value: "clanmates", label: "Clanmates" },
@@ -4022,36 +4051,36 @@
           ? `${PANEL_ACTION_BUTTON_BASE_CLASS} ${extra}`
           : PANEL_ACTION_BUTTON_BASE_CLASS;
   }
-  const SIDEBAR_STYLE_ID = "openfront-strategic-sidebar-styles";
   function ensureSidebarStyles(targetDocument) {
-      if (targetDocument.getElementById(SIDEBAR_STYLE_ID)) {
+      const style = targetDocument.getElementById(SIDEBAR_STYLE_ID);
+      if (style) {
           return;
       }
-      const style = targetDocument.createElement("style");
-      style.id = SIDEBAR_STYLE_ID;
+      const nextStyle = targetDocument.createElement("style");
+      nextStyle.id = SIDEBAR_STYLE_ID;
       const roles = [SidebarRole.TableContainer, SidebarRole.LogView];
-      style.textContent = roles
+      nextStyle.textContent = roles
           .map((role) => `
-    #openfront-strategic-sidebar [data-sidebar-role="${role}"] {
+    #${SIDEBAR_ID} [data-sidebar-role="${role}"] {
       scrollbar-width: thin;
       scrollbar-color: rgba(148, 163, 184, 0.7) transparent;
     }
 
-    #openfront-strategic-sidebar [data-sidebar-role="${role}"]::-webkit-scrollbar {
+    #${SIDEBAR_ID} [data-sidebar-role="${role}"]::-webkit-scrollbar {
       width: 6px;
       height: 6px;
     }
 
-    #openfront-strategic-sidebar [data-sidebar-role="${role}"]::-webkit-scrollbar-thumb {
+    #${SIDEBAR_ID} [data-sidebar-role="${role}"]::-webkit-scrollbar-thumb {
       background-color: rgba(148, 163, 184, 0.7);
       border-radius: 9999px;
     }
 
-    #openfront-strategic-sidebar [data-sidebar-role="${role}"]::-webkit-scrollbar-track {
+    #${SIDEBAR_ID} [data-sidebar-role="${role}"]::-webkit-scrollbar-track {
       background-color: transparent;
     }`)
           .join("\n");
-      targetDocument.head.appendChild(style);
+      targetDocument.head.appendChild(nextStyle);
   }
   const OVERLAY_SELECTORS = ["game-left-sidebar", "control-panel"];
   class SidebarApp {
@@ -4236,12 +4265,9 @@
           this.toggleSidebarVisibility();
       }
       createSidebarShell() {
-          const existing = this.uiDocument.getElementById("openfront-strategic-sidebar");
-          if (existing) {
-              existing.remove();
-          }
+          this.uiDocument.getElementById(SIDEBAR_ID)?.remove();
           const sidebar = this.createUiElement("aside", "fixed top-0 left-0 z-[2147483646] flex h-full max-w-[90vw] flex-col border-r border-slate-800/80 bg-slate-950/95 text-slate-100 shadow-2xl backdrop-blur");
-          sidebar.id = "openfront-strategic-sidebar";
+          sidebar.id = SIDEBAR_ID;
           sidebar.style.width = this.windowMode === "standalone" ? "100%" : "420px";
           sidebar.style.maxWidth = this.windowMode === "standalone" ? "100%" : "90vw";
           sidebar.style.fontFamily = `'Inter', 'Segoe UI', system-ui, sans-serif`;
@@ -4618,6 +4644,7 @@
           menu.tabIndex = -1;
           const list = this.createUiElement("div", "py-1");
           list.appendChild(this.createQuickActionItem("New window", "external-link", () => this.onRequestNewWindow?.()));
+          list.appendChild(this.createQuickActionItem("Save state", "save", () => this.store.saveSidebarState()));
           menu.appendChild(list);
           return menu;
       }
@@ -4856,7 +4883,8 @@
                       this.scrollLogViewToBottom(leaf);
                   }
                   const container = leaf.contentContainer;
-                  if (container && container.dataset.sidebarRole === SidebarRole.LogView) {
+                  if (container &&
+                      container.dataset.sidebarRole === SidebarRole.LogView) {
                       container.dataset.logFollowState = leaf.logFollowEnabled
                           ? "following"
                           : "paused";
@@ -5970,7 +5998,7 @@
           if (typeof document === "undefined") {
               return false;
           }
-          const sidebar = document.getElementById("openfront-strategic-sidebar");
+          const sidebar = document.getElementById(SIDEBAR_ID);
           if (!sidebar) {
               return false;
           }
@@ -5981,7 +6009,7 @@
           if (!this.context || typeof document === "undefined") {
               return;
           }
-          const sidebar = document.getElementById("openfront-strategic-sidebar");
+          const sidebar = document.getElementById(SIDEBAR_ID);
           if (!sidebar) {
               return;
           }
@@ -6482,7 +6510,7 @@
           if (!this.context || typeof document === "undefined") {
               return;
           }
-          const sidebar = document.getElementById("openfront-strategic-sidebar");
+          const sidebar = document.getElementById(SIDEBAR_ID);
           if (!sidebar) {
               return;
           }
@@ -7489,7 +7517,7 @@
           if (typeof document === "undefined") {
               return false;
           }
-          const sidebar = document.getElementById("openfront-strategic-sidebar");
+          const sidebar = document.getElementById(SIDEBAR_ID);
           if (!sidebar) {
               return false;
           }
@@ -7500,7 +7528,7 @@
           if (!this.context || typeof document === "undefined") {
               return;
           }
-          const sidebar = document.getElementById("openfront-strategic-sidebar");
+          const sidebar = document.getElementById(SIDEBAR_ID);
           if (!sidebar) {
               return;
           }
@@ -8170,6 +8198,34 @@
       return { team: chosenTeam, size: chosenSize };
   }
 
+  function readPersistedString(key) {
+      if (typeof GM_getValue !== "function") {
+          return null;
+      }
+      try {
+          const value = GM_getValue(key, null);
+          if (value === null || value === undefined) {
+              return null;
+          }
+          return typeof value === "string" ? value : null;
+      }
+      catch {
+          return null;
+      }
+  }
+  function writePersistedString(key, value) {
+      if (typeof GM_setValue !== "function") {
+          return false;
+      }
+      try {
+          GM_setValue(key, value);
+          return true;
+      }
+      catch {
+          return false;
+      }
+  }
+
   const TICK_MILLISECONDS = 100;
   const MAX_LOG_ENTRIES = 500;
   const STRUCTURE_UNIT_TYPES = new Set([
@@ -8190,11 +8246,46 @@
   const LOBBY_DETAILS_CACHE_MS = 1500;
   const DEFAULT_WORKER_COUNT = 20;
   const USERNAME_STORAGE_KEY = "username";
+  const SIDEBAR_STATE_STORAGE_KEY = "datafront:state";
   const WORKER_COUNT_BY_ENV = {
       prod: 20,
       staging: 2,
       dev: 2,
   };
+  function normalizePersistedOverlayMap(value) {
+      if (!value || typeof value !== "object") {
+          return undefined;
+      }
+      const normalized = {};
+      for (const [key, rawEnabled] of Object.entries(value)) {
+          if (typeof rawEnabled === "boolean") {
+              normalized[key] = rawEnabled;
+          }
+      }
+      return Object.keys(normalized).length > 0 ? normalized : undefined;
+  }
+  function parsePersistedSidebarState(value) {
+      let parsed = value;
+      if (typeof parsed === "string") {
+          try {
+              parsed = JSON.parse(parsed);
+          }
+          catch {
+              return null;
+          }
+      }
+      if (!parsed || typeof parsed !== "object") {
+          return null;
+      }
+      const { version, overlays } = parsed;
+      if (version !== 1) {
+          return null;
+      }
+      return {
+          version: 1,
+          overlays: normalizePersistedOverlayMap(overlays),
+      };
+  }
   // These constants mirror the values defined in src/core/game/GameUpdates.ts and Game.ts.
   const GAME_UPDATE_TYPE_DISPLAY_EVENT = 3;
   const MESSAGE_TYPE_SENT_GOLD_TO_PLAYER = 18;
@@ -8340,6 +8431,7 @@
           this.lobbyWorkerInfoPromise = null;
           this.lastLobbyTeamLogKey = null;
           this.lastLiveGameTeamLogKey = null;
+          this.hostDocument = unsafeWindow?.document ?? document;
           this.actionsState = this.createInitialActionsState();
           this.sidebarOverlays = [
               {
@@ -8399,6 +8491,7 @@
               this.scheduleGameDiscovery(true);
               this.startLobbyQueueUpdates();
           }
+          this.restoreSidebarState();
           this.ensureAllEventActionsRunning();
       }
       attachActionsState(snapshot) {
@@ -8413,6 +8506,40 @@
       }
       cloneSidebarOverlays() {
           return this.sidebarOverlays.map((overlay) => ({ ...overlay }));
+      }
+      loadPersistedSidebarState() {
+          const raw = readPersistedString(SIDEBAR_STATE_STORAGE_KEY);
+          if (!raw) {
+              return null;
+          }
+          return parsePersistedSidebarState(raw);
+      }
+      restoreSidebarState() {
+          const state = this.loadPersistedSidebarState();
+          const overlays = state?.overlays;
+          if (!overlays) {
+              return;
+          }
+          for (const overlay of this.sidebarOverlays) {
+              const enabled = overlays[overlay.id];
+              if (typeof enabled === "boolean") {
+                  this.setOverlayEnabled(overlay.id, enabled);
+              }
+          }
+      }
+      saveSidebarState() {
+          const overlays = {};
+          for (const overlay of this.sidebarOverlays) {
+              overlays[overlay.id] = Boolean(overlay.enabled);
+          }
+          const payload = { version: 1, overlays };
+          const saved = writePersistedString(SIDEBAR_STATE_STORAGE_KEY, JSON.stringify(payload));
+          if (saved) {
+              sidebarLogger.info("Saved sidebar state.");
+          }
+          else {
+              sidebarLogger.warn("Failed to save sidebar state.");
+          }
       }
       ensureMissileOverlay() {
           this.missileOverlay =
@@ -8896,8 +9023,8 @@
               return null;
           }
           const candidates = [
-              document.querySelector("build-menu"),
-              document.querySelector("emoji-table"),
+              this.hostDocument.querySelector("build-menu"),
+              this.hostDocument.querySelector("emoji-table"),
           ].filter((element) => !!element);
           for (const element of candidates) {
               if (element.transformHandler) {
@@ -8910,7 +9037,7 @@
           if (typeof document === "undefined") {
               return null;
           }
-          const controlPanel = document.querySelector("control-panel");
+          const controlPanel = this.hostDocument.querySelector("control-panel");
           if (controlPanel?.uiState) {
               return controlPanel.uiState;
           }
@@ -10126,15 +10253,9 @@
           if (liveValue) {
               return liveValue;
           }
-          try {
-              const stored = window.localStorage?.getItem(USERNAME_STORAGE_KEY);
-              const trimmed = stored?.trim();
-              return trimmed && trimmed.length > 0 ? trimmed : undefined;
-          }
-          catch (error) {
-              console.warn("Failed to read stored username", error);
-              return undefined;
-          }
+          const stored = readPersistedString(USERNAME_STORAGE_KEY);
+          const trimmed = stored?.trim();
+          return trimmed && trimmed.length > 0 ? trimmed : undefined;
       }
       requestLobbyJoin(gameId) {
           if (typeof document === "undefined") {
@@ -10168,7 +10289,7 @@
           }
       }
       tryJoinViaLobbyElement(target) {
-          const element = document.querySelector("public-lobby");
+          const element = this.hostDocument.querySelector("public-lobby");
           if (!element) {
               return false;
           }
@@ -10214,12 +10335,7 @@
               return false;
           }
           const normalized = Array.from(trimmed).slice(0, 27).join("");
-          try {
-              window.localStorage?.setItem(USERNAME_STORAGE_KEY, normalized);
-          }
-          catch (error) {
-              console.warn("Failed to persist username", error);
-          }
+          writePersistedString(USERNAME_STORAGE_KEY, normalized);
           const usernameInput = document.querySelector("username-input");
           const input = usernameInput?.querySelector("input");
           if (input) {
@@ -10369,7 +10485,7 @@
           if (typeof document === "undefined") {
               return null;
           }
-          const element = document.querySelector("player-panel");
+          const element = this.hostDocument.querySelector("player-panel");
           return element ?? null;
       }
       resolveSelfId(localPlayer) {
@@ -10429,7 +10545,7 @@
           }
       }
       findLiveGame() {
-          const candidates = document.querySelectorAll("player-panel, leader-board, game-right-sidebar");
+          const candidates = this.hostDocument.querySelectorAll("player-panel, leader-board, game-right-sidebar");
           for (const element of candidates) {
               if (element.g) {
                   return element.g;
@@ -11764,7 +11880,7 @@
           return summaries.length ? summaries[0] : null;
       }
       readLobbyFromElement() {
-          const element = document.querySelector("public-lobby");
+          const element = this.hostDocument.querySelector("public-lobby");
           if (!element) {
               return null;
           }
@@ -12117,7 +12233,8 @@
   }
 
   function createSessionId() {
-      if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+      if (typeof crypto !== "undefined" &&
+          typeof crypto.randomUUID === "function") {
           return crypto.randomUUID();
       }
       return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -12191,7 +12308,7 @@
           targetDocument.open();
           targetDocument.write(`<!doctype html>
 <meta charset="utf-8">
-<title>OpenFront Sidebar</title>
+<title>DataFront</title>
 <style>
   html,body{height:100%;margin:0;background:#020617;color:#e2e8f0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
   .df-status{display:flex;align-items:center;justify-content:center;height:100%;padding:16px;box-sizing:border-box}
@@ -12204,7 +12321,7 @@
   const attemptRegister = () => {
     try {
       const opener = window.opener;
-      const api = opener && opener.openFrontStrategicSidebar;
+      const api = opener && opener.dataFront;
       if (!api || typeof api.registerPopup !== "function") {
         return;
       }
@@ -12229,7 +12346,7 @@
   window.addEventListener("beforeunload", () => {
     try {
       const opener = window.opener;
-      const api = opener && opener.openFrontStrategicSidebar;
+      const api = opener && opener.dataFront;
       if (api && typeof api.unregisterPopup === "function") {
         api.unregisterPopup(window.name);
       }
@@ -12338,7 +12455,7 @@
           }
       }
       openAdditionalWindow() {
-          const popup = window.open("", `openfront-strategic-sidebar-${Date.now()}`, "width=460,height=900,resizable=yes,scrollbars=yes");
+          const popup = window.open("", `datafront-${Date.now()}`, "width=460,height=900,resizable=yes,scrollbars=yes");
           if (!popup) {
               alert("Pop-out window was blocked. Please allow pop-ups for this site or keep the sidebar embedded.");
               return;
@@ -12349,13 +12466,14 @@
   }
   let windowManager = null;
   async function initializeSidebar() {
-      if (window.openFrontStrategicSidebar) {
+      const hostWindow = unsafeWindow ?? window;
+      if (hostWindow.dataFront) {
           return;
       }
       await ensureTailwind(document);
       windowManager = new SidebarWindowManager();
       const sessionId = createSessionId();
-      window.openFrontStrategicSidebar = {
+      hostWindow.dataFront = {
           updateData: (snapshot) => windowManager?.updateData(snapshot),
           logger: sidebarLogger,
           sessionId,

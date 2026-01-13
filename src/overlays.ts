@@ -4,6 +4,7 @@ import type {
   SidebarGoldDonationEvent,
   SidebarTroopDonationEvent,
 } from "./types";
+import { SIDEBAR_ID } from "./constants";
 
 type LucideIconNode = Parameters<typeof createElement>[0];
 
@@ -549,7 +550,7 @@ export class MissileTrajectoryOverlay {
     if (typeof document === "undefined") {
       return false;
     }
-    const sidebar = document.getElementById("openfront-strategic-sidebar");
+    const sidebar = document.getElementById(SIDEBAR_ID);
     if (!sidebar) {
       return false;
     }
@@ -561,7 +562,7 @@ export class MissileTrajectoryOverlay {
     if (!this.context || typeof document === "undefined") {
       return;
     }
-    const sidebar = document.getElementById("openfront-strategic-sidebar");
+    const sidebar = document.getElementById(SIDEBAR_ID);
     if (!sidebar) {
       return;
     }
@@ -1230,7 +1231,7 @@ export class HistoricalMissileTrajectoryOverlay {
     if (!this.context || typeof document === "undefined") {
       return;
     }
-    const sidebar = document.getElementById("openfront-strategic-sidebar");
+    const sidebar = document.getElementById(SIDEBAR_ID);
     if (!sidebar) {
       return;
     }
@@ -2474,7 +2475,7 @@ export class TradeRouteOverlay {
     if (typeof document === "undefined") {
       return false;
     }
-    const sidebar = document.getElementById("openfront-strategic-sidebar");
+    const sidebar = document.getElementById(SIDEBAR_ID);
     if (!sidebar) {
       return false;
     }
@@ -2486,7 +2487,7 @@ export class TradeRouteOverlay {
     if (!this.context || typeof document === "undefined") {
       return;
     }
-    const sidebar = document.getElementById("openfront-strategic-sidebar");
+    const sidebar = document.getElementById(SIDEBAR_ID);
     if (!sidebar) {
       return;
     }

@@ -1,11 +1,11 @@
 {
   "name": "DataFront",
   "namespace": "https://openfront.io/",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Adds a resizable, splittable strategic sidebar for OpenFront players, clans, and teams.",
   "author": "ezbaze",
   "match": ["https://*.openfront.io/*", "https://openfront.io/*"],
-  "grant": [],
+  "grant": ["GM_getValue", "GM_setValue", "unsafeWindow"],
   "license": "MIT",
   "updateURL": "https://github.com/Ezbaze/DataFront/raw/refs/heads/main/dist/datafront.user.js",
   "downloadURL": "https://github.com/Ezbaze/DataFront/raw/refs/heads/main/dist/datafront.user.js"

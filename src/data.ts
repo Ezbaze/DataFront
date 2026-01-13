@@ -47,6 +47,7 @@ import {
   TileSummary,
 } from "./types";
 import { LOBBY_TEAM_KICKED, predictLobbyTeams } from "./lobbyTeams";
+import { readPersistedString, writePersistedString } from "./storage";
 import { extractClanTag } from "./utils";
 
 const TICK_MILLISECONDS = 100;
@@ -70,11 +71,59 @@ const PUBLIC_LOBBY_POLL_INTERVAL_MS = 2000;
 const LOBBY_DETAILS_CACHE_MS = 1500;
 const DEFAULT_WORKER_COUNT = 20;
 const USERNAME_STORAGE_KEY = "username";
+const SIDEBAR_STATE_STORAGE_KEY = "datafront:state";
 const WORKER_COUNT_BY_ENV: Record<string, number> = {
   prod: 20,
   staging: 2,
   dev: 2,
 };
+
+interface PersistedSidebarStateV1 {
+  version: 1;
+  overlays?: Record<string, boolean>;
+}
+
+function normalizePersistedOverlayMap(
+  value: unknown,
+): Record<string, boolean> | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const normalized: Record<string, boolean> = {};
+  for (const [key, rawEnabled] of Object.entries(value)) {
+    if (typeof rawEnabled === "boolean") {
+      normalized[key] = rawEnabled;
+    }
+  }
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+function parsePersistedSidebarState(
+  value: unknown,
+): PersistedSidebarStateV1 | null {
+  let parsed: unknown = value;
+  if (typeof parsed === "string") {
+    try {
+      parsed = JSON.parse(parsed) as unknown;
+    } catch {
+      return null;
+    }
+  }
+  if (!parsed || typeof parsed !== "object") {
+    return null;
+  }
+  const { version, overlays } = parsed as {
+    version?: unknown;
+    overlays?: unknown;
+  };
+  if (version !== 1) {
+    return null;
+  }
+  return {
+    version: 1,
+    overlays: normalizePersistedOverlayMap(overlays),
+  };
+}
 
 // These constants mirror the values defined in src/core/game/GameUpdates.ts and Game.ts.
 const GAME_UPDATE_TYPE_DISPLAY_EVENT = 3;
@@ -522,8 +571,10 @@ export class DataStore {
   private lobbyWorkerInfoPromise: Promise<LobbyWorkerInfo> | null = null;
   private lastLobbyTeamLogKey: string | null = null;
   private lastLiveGameTeamLogKey: string | null = null;
+  private readonly hostDocument: Document;
 
   constructor(initialSnapshot?: GameSnapshot) {
+    this.hostDocument = unsafeWindow?.document ?? document;
     this.actionsState = this.createInitialActionsState();
     this.sidebarOverlays = [
       {
@@ -595,6 +646,7 @@ export class DataStore {
       this.startLobbyQueueUpdates();
     }
 
+    this.restoreSidebarState();
     this.ensureAllEventActionsRunning();
   }
 
@@ -611,6 +663,45 @@ export class DataStore {
 
   private cloneSidebarOverlays(): SidebarOverlayDefinition[] {
     return this.sidebarOverlays.map((overlay) => ({ ...overlay }));
+  }
+
+  private loadPersistedSidebarState(): PersistedSidebarStateV1 | null {
+    const raw = readPersistedString(SIDEBAR_STATE_STORAGE_KEY);
+    if (!raw) {
+      return null;
+    }
+    return parsePersistedSidebarState(raw);
+  }
+
+  private restoreSidebarState(): void {
+    const state = this.loadPersistedSidebarState();
+    const overlays = state?.overlays;
+    if (!overlays) {
+      return;
+    }
+    for (const overlay of this.sidebarOverlays) {
+      const enabled = overlays[overlay.id];
+      if (typeof enabled === "boolean") {
+        this.setOverlayEnabled(overlay.id, enabled);
+      }
+    }
+  }
+
+  saveSidebarState(): void {
+    const overlays: Record<string, boolean> = {};
+    for (const overlay of this.sidebarOverlays) {
+      overlays[overlay.id] = Boolean(overlay.enabled);
+    }
+    const payload: PersistedSidebarStateV1 = { version: 1, overlays };
+    const saved = writePersistedString(
+      SIDEBAR_STATE_STORAGE_KEY,
+      JSON.stringify(payload),
+    );
+    if (saved) {
+      sidebarLogger.info("Saved sidebar state.");
+    } else {
+      sidebarLogger.warn("Failed to save sidebar state.");
+    }
   }
 
   private ensureMissileOverlay(): MissileTrajectoryOverlay {
@@ -1199,8 +1290,8 @@ export class DataStore {
     }
 
     const candidates: TransformHostElement[] = [
-      document.querySelector("build-menu") as TransformHostElement,
-      document.querySelector("emoji-table") as TransformHostElement,
+      this.hostDocument.querySelector("build-menu") as TransformHostElement,
+      this.hostDocument.querySelector("emoji-table") as TransformHostElement,
     ].filter((element): element is TransformHostElement => !!element);
 
     for (const element of candidates) {
@@ -1215,7 +1306,7 @@ export class DataStore {
     if (typeof document === "undefined") {
       return null;
     }
-    const controlPanel = document.querySelector(
+    const controlPanel = this.hostDocument.querySelector(
       "control-panel",
     ) as ControlPanelElement | null;
     if (controlPanel?.uiState) {
@@ -2664,14 +2755,9 @@ export class DataStore {
       return liveValue;
     }
 
-    try {
-      const stored = window.localStorage?.getItem(USERNAME_STORAGE_KEY);
-      const trimmed = stored?.trim();
-      return trimmed && trimmed.length > 0 ? trimmed : undefined;
-    } catch (error) {
-      console.warn("Failed to read stored username", error);
-      return undefined;
-    }
+    const stored = readPersistedString(USERNAME_STORAGE_KEY);
+    const trimmed = stored?.trim();
+    return trimmed && trimmed.length > 0 ? trimmed : undefined;
   }
 
   private requestLobbyJoin(gameId?: string): boolean {
@@ -2710,7 +2796,7 @@ export class DataStore {
   }
 
   private tryJoinViaLobbyElement(target: string): boolean {
-    const element = document.querySelector(
+    const element = this.hostDocument.querySelector(
       "public-lobby",
     ) as PublicLobbyElement | null;
     if (!element) {
@@ -2767,11 +2853,7 @@ export class DataStore {
       return false;
     }
     const normalized = Array.from(trimmed).slice(0, 27).join("");
-    try {
-      window.localStorage?.setItem(USERNAME_STORAGE_KEY, normalized);
-    } catch (error) {
-      console.warn("Failed to persist username", error);
-    }
+    writePersistedString(USERNAME_STORAGE_KEY, normalized);
     const usernameInput = document.querySelector(
       "username-input",
     ) as HTMLElement | null;
@@ -2945,7 +3027,7 @@ export class DataStore {
       return null;
     }
 
-    const element = document.querySelector(
+    const element = this.hostDocument.querySelector(
       "player-panel",
     ) as PlayerPanelElement | null;
     return element ?? null;
@@ -3015,9 +3097,10 @@ export class DataStore {
   }
 
   private findLiveGame(): GameViewLike | null {
-    const candidates: NodeListOf<GameAwareElement> = document.querySelectorAll(
-      "player-panel, leader-board, game-right-sidebar",
-    );
+    const candidates: NodeListOf<GameAwareElement> =
+      this.hostDocument.querySelectorAll(
+        "player-panel, leader-board, game-right-sidebar",
+      );
     for (const element of candidates) {
       if (element.g) {
         return element.g;
@@ -4597,7 +4680,7 @@ export class DataStore {
   }
 
   private readLobbyFromElement(): LobbySummary | null {
-    const element = document.querySelector(
+    const element = this.hostDocument.querySelector(
       "public-lobby",
     ) as PublicLobbyElement | null;
     if (!element) {
