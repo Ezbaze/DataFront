@@ -1,6 +1,6 @@
 import type { GameSnapshot, PlayerRecord } from "../../types";
 import {
-  createElement,
+  createElement as createElementBase,
   formatCountdown,
   formatNumber,
   formatTroopCount,
@@ -11,111 +11,136 @@ import { computePlayerMetrics, getActiveAlliances } from "./players";
 import { isTradeStoppedByOther, isTradeStoppedBySelf } from "../../trade";
 import { SidebarRole } from "../../sidebarRoles";
 
+let viewDocument: Document = document;
+
+function withViewDocument<T>(doc: Document, fn: () => T): T {
+  const previous = viewDocument;
+  viewDocument = doc;
+  try {
+    return fn();
+  } finally {
+    viewDocument = previous;
+  }
+}
+
+function createElement<K extends keyof HTMLElementTagNameMap>(
+  tag: K,
+  className?: string,
+  textContent?: string,
+): HTMLElementTagNameMap[K] {
+  return createElementBase(tag, className, textContent, viewDocument);
+}
+
 export function renderPlayerPanelView(options: ViewRenderOptions): HTMLElement {
-  const { leaf, snapshot, existingContainer } = options;
-  const containerClass =
-    "relative flex-1 overflow-auto border border-slate-900/70 bg-slate-950/60 backdrop-blur-sm";
-  const canReuse =
-    !!existingContainer &&
-    existingContainer.dataset.sidebarRole === SidebarRole.PlayerPanel &&
-    existingContainer.dataset.sidebarView === leaf.view;
-  const container = canReuse
-    ? existingContainer
-    : createElement("div", containerClass);
-  container.className = containerClass;
-  container.dataset.sidebarRole = SidebarRole.PlayerPanel;
-  container.dataset.sidebarView = leaf.view;
+  return withViewDocument(options.ui.document, () => {
+    const { leaf, snapshot, existingContainer } = options;
+    const containerClass =
+      "relative flex-1 overflow-auto border border-slate-900/70 bg-slate-950/60 backdrop-blur-sm";
+    const canReuse =
+      !!existingContainer &&
+      existingContainer.dataset.sidebarRole === SidebarRole.PlayerPanel &&
+      existingContainer.dataset.sidebarView === leaf.view;
+    const container = canReuse
+      ? existingContainer
+      : createElement("div", containerClass);
+    container.className = containerClass;
+    container.dataset.sidebarRole = SidebarRole.PlayerPanel;
+    container.dataset.sidebarView = leaf.view;
 
-  const content = createElement(
-    "div",
-    "flex min-h-full flex-col gap-6 p-4 text-sm text-slate-100",
-  );
-
-  const playerId = leaf.selectedPlayerId;
-  if (!playerId) {
-    content.appendChild(
-      createElement(
-        "p",
-        "text-slate-400 italic",
-        "Select a player from any table to view their details.",
-      ),
+    const content = createElement(
+      "div",
+      "flex min-h-full flex-col gap-6 p-4 text-sm text-slate-100",
     );
-  } else {
-    const player = snapshot.players.find((entry) => entry.id === playerId);
-    if (!player) {
+
+    const playerId = leaf.selectedPlayerId;
+    if (!playerId) {
       content.appendChild(
         createElement(
           "p",
           "text-slate-400 italic",
-          "That player is no longer available in the latest snapshot.",
+          "Select a player from any table to view their details.",
         ),
       );
     } else {
-      const header = createElement("div", "space-y-3");
-      const title = createElement(
-        "div",
-        "flex flex-wrap items-baseline justify-between gap-3",
-      );
-      const name = createPlayerNameElement(player.name, player.position, {
-        asBlock: true,
-        className:
-          "text-lg font-semibold text-slate-100 transition-colors hover:text-sky-200",
-      });
-      title.appendChild(name);
-
-      const meta = [player.clan, player.team].filter(Boolean).join(" • ");
-      if (meta) {
-        title.appendChild(
-          createElement(
-            "div",
-            "text-xs uppercase tracking-wide text-slate-400",
-            meta,
-          ),
-        );
-      }
-      header.appendChild(title);
-
-      const summary = createElement(
-        "div",
-        "grid gap-3 sm:grid-cols-3 text-[0.75rem]",
-      );
-      summary.appendChild(
-        createSummaryStat("Tiles", formatNumber(player.tiles)),
-      );
-      summary.appendChild(createSummaryStat("Gold", formatNumber(player.gold)));
-      summary.appendChild(
-        createSummaryStat("Troops", formatTroopCount(player.troops)),
-      );
-      header.appendChild(summary);
-
-      const playerStoppedBySelf = isTradeStoppedBySelf(player);
-      const playerStoppedByOther = isTradeStoppedByOther(player);
-      if (playerStoppedBySelf || playerStoppedByOther) {
-        let tradeMessage = "Trading is currently stopped with this player.";
-        if (playerStoppedBySelf && playerStoppedByOther) {
-          tradeMessage =
-            "Trading is currently stopped by both you and this player.";
-        } else if (playerStoppedBySelf) {
-          tradeMessage = "You have stopped trading with this player.";
-        } else {
-          tradeMessage = "This player has stopped trading with you.";
-        }
-        header.appendChild(
+      const player = snapshot.players.find((entry) => entry.id === playerId);
+      if (!player) {
+        content.appendChild(
           createElement(
             "p",
-            "text-[0.7rem] font-semibold uppercase tracking-wide text-amber-300",
-            tradeMessage,
+            "text-slate-400 italic",
+            "That player is no longer available in the latest snapshot.",
           ),
         );
+      } else {
+        const header = createElement("div", "space-y-3");
+        const title = createElement(
+          "div",
+          "flex flex-wrap items-baseline justify-between gap-3",
+        );
+        const name = createPlayerNameElement(player.name, player.position, {
+          asBlock: true,
+          className:
+            "text-lg font-semibold text-slate-100 transition-colors hover:text-sky-200",
+          document: viewDocument,
+        });
+        title.appendChild(name);
+
+        const meta = [player.clan, player.team].filter(Boolean).join(" • ");
+        if (meta) {
+          title.appendChild(
+            createElement(
+              "div",
+              "text-xs uppercase tracking-wide text-slate-400",
+              meta,
+            ),
+          );
+        }
+        header.appendChild(title);
+
+        const summary = createElement(
+          "div",
+          "grid gap-3 sm:grid-cols-3 text-[0.75rem]",
+        );
+        summary.appendChild(
+          createSummaryStat("Tiles", formatNumber(player.tiles)),
+        );
+        summary.appendChild(
+          createSummaryStat("Gold", formatNumber(player.gold)),
+        );
+        summary.appendChild(
+          createSummaryStat("Troops", formatTroopCount(player.troops)),
+        );
+        header.appendChild(summary);
+
+        const playerStoppedBySelf = isTradeStoppedBySelf(player);
+        const playerStoppedByOther = isTradeStoppedByOther(player);
+        if (playerStoppedBySelf || playerStoppedByOther) {
+          let tradeMessage = "Trading is currently stopped with this player.";
+          if (playerStoppedBySelf && playerStoppedByOther) {
+            tradeMessage =
+              "Trading is currently stopped by both you and this player.";
+          } else if (playerStoppedBySelf) {
+            tradeMessage = "You have stopped trading with this player.";
+          } else {
+            tradeMessage = "This player has stopped trading with you.";
+          }
+          header.appendChild(
+            createElement(
+              "p",
+              "text-[0.7rem] font-semibold uppercase tracking-wide text-amber-300",
+              tradeMessage,
+            ),
+          );
+        }
+
+        content.appendChild(header);
+        content.appendChild(renderPlayerDetails(player, snapshot));
       }
-
-      content.appendChild(header);
-      content.appendChild(renderPlayerDetails(player, snapshot));
     }
-  }
 
-  container.replaceChildren(content);
-  return container;
+    container.replaceChildren(content);
+    return container;
+  });
 }
 
 function renderPlayerDetails(

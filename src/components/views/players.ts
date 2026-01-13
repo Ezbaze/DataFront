@@ -7,7 +7,7 @@ import type {
   TileSummary,
 } from "../../types";
 import {
-  createElement,
+  createElement as createElementBase,
   extractClanTag,
   focusTile,
   formatNumber,
@@ -36,6 +36,26 @@ import type {
   ViewActionHandlers,
   ViewRenderOptions,
 } from "./types";
+
+let viewDocument: Document = document;
+
+function withViewDocument<T>(doc: Document, fn: () => T): T {
+  const previous = viewDocument;
+  viewDocument = doc;
+  try {
+    return fn();
+  } finally {
+    viewDocument = previous;
+  }
+}
+
+function createElement<K extends keyof HTMLElementTagNameMap>(
+  tag: K,
+  className?: string,
+  textContent?: string,
+): HTMLElementTagNameMap[K] {
+  return createElementBase(tag, className, textContent, viewDocument);
+}
 
 export interface PlayerMetrics {
   incoming: number;
@@ -279,6 +299,7 @@ function registerContextMenuDelegation(
         x: event.clientX,
         y: event.clientY,
         title: target.name,
+        document: viewDocument,
         items: [
           {
             label: actionLabel,
@@ -347,6 +368,7 @@ function registerContextMenuDelegation(
       x: event.clientX,
       y: event.clientY,
       title: target.label,
+      document: viewDocument,
       items,
     });
   };
@@ -660,6 +682,7 @@ function createLabelBlock(options: {
     asBlock: true,
     className:
       "block font-semibold text-slate-100 transition-colors hover:text-sky-200",
+    document: viewDocument,
   });
   labelBlock.appendChild(labelEl);
   if (subtitle) {
@@ -1008,124 +1031,133 @@ function getActiveAlliances(player: PlayerRecord, snapshot: GameSnapshot) {
 export { computePlayerMetrics, getActiveAlliances };
 
 export function renderPlayersView(options: ViewRenderOptions): HTMLElement {
-  const { leaf, snapshot, sortState, onSort, existingContainer, actions } =
-    options;
-  const metricsCache = new Map<string, Metrics>();
-  const visibleHeaders = getVisibleHeaders(leaf, leaf.view, TABLE_HEADERS);
-  const { container, tbody } = createTableShell({
-    sortState,
-    onSort,
-    existingContainer,
-    view: leaf.view,
-    headers: visibleHeaders,
-  });
-  const players = [...snapshot.players].sort((a, b) =>
-    comparePlayers({ a, b, sortState, snapshot, metricsCache }),
-  );
-
-  for (const player of players) {
-    appendPlayerRows({
-      player,
-      indent: 0,
-      leaf,
-      snapshot,
-      tbody,
-      metricsCache,
-      actions,
+  return withViewDocument(options.ui.document, () => {
+    const { leaf, snapshot, sortState, onSort, existingContainer, actions } =
+      options;
+    const metricsCache = new Map<string, Metrics>();
+    const visibleHeaders = getVisibleHeaders(leaf, leaf.view, TABLE_HEADERS);
+    const { container, tbody } = createTableShell({
+      sortState,
+      onSort,
+      existingContainer,
+      view: leaf.view,
       headers: visibleHeaders,
+      document: viewDocument,
     });
-  }
+    const players = [...snapshot.players].sort((a, b) =>
+      comparePlayers({ a, b, sortState, snapshot, metricsCache }),
+    );
 
-  registerContextMenuDelegation(container, actions);
-  return container;
+    for (const player of players) {
+      appendPlayerRows({
+        player,
+        indent: 0,
+        leaf,
+        snapshot,
+        tbody,
+        metricsCache,
+        actions,
+        headers: visibleHeaders,
+      });
+    }
+
+    registerContextMenuDelegation(container, actions);
+    return container;
+  });
 }
 
 export function renderClanView(options: ViewRenderOptions): HTMLElement {
-  const {
-    leaf,
-    snapshot,
-    requestRender,
-    sortState,
-    onSort,
-    existingContainer,
-    actions,
-  } = options;
-  const metricsCache = new Map<string, Metrics>();
-  const visibleHeaders = getVisibleHeaders(leaf, leaf.view, TABLE_HEADERS);
-  const { container, tbody } = createTableShell({
-    sortState,
-    onSort,
-    existingContainer,
-    view: leaf.view,
-    headers: visibleHeaders,
-  });
-  const groups = groupPlayers({
-    players: snapshot.players,
-    snapshot,
-    metricsCache,
-    getKey: (player) => extractClanTag(player.name),
-    sortState,
-  });
-
-  for (const group of groups) {
-    appendGroupRows({
-      group,
+  return withViewDocument(options.ui.document, () => {
+    const {
       leaf,
       snapshot,
-      tbody,
       requestRender,
-      groupType: "clan",
-      metricsCache,
+      sortState,
+      onSort,
+      existingContainer,
       actions,
+    } = options;
+    const metricsCache = new Map<string, Metrics>();
+    const visibleHeaders = getVisibleHeaders(leaf, leaf.view, TABLE_HEADERS);
+    const { container, tbody } = createTableShell({
+      sortState,
+      onSort,
+      existingContainer,
+      view: leaf.view,
       headers: visibleHeaders,
+      document: viewDocument,
     });
-  }
+    const groups = groupPlayers({
+      players: snapshot.players,
+      snapshot,
+      metricsCache,
+      getKey: (player) => extractClanTag(player.name),
+      sortState,
+    });
 
-  registerContextMenuDelegation(container, actions);
-  return container;
+    for (const group of groups) {
+      appendGroupRows({
+        group,
+        leaf,
+        snapshot,
+        tbody,
+        requestRender,
+        groupType: "clan",
+        metricsCache,
+        actions,
+        headers: visibleHeaders,
+      });
+    }
+
+    registerContextMenuDelegation(container, actions);
+    return container;
+  });
 }
 
 export function renderTeamView(options: ViewRenderOptions): HTMLElement {
-  const {
-    leaf,
-    snapshot,
-    requestRender,
-    sortState,
-    onSort,
-    existingContainer,
-    actions,
-  } = options;
-  const metricsCache = new Map<string, Metrics>();
-  const visibleHeaders = getVisibleHeaders(leaf, leaf.view, TABLE_HEADERS);
-  const { container, tbody } = createTableShell({
-    sortState,
-    onSort,
-    existingContainer,
-    view: leaf.view,
-    headers: visibleHeaders,
-  });
-  const groups = groupPlayers({
-    players: snapshot.players,
-    snapshot,
-    metricsCache,
-    getKey: (player) => player.team ?? "Solo",
-    sortState,
-  });
-
-  for (const group of groups) {
-    appendGroupRows({
-      group,
+  return withViewDocument(options.ui.document, () => {
+    const {
       leaf,
       snapshot,
-      tbody,
       requestRender,
-      groupType: "team",
-      metricsCache,
+      sortState,
+      onSort,
+      existingContainer,
       actions,
+    } = options;
+    const metricsCache = new Map<string, Metrics>();
+    const visibleHeaders = getVisibleHeaders(leaf, leaf.view, TABLE_HEADERS);
+    const { container, tbody } = createTableShell({
+      sortState,
+      onSort,
+      existingContainer,
+      view: leaf.view,
       headers: visibleHeaders,
+      document: viewDocument,
     });
-  }
+    const groups = groupPlayers({
+      players: snapshot.players,
+      snapshot,
+      metricsCache,
+      getKey: (player) => player.team ?? "Solo",
+      sortState,
+    });
 
-  registerContextMenuDelegation(container, actions);
-  return container;
+    for (const group of groups) {
+      appendGroupRows({
+        group,
+        leaf,
+        snapshot,
+        tbody,
+        requestRender,
+        groupType: "team",
+        metricsCache,
+        actions,
+        headers: visibleHeaders,
+      });
+    }
+
+    registerContextMenuDelegation(container, actions);
+    return container;
+  });
 }

@@ -429,4 +429,18 @@ export interface PanelGroupElements {
 export interface SidebarWindowHandle {
   updateData: (snapshot: GameSnapshot) => void;
   logger: SidebarLogger;
+  /**
+   * Changes whenever the main window userscript is reloaded, allowing pop-out
+   * windows to detect that they need to re-register.
+   */
+  sessionId: string;
+  /**
+   * Called by pop-out windows to (re)attach their UI to the current main window
+   * instance after a reload.
+   */
+  registerPopup: (popupWindow: Window) => void;
+  /**
+   * Called by pop-out windows when closing so the main window can cleanup.
+   */
+  unregisterPopup: (popupName: string) => void;
 }

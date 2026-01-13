@@ -7,8 +7,11 @@ import type {
   SortKey,
   SortState,
 } from "../../types";
-import type { ViewActionHandlers } from "./types";
-import { createElement, formatTimestamp } from "../../utils";
+import type { ViewActionHandlers, ViewUiContext } from "./types";
+import {
+  createElement as createElementBase,
+  formatTimestamp,
+} from "../../utils";
 import {
   LOG_TABLE_HEADERS,
   TABLE_CELL_BASE_CLASS,
@@ -25,152 +28,181 @@ type MentionToken = Extract<
   { type: "player" | "team" | "clan" }
 >;
 
+let viewDocument: Document = document;
+
+function withViewDocument<T>(doc: Document, fn: () => T): T {
+  const previous = viewDocument;
+  viewDocument = doc;
+  try {
+    return fn();
+  } finally {
+    viewDocument = previous;
+  }
+}
+
+function createElement<K extends keyof HTMLElementTagNameMap>(
+  tag: K,
+  className?: string,
+  textContent?: string,
+): HTMLElementTagNameMap[K] {
+  return createElementBase(tag, className, textContent, viewDocument);
+}
+
 export function renderLogView(options: {
   leaf: PanelLeafNode;
   snapshot: GameSnapshot;
+  ui: ViewUiContext;
   sortState: SortState;
   onSort: (key: SortKey) => void;
   existingContainer?: HTMLElement;
   actions: ViewActionHandlers;
   searchFilter?: string;
 }): HTMLElement {
-  const {
-    leaf,
-    snapshot,
-    existingContainer,
-    actions,
-    sortState,
-    onSort,
-    searchFilter,
-  } = options;
-  const logActions = actions;
-  const logs = snapshot.sidebarLogs ?? [];
-  const revision = snapshot.sidebarLogRevision ?? 0;
+  return withViewDocument(options.ui.document, () => {
+    const {
+      leaf,
+      snapshot,
+      existingContainer,
+      actions,
+      sortState,
+      onSort,
+      searchFilter,
+    } = options;
+    const logActions = actions;
+    const logs = snapshot.sidebarLogs ?? [];
+    const revision = snapshot.sidebarLogRevision ?? 0;
 
-  const followEnabled = leaf.logFollowEnabled !== false;
-  const supportedSortKeys: SortKey[] = [
-    "timestamp",
-    "level",
-    "source",
-    "message",
-  ];
-  let activeSortState = sortState;
-  if (!supportedSortKeys.includes(sortState.key)) {
-    const fallbackDirection = getDefaultDirection("timestamp");
-    activeSortState = { key: "timestamp", direction: fallbackDirection };
-    leaf.sortStates[leaf.view] = activeSortState;
-  }
-  const sortSignature = `${activeSortState.key}:${activeSortState.direction}`;
-  const isLogContainer =
-    !!existingContainer &&
-    existingContainer.dataset.sidebarRole === SidebarRole.LogView;
-  const visibleHeaders = getVisibleHeaders(leaf, leaf.view, LOG_TABLE_HEADERS);
-  const visibilitySignature = getColumnVisibilitySignature(visibleHeaders);
-  if (isLogContainer) {
-    existingContainer.dataset.logFollowState = followEnabled
-      ? "following"
-      : "paused";
-    existingContainer.dataset.logStickToBottom = followEnabled
-      ? "true"
-      : "false";
-    const previousRevision = Number(
-      existingContainer.dataset.logRevision ?? "-1",
-    );
-    const previousSortState = existingContainer.dataset.sortState ?? "";
-    const previousVisibility =
-      existingContainer.dataset.columnVisibilitySignature ?? "";
-    const previousSearchFilter = existingContainer.dataset.searchFilter ?? "";
-
-    if (
-      previousRevision === revision &&
-      previousSortState === sortSignature &&
-      previousVisibility === visibilitySignature &&
-      previousSearchFilter === (searchFilter ?? "")
-    ) {
-      existingContainer.dataset.logRevision = String(revision);
-      existingContainer.dataset.sortState = sortSignature;
-      existingContainer.dataset.columnVisibilitySignature = visibilitySignature;
-      existingContainer.dataset.searchFilter = searchFilter ?? "";
-
-      return existingContainer;
+    const followEnabled = leaf.logFollowEnabled !== false;
+    const supportedSortKeys: SortKey[] = [
+      "timestamp",
+      "level",
+      "source",
+      "message",
+    ];
+    let activeSortState = sortState;
+    if (!supportedSortKeys.includes(sortState.key)) {
+      const fallbackDirection = getDefaultDirection("timestamp");
+      activeSortState = { key: "timestamp", direction: fallbackDirection };
+      leaf.sortStates[leaf.view] = activeSortState;
     }
-  }
+    const sortSignature = `${activeSortState.key}:${activeSortState.direction}`;
+    const isLogContainer =
+      !!existingContainer &&
+      existingContainer.dataset.sidebarRole === SidebarRole.LogView;
+    const visibleHeaders = getVisibleHeaders(
+      leaf,
+      leaf.view,
+      LOG_TABLE_HEADERS,
+    );
+    const visibilitySignature = getColumnVisibilitySignature(visibleHeaders);
+    if (isLogContainer) {
+      existingContainer.dataset.logFollowState = followEnabled
+        ? "following"
+        : "paused";
+      existingContainer.dataset.logStickToBottom = followEnabled
+        ? "true"
+        : "false";
+      const previousRevision = Number(
+        existingContainer.dataset.logRevision ?? "-1",
+      );
+      const previousSortState = existingContainer.dataset.sortState ?? "";
+      const previousVisibility =
+        existingContainer.dataset.columnVisibilitySignature ?? "";
+      const previousSearchFilter = existingContainer.dataset.searchFilter ?? "";
 
-  const { container, tbody } = createTableShell({
-    sortState: activeSortState,
-    onSort,
-    existingContainer: isLogContainer ? existingContainer : undefined,
-    view: leaf.view,
-    headers: visibleHeaders,
-    role: SidebarRole.LogView,
+      if (
+        previousRevision === revision &&
+        previousSortState === sortSignature &&
+        previousVisibility === visibilitySignature &&
+        previousSearchFilter === (searchFilter ?? "")
+      ) {
+        existingContainer.dataset.logRevision = String(revision);
+        existingContainer.dataset.sortState = sortSignature;
+        existingContainer.dataset.columnVisibilitySignature =
+          visibilitySignature;
+        existingContainer.dataset.searchFilter = searchFilter ?? "";
+
+        return existingContainer;
+      }
+    }
+
+    const { container, tbody } = createTableShell({
+      sortState: activeSortState,
+      onSort,
+      existingContainer: isLogContainer ? existingContainer : undefined,
+      view: leaf.view,
+      headers: visibleHeaders,
+      role: SidebarRole.LogView,
+      document: viewDocument,
+    });
+    container.dataset.logFollowState = followEnabled ? "following" : "paused";
+    container.dataset.logStickToBottom = followEnabled ? "true" : "false";
+    container.dataset.logRevision = String(revision);
+    container.dataset.sortState = sortSignature;
+    container.dataset.columnVisibilitySignature = visibilitySignature;
+    container.dataset.searchFilter = searchFilter ?? "";
+
+    const visibleKeys = new Set(visibleHeaders.map((header) => header.key));
+    if (logs.length === 0) {
+      const emptyRow = createElement("tr");
+      const emptyCell = createElement(
+        "td",
+        `${TABLE_CELL_BASE_CLASS} py-8 text-center text-[0.75rem] italic text-slate-500`,
+        "No log messages yet.",
+      );
+      emptyCell.colSpan = Math.max(1, visibleHeaders.length);
+      emptyRow.appendChild(emptyCell);
+      tbody.appendChild(emptyRow);
+    } else {
+      const sortedLogs = [...logs];
+      switch (activeSortState.key) {
+        case "timestamp":
+          sortedLogs.sort((a, b) =>
+            compareSortValues(
+              a.timestampMs,
+              b.timestampMs,
+              activeSortState.direction,
+            ),
+          );
+          break;
+        case "level":
+          sortedLogs.sort((a, b) =>
+            compareSortValues(
+              getLogLevelWeight(a.level),
+              getLogLevelWeight(b.level),
+              activeSortState.direction,
+            ),
+          );
+          break;
+        case "source":
+          sortedLogs.sort((a, b) =>
+            compareSortValues(
+              (a.source ?? "").toLowerCase(),
+              (b.source ?? "").toLowerCase(),
+              activeSortState.direction,
+            ),
+          );
+          break;
+        case "message":
+          sortedLogs.sort((a, b) =>
+            compareSortValues(
+              getLogMessageSortValue(a),
+              getLogMessageSortValue(b),
+              activeSortState.direction,
+            ),
+          );
+          break;
+        default:
+          break;
+      }
+
+      for (const entry of sortedLogs) {
+        tbody.appendChild(renderLogRow(entry, logActions, visibleKeys));
+      }
+    }
+
+    return container;
   });
-  container.dataset.logFollowState = followEnabled ? "following" : "paused";
-  container.dataset.logStickToBottom = followEnabled ? "true" : "false";
-  container.dataset.logRevision = String(revision);
-  container.dataset.sortState = sortSignature;
-  container.dataset.columnVisibilitySignature = visibilitySignature;
-  container.dataset.searchFilter = searchFilter ?? "";
-
-  const visibleKeys = new Set(visibleHeaders.map((header) => header.key));
-  if (logs.length === 0) {
-    const emptyRow = createElement("tr");
-    const emptyCell = createElement(
-      "td",
-      `${TABLE_CELL_BASE_CLASS} py-8 text-center text-[0.75rem] italic text-slate-500`,
-      "No log messages yet.",
-    );
-    emptyCell.colSpan = Math.max(1, visibleHeaders.length);
-    emptyRow.appendChild(emptyCell);
-    tbody.appendChild(emptyRow);
-  } else {
-    const sortedLogs = [...logs];
-    switch (activeSortState.key) {
-      case "timestamp":
-        sortedLogs.sort((a, b) =>
-          compareSortValues(
-            a.timestampMs,
-            b.timestampMs,
-            activeSortState.direction,
-          ),
-        );
-        break;
-      case "level":
-        sortedLogs.sort((a, b) =>
-          compareSortValues(
-            getLogLevelWeight(a.level),
-            getLogLevelWeight(b.level),
-            activeSortState.direction,
-          ),
-        );
-        break;
-      case "source":
-        sortedLogs.sort((a, b) =>
-          compareSortValues(
-            (a.source ?? "").toLowerCase(),
-            (b.source ?? "").toLowerCase(),
-            activeSortState.direction,
-          ),
-        );
-        break;
-      case "message":
-        sortedLogs.sort((a, b) =>
-          compareSortValues(
-            getLogMessageSortValue(a),
-            getLogMessageSortValue(b),
-            activeSortState.direction,
-          ),
-        );
-        break;
-      default:
-        break;
-    }
-
-    for (const entry of sortedLogs) {
-      tbody.appendChild(renderLogRow(entry, logActions, visibleKeys));
-    }
-  }
-
-  return container;
 }
 
 function renderLogRow(
@@ -263,10 +295,10 @@ function renderLogTokens(
   tokens: SidebarLogToken[],
   actions: ViewActionHandlers,
 ): DocumentFragment {
-  const fragment = document.createDocumentFragment();
+  const fragment = viewDocument.createDocumentFragment();
   for (const token of tokens) {
     if (token.type === "text") {
-      fragment.appendChild(document.createTextNode(token.text));
+      fragment.appendChild(viewDocument.createTextNode(token.text));
       continue;
     }
     fragment.appendChild(createLogMentionPill(token, actions));

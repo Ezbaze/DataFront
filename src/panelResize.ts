@@ -6,17 +6,24 @@ export function startPanelResize(
   index: number,
   event: PointerEvent,
 ): void {
+  // Use the event's ownerDocument without relying on instanceof checks that
+  // break across window boundaries (e.g., pop-out sidebar).
+  const target = event.target as { ownerDocument?: Document } | null;
+  const current = event.currentTarget as { ownerDocument?: Document } | null;
+  const doc = target?.ownerDocument ?? current?.ownerDocument ?? document;
+  const win = doc.defaultView ?? window;
   const wrapper = group.element?.wrapper;
   if (!wrapper) {
     return;
   }
+  const HtmlElementCtor = doc.defaultView?.HTMLElement ?? HTMLElement;
 
   const findChildWrapper = (targetIndex: number): HTMLElement | null => {
     const targetValue = String(targetIndex);
     for (let i = 0; i < wrapper.children.length; i += 1) {
       const child = wrapper.children[i];
       if (
-        child instanceof HTMLElement &&
+        child instanceof HtmlElementCtor &&
         child.dataset.panelChild === targetValue
       ) {
         return child;
@@ -47,8 +54,8 @@ export function startPanelResize(
   const combinedShare = combinedShareRaw > 0 ? combinedShareRaw : 1;
   const startCoord =
     orientation === "horizontal" ? event.clientY : event.clientX;
-  const originalUserSelect = document.body.style.userSelect;
-  document.body.style.userSelect = "none";
+  const originalUserSelect = doc.body.style.userSelect;
+  doc.body.style.userSelect = "none";
 
   const onMove = (moveEvent: PointerEvent) => {
     const currentCoord =
@@ -84,13 +91,13 @@ export function startPanelResize(
   };
 
   const stop = () => {
-    window.removeEventListener("pointermove", onMove);
-    window.removeEventListener("pointerup", stop);
-    window.removeEventListener("pointercancel", stop);
-    document.body.style.userSelect = originalUserSelect;
+    win.removeEventListener("pointermove", onMove);
+    win.removeEventListener("pointerup", stop);
+    win.removeEventListener("pointercancel", stop);
+    doc.body.style.userSelect = originalUserSelect;
   };
 
-  window.addEventListener("pointermove", onMove);
-  window.addEventListener("pointerup", stop);
-  window.addEventListener("pointercancel", stop);
+  win.addEventListener("pointermove", onMove);
+  win.addEventListener("pointerup", stop);
+  win.addEventListener("pointercancel", stop);
 }

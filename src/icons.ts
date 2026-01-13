@@ -2,6 +2,7 @@ import {
   ArrowDown,
   Columns3,
   createElement,
+  ExternalLink,
   Plus,
   Search,
   Radar,
@@ -21,6 +22,7 @@ const ICONS = {
   columns: Columns3,
   radar: Radar,
   search: Search,
+  "external-link": ExternalLink,
 } as const;
 
 type IconKind = keyof typeof ICONS;

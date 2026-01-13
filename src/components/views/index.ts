@@ -20,6 +20,7 @@ import type {
   ViewRenderOptions,
   LogViewRenderOptions,
   RequestRender,
+  ViewUiContext,
 } from "./types";
 import { createElement, formatTimestamp } from "../../utils";
 import { ensureSortState, getDefaultDirection } from "./helpers";
@@ -58,6 +59,7 @@ export function buildViewContent(
   leaf: PanelLeafNode,
   snapshot: GameSnapshot,
   requestRender: RequestRender,
+  ui: ViewUiContext,
   existingContainer?: HTMLElement,
   lifecycle?: ViewLifecycleCallbacks,
   actions?: ViewActionHandlers,
@@ -84,6 +86,7 @@ export function buildViewContent(
         leaf,
         snapshot,
         requestRender,
+        ui,
         sortState,
         onSort: handleSort,
         existingContainer,
@@ -95,6 +98,7 @@ export function buildViewContent(
         leaf,
         snapshot,
         requestRender,
+        ui,
         sortState,
         onSort: handleSort,
         existingContainer,
@@ -106,6 +110,7 @@ export function buildViewContent(
         leaf,
         snapshot,
         requestRender,
+        ui,
         sortState,
         onSort: handleSort,
         existingContainer,
@@ -117,6 +122,7 @@ export function buildViewContent(
         leaf,
         snapshot,
         requestRender,
+        ui,
         sortState,
         onSort: handleSort,
         existingContainer,
@@ -128,6 +134,7 @@ export function buildViewContent(
         leaf,
         snapshot,
         requestRender,
+        ui,
         sortState,
         onSort: handleSort,
         existingContainer,
@@ -138,6 +145,7 @@ export function buildViewContent(
       return renderActionsDirectoryView({
         leaf,
         snapshot,
+        ui,
         sortState,
         onSort: handleSort,
         existingContainer,
@@ -147,6 +155,7 @@ export function buildViewContent(
       return renderActionEditorView({
         leaf,
         snapshot,
+        ui,
         existingContainer,
         lifecycle,
         actions: viewActions,
@@ -155,6 +164,7 @@ export function buildViewContent(
       return renderRunningActionsView({
         leaf,
         snapshot,
+        ui,
         sortState,
         onSort: handleSort,
         existingContainer,
@@ -164,6 +174,7 @@ export function buildViewContent(
       return renderRunningActionDetailView({
         leaf,
         snapshot,
+        ui,
         existingContainer,
         lifecycle,
         actions: viewActions,
@@ -172,6 +183,7 @@ export function buildViewContent(
       return renderLogView({
         leaf,
         snapshot,
+        ui,
         sortState,
         onSort: handleSort,
         existingContainer,
@@ -182,13 +194,19 @@ export function buildViewContent(
       return renderOverlayView({
         leaf,
         snapshot,
+        ui,
         sortState,
         onSort: handleSort,
         existingContainer,
         actions: viewActions,
       });
     default:
-      return createElement("div", "text-slate-200 text-sm", "Unsupported view");
+      return createElement(
+        "div",
+        "text-slate-200 text-sm",
+        "Unsupported view",
+        ui.document,
+      );
   }
 }
 

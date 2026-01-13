@@ -62,8 +62,9 @@ export function createElement<K extends keyof HTMLElementTagNameMap>(
   tag: K,
   className?: string,
   textContent?: string,
+  doc: Document = document,
 ): HTMLElementTagNameMap[K] {
-  const el = document.createElement(tag);
+  const el = doc.createElement(tag);
   if (className) {
     el.className = className;
   }
@@ -165,48 +166,68 @@ interface ShowContextMenuOptions {
   y: number;
   title?: string;
   items: ContextMenuItem[];
+  document?: Document;
 }
 
-let contextMenuElement: HTMLDivElement | null = null;
-let contextMenuCleanup: (() => void) | null = null;
+interface ContextMenuState {
+  element: HTMLDivElement | null;
+  cleanup: (() => void) | null;
+}
 
-function ensureContextMenuElement(): HTMLDivElement {
-  if (!contextMenuElement) {
-    contextMenuElement = createElement(
+const contextMenuStates = new WeakMap<Document, ContextMenuState>();
+
+function ensureContextMenuState(doc: Document): ContextMenuState {
+  let state = contextMenuStates.get(doc);
+  if (!state) {
+    state = { element: null, cleanup: null };
+    contextMenuStates.set(doc, state);
+  }
+  return state;
+}
+
+function ensureContextMenuElement(doc: Document): HTMLDivElement {
+  const state = ensureContextMenuState(doc);
+  if (!state.element) {
+    state.element = createElement(
       "div",
       "fixed z-[2147483647] min-w-[160px] overflow-hidden rounded-md border " +
         "border-slate-700/80 bg-slate-950/95 text-sm text-slate-100 shadow-2xl " +
         "backdrop-blur",
+      undefined,
+      doc,
     );
-    contextMenuElement.dataset.sidebarRole = SidebarRole.ContextMenu;
-    contextMenuElement.style.pointerEvents = "auto";
-    contextMenuElement.style.zIndex = "2147483647";
+    state.element.dataset.sidebarRole = SidebarRole.ContextMenu;
+    state.element.style.pointerEvents = "auto";
+    state.element.style.zIndex = "2147483647";
   }
 
-  return contextMenuElement;
+  return state.element;
 }
 
-export function hideContextMenu(): void {
-  if (contextMenuCleanup) {
-    contextMenuCleanup();
-    contextMenuCleanup = null;
+export function hideContextMenu(doc: Document = document): void {
+  const state = ensureContextMenuState(doc);
+  if (state.cleanup) {
+    state.cleanup();
+    state.cleanup = null;
   }
 
-  if (contextMenuElement && contextMenuElement.parentElement) {
-    contextMenuElement.parentElement.removeChild(contextMenuElement);
+  if (state.element && state.element.parentElement) {
+    state.element.parentElement.removeChild(state.element);
   }
 }
 
 export function showContextMenu(options: ShowContextMenuOptions): void {
   const { x, y, title, items } = options;
+  const doc = options.document ?? document;
+  const win = doc.defaultView ?? window;
   if (!items.length) {
-    hideContextMenu();
+    hideContextMenu(doc);
     return;
   }
 
-  hideContextMenu();
+  hideContextMenu(doc);
 
-  const menu = ensureContextMenuElement();
+  const menu = ensureContextMenuElement(doc);
   menu.className =
     "fixed z-[2147483647] min-w-[160px] overflow-hidden rounded-md border " +
     "border-slate-700/80 bg-slate-950/95 text-sm text-slate-100 shadow-2xl " +
@@ -216,7 +237,7 @@ export function showContextMenu(options: ShowContextMenuOptions): void {
   menu.style.left = "0px";
   menu.style.top = "0px";
 
-  const wrapper = createElement("div", "flex flex-col");
+  const wrapper = createElement("div", "flex flex-col", undefined, doc);
 
   if (title) {
     const header = createElement(
@@ -224,11 +245,12 @@ export function showContextMenu(options: ShowContextMenuOptions): void {
       "border-b border-slate-800/80 px-3 py-2 text-xs font-semibold uppercase " +
         "tracking-wide text-slate-300",
       title,
+      doc,
     );
     wrapper.appendChild(header);
   }
 
-  const list = createElement("div", "py-1");
+  const list = createElement("div", "py-1", undefined, doc);
   for (const item of items) {
     const button = createElement(
       "button",
@@ -238,6 +260,7 @@ export function showContextMenu(options: ShowContextMenuOptions): void {
           : "hover:bg-slate-800/80 hover:text-sky-200"
       } flex w-full items-center gap-2 px-3 py-2 text-left transition-colors`,
       item.label,
+      doc,
     );
     button.type = "button";
     button.disabled = Boolean(item.disabled);
@@ -247,7 +270,7 @@ export function showContextMenu(options: ShowContextMenuOptions): void {
     button.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
-      hideContextMenu();
+      hideContextMenu(doc);
       item.onSelect?.();
     });
     button.addEventListener("contextmenu", (event) => {
@@ -258,23 +281,24 @@ export function showContextMenu(options: ShowContextMenuOptions): void {
   }
 
   if (list.childElementCount === 0) {
-    hideContextMenu();
+    hideContextMenu(doc);
     return;
   }
 
   wrapper.appendChild(list);
   menu.replaceChildren(wrapper);
-  document.body.appendChild(menu);
+  doc.body.appendChild(menu);
 
   const rect = menu.getBoundingClientRect();
-  const maxLeft = window.innerWidth - rect.width - 8;
-  const maxTop = window.innerHeight - rect.height - 8;
+  const maxLeft = win.innerWidth - rect.width - 8;
+  const maxTop = win.innerHeight - rect.height - 8;
   const left = Math.max(8, Math.min(x, Math.max(8, maxLeft)));
   const top = Math.max(8, Math.min(y, Math.max(8, maxTop)));
   menu.style.left = `${left}px`;
   menu.style.top = `${top}px`;
   menu.style.visibility = "visible";
 
+  const state = ensureContextMenuState(doc);
   const cleanupHandlers: Array<() => void> = [];
 
   const cleanupContextMenu = () => {
@@ -289,13 +313,13 @@ export function showContextMenu(options: ShowContextMenuOptions): void {
     if (menu.parentElement) {
       menu.parentElement.removeChild(menu);
     }
-    contextMenuCleanup = null;
+    state.cleanup = null;
   };
 
-  contextMenuCleanup = cleanupContextMenu;
+  state.cleanup = cleanupContextMenu;
 
-  window.setTimeout(() => {
-    if (contextMenuCleanup !== cleanupContextMenu) {
+  win.setTimeout(() => {
+    if (state.cleanup !== cleanupContextMenu) {
       return;
     }
 
@@ -304,34 +328,34 @@ export function showContextMenu(options: ShowContextMenuOptions): void {
         return;
       }
       if (!menu.contains(event.target)) {
-        hideContextMenu();
+        hideContextMenu(doc);
       }
     };
 
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
-        hideContextMenu();
+        hideContextMenu(doc);
       }
     };
 
-    const handleBlur = () => hideContextMenu();
-    const handleScroll = () => hideContextMenu();
+    const handleBlur = () => hideContextMenu(doc);
+    const handleScroll = () => hideContextMenu(doc);
 
-    document.addEventListener("pointerdown", handlePointerDown, true);
-    document.addEventListener("contextmenu", handlePointerDown, true);
-    document.addEventListener("keydown", handleKeyDown);
-    document.addEventListener("scroll", handleScroll, true);
-    window.addEventListener("blur", handleBlur);
-    window.addEventListener("resize", handleBlur);
+    doc.addEventListener("pointerdown", handlePointerDown, true);
+    doc.addEventListener("contextmenu", handlePointerDown, true);
+    doc.addEventListener("keydown", handleKeyDown);
+    doc.addEventListener("scroll", handleScroll, true);
+    win.addEventListener("blur", handleBlur);
+    win.addEventListener("resize", handleBlur);
 
     cleanupHandlers.push(() => {
-      document.removeEventListener("pointerdown", handlePointerDown, true);
-      document.removeEventListener("contextmenu", handlePointerDown, true);
-      document.removeEventListener("keydown", handleKeyDown);
-      document.removeEventListener("scroll", handleScroll, true);
-      window.removeEventListener("blur", handleBlur);
-      window.removeEventListener("resize", handleBlur);
+      doc.removeEventListener("pointerdown", handlePointerDown, true);
+      doc.removeEventListener("contextmenu", handlePointerDown, true);
+      doc.removeEventListener("keydown", handleKeyDown);
+      doc.removeEventListener("scroll", handleScroll, true);
+      win.removeEventListener("blur", handleBlur);
+      win.removeEventListener("resize", handleBlur);
     });
   }, 0);
 }

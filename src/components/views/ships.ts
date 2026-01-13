@@ -6,7 +6,11 @@ import type {
   SortState,
   TileSummary,
 } from "../../types";
-import { createElement, focusTile, formatTroopCount } from "../../utils";
+import {
+  createElement as createElementBase,
+  focusTile,
+  formatTroopCount,
+} from "../../utils";
 import {
   applyPersistentHover,
   attachImmediateTileFocus,
@@ -19,65 +23,92 @@ import {
 } from "./helpers";
 import type { ViewRenderOptions } from "./types";
 
+let viewDocument: Document = document;
+
+function withViewDocument<T>(doc: Document, fn: () => T): T {
+  const previous = viewDocument;
+  viewDocument = doc;
+  try {
+    return fn();
+  } finally {
+    viewDocument = previous;
+  }
+}
+
+function createElement<K extends keyof HTMLElementTagNameMap>(
+  tag: K,
+  className?: string,
+  textContent?: string,
+): HTMLElementTagNameMap[K] {
+  return createElementBase(tag, className, textContent, viewDocument);
+}
+
 export function renderShipView(options: ViewRenderOptions): HTMLElement {
-  const { leaf, snapshot, sortState, onSort, existingContainer } = options;
-  const visibleHeaders = getVisibleHeaders(leaf, leaf.view, SHIP_HEADERS);
-  const { container, tbody } = createTableShell({
-    sortState,
-    onSort,
-    existingContainer,
-    view: leaf.view,
-    headers: visibleHeaders,
-  });
-  const playerLookup = new Map(
-    snapshot.players.map((player) => [player.id, player]),
-  );
-  const ships = [...snapshot.ships].sort((a, b) =>
-    compareShips({ a, b, sortState }),
-  );
+  return withViewDocument(options.ui.document, () => {
+    const { leaf, snapshot, sortState, onSort, existingContainer } = options;
+    const visibleHeaders = getVisibleHeaders(leaf, leaf.view, SHIP_HEADERS);
+    const { container, tbody } = createTableShell({
+      sortState,
+      onSort,
+      existingContainer,
+      view: leaf.view,
+      headers: visibleHeaders,
+      document: viewDocument,
+    });
+    const playerLookup = new Map(
+      snapshot.players.map((player) => [player.id, player]),
+    );
+    const ships = [...snapshot.ships].sort((a, b) =>
+      compareShips({ a, b, sortState }),
+    );
 
-  for (const ship of ships) {
-    const rowKey = `ship:${ship.id}`;
-    const row = createElement("tr", "hover:bg-slate-800/50 transition-colors");
-    applyPersistentHover(row, leaf, rowKey, "bg-slate-800/50");
-    row.dataset.rowKey = rowKey;
-
-    for (const column of visibleHeaders) {
-      const td = createElement(
-        "td",
-        cellClassForColumn(column, getShipExtraCellClass(column.key)),
+    for (const ship of ships) {
+      const rowKey = `ship:${ship.id}`;
+      const row = createElement(
+        "tr",
+        "hover:bg-slate-800/50 transition-colors",
       );
-      switch (column.key) {
-        case "origin":
-          td.appendChild(createCoordinateButton(ship.origin));
-          break;
-        case "current":
-          td.appendChild(createCoordinateButton(ship.current));
-          break;
-        case "destination":
-          td.appendChild(createCoordinateButton(ship.destination));
-          break;
-        case "owner": {
-          const ownerRecord = playerLookup.get(ship.ownerId);
-          td.appendChild(
-            createPlayerNameElement(ship.ownerName, ownerRecord?.position, {
-              className:
-                "inline-flex max-w-full items-center gap-1 text-left text-slate-200 hover:text-sky-200",
-            }),
-          );
-          break;
+      applyPersistentHover(row, leaf, rowKey, "bg-slate-800/50");
+      row.dataset.rowKey = rowKey;
+
+      for (const column of visibleHeaders) {
+        const td = createElement(
+          "td",
+          cellClassForColumn(column, getShipExtraCellClass(column.key)),
+        );
+        switch (column.key) {
+          case "origin":
+            td.appendChild(createCoordinateButton(ship.origin));
+            break;
+          case "current":
+            td.appendChild(createCoordinateButton(ship.current));
+            break;
+          case "destination":
+            td.appendChild(createCoordinateButton(ship.destination));
+            break;
+          case "owner": {
+            const ownerRecord = playerLookup.get(ship.ownerId);
+            td.appendChild(
+              createPlayerNameElement(ship.ownerName, ownerRecord?.position, {
+                className:
+                  "inline-flex max-w-full items-center gap-1 text-left text-slate-200 hover:text-sky-200",
+                document: viewDocument,
+              }),
+            );
+            break;
+          }
+          default:
+            td.textContent = getShipCellValue(column.key, ship);
+            break;
         }
-        default:
-          td.textContent = getShipCellValue(column.key, ship);
-          break;
+        row.appendChild(td);
       }
-      row.appendChild(td);
+
+      tbody.appendChild(row);
     }
 
-    tbody.appendChild(row);
-  }
-
-  return container;
+    return container;
+  });
 }
 
 function getShipExtraCellClass(key: SortKey): string {

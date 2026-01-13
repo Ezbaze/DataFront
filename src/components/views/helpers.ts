@@ -88,8 +88,9 @@ export function applyPersistentHover(
 export function createPlayerNameElement(
   label: string,
   position: TileSummary | undefined,
-  options?: { className?: string; asBlock?: boolean },
+  options?: { className?: string; asBlock?: boolean; document?: Document },
 ): HTMLElement {
+  const doc = options?.document ?? document;
   const classNames: string[] = [];
   if (options?.className) {
     classNames.push(options.className);
@@ -103,10 +104,10 @@ export function createPlayerNameElement(
 
   if (!position) {
     const tag = options?.asBlock ? "div" : "span";
-    return createElement(tag as "div" | "span", className, label);
+    return createElement(tag as "div" | "span", className, label, doc);
   }
 
-  const button = createElement("button", className, label);
+  const button = createElement("button", className, label, doc);
   button.type = "button";
   button.title = `Focus on ${label}`;
   attachImmediateTileFocus(button, () => {
@@ -377,8 +378,10 @@ export function createTableShell<TKey extends string>(options: {
   view: ViewType;
   headers: ReadonlyArray<TableHeader<TKey>>;
   role?: SidebarRoleValue;
+  document?: Document;
 }): { container: HTMLElement; tbody: HTMLElement } {
   const { sortState, onSort, existingContainer, view, headers, role } = options;
+  const doc = existingContainer?.ownerDocument ?? options.document ?? document;
   const containerClass =
     "relative flex-1 overflow-auto border border-slate-900/70 bg-slate-950/60 backdrop-blur-sm";
   const tableClass = "min-w-full border-collapse text-xs text-slate-100";
@@ -389,22 +392,23 @@ export function createTableShell<TKey extends string>(options: {
     existingContainer.dataset.sidebarView === view;
   const container = canReuse
     ? existingContainer
-    : createElement("div", containerClass);
+    : createElement("div", containerClass, undefined, doc);
   container.className = containerClass;
   container.dataset.sidebarRole = targetRole;
   container.dataset.sidebarView = view;
 
   let table = container.querySelector("table") as HTMLTableElement | null;
   if (!table || !canReuse) {
-    table = createElement("table", tableClass);
+    table = createElement("table", tableClass, undefined, doc);
   } else {
     table.className = tableClass;
   }
 
-  const thead = table.tHead ?? createElement("thead", "sticky top-0 z-10");
+  const thead =
+    table.tHead ?? createElement("thead", "sticky top-0 z-10", undefined, doc);
   thead.className = "sticky top-0 z-10";
   thead.replaceChildren();
-  const headerRow = createElement("tr", "bg-slate-900/95");
+  const headerRow = createElement("tr", "bg-slate-900/95", undefined, doc);
   for (const column of headers) {
     const th = createElement(
       "th",
@@ -415,6 +419,8 @@ export function createTableShell<TKey extends string>(options: {
             ? "text-right"
             : "text-center"
       }`,
+      undefined,
+      doc,
     );
     th.classList.add("bg-slate-900/90");
     const labelWrapper = createElement(
@@ -427,6 +433,7 @@ export function createTableShell<TKey extends string>(options: {
             : "justify-center"
       }`,
       column.label,
+      doc,
     );
     if (column.title) {
       th.title = column.title;
@@ -443,6 +450,7 @@ export function createTableShell<TKey extends string>(options: {
         "span",
         `text-[0.6rem] ${isActive ? "text-sky-300" : "text-slate-500"}`,
         isActive ? (sortState.direction === "asc" ? "▲" : "▼") : "↕",
+        doc,
       );
       if (column.align === "right") {
         labelWrapper.appendChild(indicator);
@@ -461,7 +469,9 @@ export function createTableShell<TKey extends string>(options: {
   }
   thead.appendChild(headerRow);
 
-  const tbody = table.tBodies[0] ?? createElement("tbody", "text-[0.75rem]");
+  const tbody =
+    table.tBodies[0] ??
+    createElement("tbody", "text-[0.75rem]", undefined, doc);
   tbody.className = "text-[0.75rem]";
   tbody.replaceChildren();
 
@@ -482,32 +492,47 @@ export function createTableShell<TKey extends string>(options: {
   return { container, tbody };
 }
 
-let columnMenuElement: HTMLDivElement | null = null;
-let columnMenuCleanup: (() => void) | null = null;
+interface ColumnMenuState {
+  element: HTMLDivElement | null;
+  cleanup: (() => void) | null;
+}
 
-function ensureColumnMenuElement(): HTMLDivElement {
-  if (!columnMenuElement) {
-    columnMenuElement = createElement("div") as HTMLDivElement;
-    columnMenuElement.dataset.sidebarRole = SidebarRole.ColumnVisibilityMenu;
-    columnMenuElement.style.pointerEvents = "auto";
-    columnMenuElement.style.zIndex = "2147483647";
+const columnMenuStates = new WeakMap<Document, ColumnMenuState>();
+
+function ensureColumnMenuState(doc: Document): ColumnMenuState {
+  let state = columnMenuStates.get(doc);
+  if (!state) {
+    state = { element: null, cleanup: null };
+    columnMenuStates.set(doc, state);
   }
-  columnMenuElement.className =
+  return state;
+}
+
+function ensureColumnMenuElement(doc: Document): HTMLDivElement {
+  const state = ensureColumnMenuState(doc);
+  if (!state.element) {
+    state.element = createElement("div", undefined, undefined, doc);
+    state.element.dataset.sidebarRole = SidebarRole.ColumnVisibilityMenu;
+    state.element.style.pointerEvents = "auto";
+    state.element.style.zIndex = "2147483647";
+  }
+  state.element.className =
     "fixed z-[2147483647] min-w-[200px] overflow-hidden rounded-md border " +
     "border-slate-700/80 bg-slate-950/95 text-sm text-slate-100 shadow-2xl " +
     "backdrop-blur";
-  return columnMenuElement;
+  return state.element;
 }
 
-export function hideColumnVisibilityMenu(): void {
-  if (columnMenuCleanup) {
-    const cleanup = columnMenuCleanup;
-    columnMenuCleanup = null;
+export function hideColumnVisibilityMenu(doc: Document = document): void {
+  const state = ensureColumnMenuState(doc);
+  if (state.cleanup) {
+    const cleanup = state.cleanup;
+    state.cleanup = null;
     cleanup();
     return;
   }
-  if (columnMenuElement && columnMenuElement.parentElement) {
-    columnMenuElement.parentElement.removeChild(columnMenuElement);
+  if (state.element && state.element.parentElement) {
+    state.element.parentElement.removeChild(state.element);
   }
 }
 
@@ -520,9 +545,11 @@ export function showColumnVisibilityMenu(
   options: ColumnVisibilityMenuOptions,
 ): void {
   const { leaf, anchor, onChange } = options;
+  const doc = anchor.ownerDocument ?? document;
+  const win = doc.defaultView ?? window;
   const baseHeaders = getTableHeadersForView(leaf.view);
   if (!baseHeaders || baseHeaders.length === 0) {
-    hideColumnVisibilityMenu();
+    hideColumnVisibilityMenu(doc);
     return;
   }
 
@@ -531,24 +558,25 @@ export function showColumnVisibilityMenu(
     (header) => header.hideable !== false,
   );
 
-  hideColumnVisibilityMenu();
+  hideColumnVisibilityMenu(doc);
 
-  const menu = ensureColumnMenuElement();
+  const menu = ensureColumnMenuElement(doc);
   menu.style.visibility = "hidden";
   menu.style.left = "0px";
   menu.style.top = "0px";
 
-  const wrapper = createElement("div", "flex flex-col");
+  const wrapper = createElement("div", "flex flex-col", undefined, doc);
   wrapper.appendChild(
     createElement(
       "div",
       "border-b border-slate-800/80 px-3 py-2 text-xs font-semibold uppercase " +
         "tracking-wide text-slate-300",
       "Columns",
+      doc,
     ),
   );
 
-  const list = createElement("div", "py-1");
+  const list = createElement("div", "py-1", undefined, doc);
   for (const header of baseHeaders) {
     const key = header.key;
     const item = createElement(
@@ -558,8 +586,10 @@ export function showColumnVisibilityMenu(
           ? "cursor-default text-slate-300"
           : "cursor-pointer text-slate-200 hover:bg-slate-800/70"
       } flex items-center gap-3 px-3 py-2 text-xs transition-colors`,
+      undefined,
+      doc,
     );
-    const checkbox = document.createElement("input");
+    const checkbox = doc.createElement("input");
     checkbox.type = "checkbox";
     checkbox.className =
       "h-3.5 w-3.5 rounded border border-slate-600 bg-slate-900 text-sky-400 " +
@@ -568,7 +598,7 @@ export function showColumnVisibilityMenu(
     checkbox.disabled = header.hideable === false;
     item.appendChild(checkbox);
 
-    const label = createElement("span", "flex-1 truncate", header.label);
+    const label = createElement("span", "flex-1 truncate", header.label, doc);
     item.appendChild(label);
 
     if (header.hideable === false) {
@@ -578,6 +608,7 @@ export function showColumnVisibilityMenu(
           "span",
           "rounded-full border border-slate-700/70 px-2 py-0.5 text-[0.6rem] font-semibold uppercase tracking-wide text-slate-400",
           "Pinned",
+          doc,
         ),
       );
     }
@@ -612,18 +643,18 @@ export function showColumnVisibilityMenu(
   }
 
   if (list.childElementCount === 0) {
-    hideColumnVisibilityMenu();
+    hideColumnVisibilityMenu(doc);
     return;
   }
 
   wrapper.appendChild(list);
   menu.replaceChildren(wrapper);
-  document.body.appendChild(menu);
+  doc.body.appendChild(menu);
 
   const menuRect = menu.getBoundingClientRect();
   const anchorRect = anchor.getBoundingClientRect();
-  const viewportWidth = window.innerWidth;
-  const viewportHeight = window.innerHeight;
+  const viewportWidth = win.innerWidth;
+  const viewportHeight = win.innerHeight;
   let top = anchorRect.bottom + 6;
   let left = anchorRect.left;
   if (top + menuRect.height > viewportHeight - 8) {
@@ -646,6 +677,7 @@ export function showColumnVisibilityMenu(
   menu.style.visibility = "visible";
 
   const cleanupHandlers: Array<() => void> = [];
+  const state = ensureColumnMenuState(doc);
   const cleanupMenu = () => {
     while (cleanupHandlers.length > 0) {
       const cleanup = cleanupHandlers.pop();
@@ -661,15 +693,15 @@ export function showColumnVisibilityMenu(
     if (menu.parentElement) {
       menu.parentElement.removeChild(menu);
     }
-    if (columnMenuCleanup === cleanupMenu) {
-      columnMenuCleanup = null;
+    if (state.cleanup === cleanupMenu) {
+      state.cleanup = null;
     }
   };
 
-  columnMenuCleanup = cleanupMenu;
+  state.cleanup = cleanupMenu;
 
-  window.setTimeout(() => {
-    if (columnMenuCleanup !== cleanupMenu) {
+  win.setTimeout(() => {
+    if (state.cleanup !== cleanupMenu) {
       return;
     }
 
@@ -678,37 +710,37 @@ export function showColumnVisibilityMenu(
         return;
       }
       if (!menu.contains(event.target) && !anchor.contains(event.target)) {
-        hideColumnVisibilityMenu();
+        hideColumnVisibilityMenu(doc);
       }
     };
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
-        hideColumnVisibilityMenu();
+        hideColumnVisibilityMenu(doc);
       }
     };
     const handleScroll = (event: Event) => {
       if (!event.isTrusted) {
         return;
       }
-      hideColumnVisibilityMenu();
+      hideColumnVisibilityMenu(doc);
     };
-    const handleBlur = () => hideColumnVisibilityMenu();
+    const handleBlur = () => hideColumnVisibilityMenu(doc);
 
-    document.addEventListener("pointerdown", handlePointerDown, true);
-    document.addEventListener("keydown", handleKeyDown, true);
-    window.addEventListener("scroll", handleScroll, true);
-    window.addEventListener("blur", handleBlur);
+    doc.addEventListener("pointerdown", handlePointerDown, true);
+    doc.addEventListener("keydown", handleKeyDown, true);
+    win.addEventListener("scroll", handleScroll, true);
+    win.addEventListener("blur", handleBlur);
 
     cleanupHandlers.push(() =>
-      document.removeEventListener("pointerdown", handlePointerDown, true),
+      doc.removeEventListener("pointerdown", handlePointerDown, true),
     );
     cleanupHandlers.push(() =>
-      document.removeEventListener("keydown", handleKeyDown, true),
+      doc.removeEventListener("keydown", handleKeyDown, true),
     );
     cleanupHandlers.push(() =>
-      window.removeEventListener("scroll", handleScroll, true),
+      win.removeEventListener("scroll", handleScroll, true),
     );
-    cleanupHandlers.push(() => window.removeEventListener("blur", handleBlur));
+    cleanupHandlers.push(() => win.removeEventListener("blur", handleBlur));
   }, 0);
 }
 

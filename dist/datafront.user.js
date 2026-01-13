@@ -56,7 +56,7 @@
     }
     return element;
   };
-  const createElement$1 = (iconNode, customAttrs = {}) => {
+  const createElement$8 = (iconNode, customAttrs = {}) => {
     const tag = "svg";
     const attrs = {
       ...defaultAttributes,
@@ -102,6 +102,19 @@
     ["rect", { width: "18", height: "18", x: "3", y: "3", rx: "2" }],
     ["path", { d: "M9 3v18" }],
     ["path", { d: "M15 3v18" }]
+  ];
+
+  /**
+   * @license lucide v0.545.0 - ISC
+   *
+   * This source code is licensed under the ISC license.
+   * See the LICENSE file in the root directory of this source tree.
+   */
+
+  const ExternalLink = [
+    ["path", { d: "M15 3h6v6" }],
+    ["path", { d: "M10 14 21 3" }],
+    ["path", { d: "M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" }]
   ];
 
   /**
@@ -246,10 +259,11 @@
       columns: Columns3,
       radar: Radar,
       search: Search,
+      "external-link": ExternalLink,
   };
   function renderIcon(kind, className) {
       const iconNode = ICONS[kind];
-      const svg = createElement$1(iconNode);
+      const svg = createElement$8(iconNode);
       if (className) {
           svg.setAttribute("class", className);
       }
@@ -423,8 +437,8 @@
   function clamp(value, min, max) {
       return Math.max(min, Math.min(max, value));
   }
-  function createElement(tag, className, textContent) {
-      const el = document.createElement(tag);
+  function createElement$7(tag, className, textContent, doc = document) {
+      const el = doc.createElement(tag);
       if (className) {
           el.className = className;
       }
@@ -490,36 +504,47 @@
           return false;
       }
   }
-  let contextMenuElement = null;
-  let contextMenuCleanup = null;
-  function ensureContextMenuElement() {
-      if (!contextMenuElement) {
-          contextMenuElement = createElement("div", "fixed z-[2147483647] min-w-[160px] overflow-hidden rounded-md border " +
-              "border-slate-700/80 bg-slate-950/95 text-sm text-slate-100 shadow-2xl " +
-              "backdrop-blur");
-          contextMenuElement.dataset.sidebarRole = SidebarRole.ContextMenu;
-          contextMenuElement.style.pointerEvents = "auto";
-          contextMenuElement.style.zIndex = "2147483647";
+  const contextMenuStates = new WeakMap();
+  function ensureContextMenuState(doc) {
+      let state = contextMenuStates.get(doc);
+      if (!state) {
+          state = { element: null, cleanup: null };
+          contextMenuStates.set(doc, state);
       }
-      return contextMenuElement;
+      return state;
   }
-  function hideContextMenu() {
-      if (contextMenuCleanup) {
-          contextMenuCleanup();
-          contextMenuCleanup = null;
+  function ensureContextMenuElement(doc) {
+      const state = ensureContextMenuState(doc);
+      if (!state.element) {
+          state.element = createElement$7("div", "fixed z-[2147483647] min-w-[160px] overflow-hidden rounded-md border " +
+              "border-slate-700/80 bg-slate-950/95 text-sm text-slate-100 shadow-2xl " +
+              "backdrop-blur", undefined, doc);
+          state.element.dataset.sidebarRole = SidebarRole.ContextMenu;
+          state.element.style.pointerEvents = "auto";
+          state.element.style.zIndex = "2147483647";
       }
-      if (contextMenuElement && contextMenuElement.parentElement) {
-          contextMenuElement.parentElement.removeChild(contextMenuElement);
+      return state.element;
+  }
+  function hideContextMenu(doc = document) {
+      const state = ensureContextMenuState(doc);
+      if (state.cleanup) {
+          state.cleanup();
+          state.cleanup = null;
+      }
+      if (state.element && state.element.parentElement) {
+          state.element.parentElement.removeChild(state.element);
       }
   }
   function showContextMenu(options) {
       const { x, y, title, items } = options;
+      const doc = options.document ?? document;
+      const win = doc.defaultView ?? window;
       if (!items.length) {
-          hideContextMenu();
+          hideContextMenu(doc);
           return;
       }
-      hideContextMenu();
-      const menu = ensureContextMenuElement();
+      hideContextMenu(doc);
+      const menu = ensureContextMenuElement(doc);
       menu.className =
           "fixed z-[2147483647] min-w-[160px] overflow-hidden rounded-md border " +
               "border-slate-700/80 bg-slate-950/95 text-sm text-slate-100 shadow-2xl " +
@@ -528,17 +553,17 @@
       menu.style.visibility = "hidden";
       menu.style.left = "0px";
       menu.style.top = "0px";
-      const wrapper = createElement("div", "flex flex-col");
+      const wrapper = createElement$7("div", "flex flex-col", undefined, doc);
       if (title) {
-          const header = createElement("div", "border-b border-slate-800/80 px-3 py-2 text-xs font-semibold uppercase " +
-              "tracking-wide text-slate-300", title);
+          const header = createElement$7("div", "border-b border-slate-800/80 px-3 py-2 text-xs font-semibold uppercase " +
+              "tracking-wide text-slate-300", title, doc);
           wrapper.appendChild(header);
       }
-      const list = createElement("div", "py-1");
+      const list = createElement$7("div", "py-1", undefined, doc);
       for (const item of items) {
-          const button = createElement("button", `${item.disabled
+          const button = createElement$7("button", `${item.disabled
             ? "cursor-not-allowed text-slate-500"
-            : "hover:bg-slate-800/80 hover:text-sky-200"} flex w-full items-center gap-2 px-3 py-2 text-left transition-colors`, item.label);
+            : "hover:bg-slate-800/80 hover:text-sky-200"} flex w-full items-center gap-2 px-3 py-2 text-left transition-colors`, item.label, doc);
           button.type = "button";
           button.disabled = Boolean(item.disabled);
           if (item.tooltip) {
@@ -547,7 +572,7 @@
           button.addEventListener("click", (event) => {
               event.preventDefault();
               event.stopPropagation();
-              hideContextMenu();
+              hideContextMenu(doc);
               item.onSelect?.();
           });
           button.addEventListener("contextmenu", (event) => {
@@ -557,20 +582,21 @@
           list.appendChild(button);
       }
       if (list.childElementCount === 0) {
-          hideContextMenu();
+          hideContextMenu(doc);
           return;
       }
       wrapper.appendChild(list);
       menu.replaceChildren(wrapper);
-      document.body.appendChild(menu);
+      doc.body.appendChild(menu);
       const rect = menu.getBoundingClientRect();
-      const maxLeft = window.innerWidth - rect.width - 8;
-      const maxTop = window.innerHeight - rect.height - 8;
+      const maxLeft = win.innerWidth - rect.width - 8;
+      const maxTop = win.innerHeight - rect.height - 8;
       const left = Math.max(8, Math.min(x, Math.max(8, maxLeft)));
       const top = Math.max(8, Math.min(y, Math.max(8, maxTop)));
       menu.style.left = `${left}px`;
       menu.style.top = `${top}px`;
       menu.style.visibility = "visible";
+      const state = ensureContextMenuState(doc);
       const cleanupHandlers = [];
       const cleanupContextMenu = () => {
           while (cleanupHandlers.length > 0) {
@@ -585,11 +611,11 @@
           if (menu.parentElement) {
               menu.parentElement.removeChild(menu);
           }
-          contextMenuCleanup = null;
+          state.cleanup = null;
       };
-      contextMenuCleanup = cleanupContextMenu;
-      window.setTimeout(() => {
-          if (contextMenuCleanup !== cleanupContextMenu) {
+      state.cleanup = cleanupContextMenu;
+      win.setTimeout(() => {
+          if (state.cleanup !== cleanupContextMenu) {
               return;
           }
           const handlePointerDown = (event) => {
@@ -597,45 +623,51 @@
                   return;
               }
               if (!menu.contains(event.target)) {
-                  hideContextMenu();
+                  hideContextMenu(doc);
               }
           };
           const handleKeyDown = (event) => {
               if (event.key === "Escape") {
                   event.preventDefault();
-                  hideContextMenu();
+                  hideContextMenu(doc);
               }
           };
-          const handleBlur = () => hideContextMenu();
-          const handleScroll = () => hideContextMenu();
-          document.addEventListener("pointerdown", handlePointerDown, true);
-          document.addEventListener("contextmenu", handlePointerDown, true);
-          document.addEventListener("keydown", handleKeyDown);
-          document.addEventListener("scroll", handleScroll, true);
-          window.addEventListener("blur", handleBlur);
-          window.addEventListener("resize", handleBlur);
+          const handleBlur = () => hideContextMenu(doc);
+          const handleScroll = () => hideContextMenu(doc);
+          doc.addEventListener("pointerdown", handlePointerDown, true);
+          doc.addEventListener("contextmenu", handlePointerDown, true);
+          doc.addEventListener("keydown", handleKeyDown);
+          doc.addEventListener("scroll", handleScroll, true);
+          win.addEventListener("blur", handleBlur);
+          win.addEventListener("resize", handleBlur);
           cleanupHandlers.push(() => {
-              document.removeEventListener("pointerdown", handlePointerDown, true);
-              document.removeEventListener("contextmenu", handlePointerDown, true);
-              document.removeEventListener("keydown", handleKeyDown);
-              document.removeEventListener("scroll", handleScroll, true);
-              window.removeEventListener("blur", handleBlur);
-              window.removeEventListener("resize", handleBlur);
+              doc.removeEventListener("pointerdown", handlePointerDown, true);
+              doc.removeEventListener("contextmenu", handlePointerDown, true);
+              doc.removeEventListener("keydown", handleKeyDown);
+              doc.removeEventListener("scroll", handleScroll, true);
+              win.removeEventListener("blur", handleBlur);
+              win.removeEventListener("resize", handleBlur);
           });
       }, 0);
   }
 
   function startPanelResize(group, index, event) {
+      // Use the event's ownerDocument without relying on instanceof checks that
+      // break across window boundaries (e.g., pop-out sidebar).
+      const target = event.target;
+      const current = event.currentTarget;
+      const doc = target?.ownerDocument ?? current?.ownerDocument ?? document;
+      const win = doc.defaultView ?? window;
       const wrapper = group.element?.wrapper;
       if (!wrapper) {
           return;
       }
+      const HtmlElementCtor = (doc.defaultView?.HTMLElement ?? HTMLElement);
       const findChildWrapper = (targetIndex) => {
           const targetValue = String(targetIndex);
           for (let i = 0; i < wrapper.children.length; i += 1) {
               const child = wrapper.children[i];
-              if (child instanceof HTMLElement &&
-                  child.dataset.panelChild === targetValue) {
+              if (child instanceof HtmlElementCtor && child.dataset.panelChild === targetValue) {
                   return child;
               }
           }
@@ -659,8 +691,8 @@
       const combinedShareRaw = sizeA + sizeB;
       const combinedShare = combinedShareRaw > 0 ? combinedShareRaw : 1;
       const startCoord = orientation === "horizontal" ? event.clientY : event.clientX;
-      const originalUserSelect = document.body.style.userSelect;
-      document.body.style.userSelect = "none";
+      const originalUserSelect = doc.body.style.userSelect;
+      doc.body.style.userSelect = "none";
       const onMove = (moveEvent) => {
           const currentCoord = orientation === "horizontal" ? moveEvent.clientY : moveEvent.clientX;
           const delta = currentCoord - startCoord;
@@ -691,14 +723,14 @@
           childB.style.flex = `${nextSizeB} 1 0%`;
       };
       const stop = () => {
-          window.removeEventListener("pointermove", onMove);
-          window.removeEventListener("pointerup", stop);
-          window.removeEventListener("pointercancel", stop);
-          document.body.style.userSelect = originalUserSelect;
+          win.removeEventListener("pointermove", onMove);
+          win.removeEventListener("pointerup", stop);
+          win.removeEventListener("pointercancel", stop);
+          doc.body.style.userSelect = originalUserSelect;
       };
-      window.addEventListener("pointermove", onMove);
-      window.addEventListener("pointerup", stop);
-      window.addEventListener("pointercancel", stop);
+      win.addEventListener("pointermove", onMove);
+      win.addEventListener("pointerup", stop);
+      win.addEventListener("pointercancel", stop);
   }
 
   const SELECTED_ROW_INDICATOR_BOX_SHADOW = "inset 0.25rem 0 0 0 rgba(125, 211, 252, 0.65)";
@@ -744,6 +776,7 @@
       });
   }
   function createPlayerNameElement(label, position, options) {
+      const doc = options?.document ?? document;
       const classNames = [];
       if (options?.className) {
           classNames.push(options.className);
@@ -754,9 +787,9 @@
       const className = classNames.filter(Boolean).join(" ").trim();
       if (!position) {
           const tag = options?.asBlock ? "div" : "span";
-          return createElement(tag, className, label);
+          return createElement$7(tag, className, label, doc);
       }
-      const button = createElement("button", className, label);
+      const button = createElement$7("button", className, label, doc);
       button.type = "button";
       button.title = `Focus on ${label}`;
       attachImmediateTileFocus(button, () => {
@@ -985,6 +1018,7 @@
   }
   function createTableShell(options) {
       const { sortState, onSort, existingContainer, view, headers, role } = options;
+      const doc = existingContainer?.ownerDocument ?? options.document ?? document;
       const containerClass = "relative flex-1 overflow-auto border border-slate-900/70 bg-slate-950/60 backdrop-blur-sm";
       const tableClass = "min-w-full border-collapse text-xs text-slate-100";
       const targetRole = role ?? SidebarRole.TableContainer;
@@ -993,33 +1027,33 @@
           existingContainer.dataset.sidebarView === view;
       const container = canReuse
           ? existingContainer
-          : createElement("div", containerClass);
+          : createElement$7("div", containerClass, undefined, doc);
       container.className = containerClass;
       container.dataset.sidebarRole = targetRole;
       container.dataset.sidebarView = view;
       let table = container.querySelector("table");
       if (!table || !canReuse) {
-          table = createElement("table", tableClass);
+          table = createElement$7("table", tableClass, undefined, doc);
       }
       else {
           table.className = tableClass;
       }
-      const thead = table.tHead ?? createElement("thead", "sticky top-0 z-10");
+      const thead = table.tHead ?? createElement$7("thead", "sticky top-0 z-10", undefined, doc);
       thead.className = "sticky top-0 z-10";
       thead.replaceChildren();
-      const headerRow = createElement("tr", "bg-slate-900/95");
+      const headerRow = createElement$7("tr", "bg-slate-900/95", undefined, doc);
       for (const column of headers) {
-          const th = createElement("th", `border-b border-r border-slate-800 px-3 py-2 text-[0.65rem] font-semibold uppercase tracking-wide text-slate-300 last:border-r-0 ${column.align === "left"
+          const th = createElement$7("th", `border-b border-r border-slate-800 px-3 py-2 text-[0.65rem] font-semibold uppercase tracking-wide text-slate-300 last:border-r-0 ${column.align === "left"
             ? "text-left"
             : column.align === "right"
                 ? "text-right"
-                : "text-center"}`);
+                : "text-center"}`, undefined, doc);
           th.classList.add("bg-slate-900/90");
-          const labelWrapper = createElement("span", `flex w-full items-center gap-1 text-inherit ${column.align === "left"
+          const labelWrapper = createElement$7("span", `flex w-full items-center gap-1 text-inherit ${column.align === "left"
             ? "justify-start"
             : column.align === "right"
                 ? "justify-end"
-                : "justify-center"}`, column.label);
+                : "justify-center"}`, column.label, doc);
           if (column.title) {
               th.title = column.title;
               th.setAttribute("aria-label", column.title);
@@ -1030,7 +1064,7 @@
           if (isSortable) {
               const sortKey = column.sortKey ?? column.key;
               const isActive = sortState.key === sortKey;
-              const indicator = createElement("span", `text-[0.6rem] ${isActive ? "text-sky-300" : "text-slate-500"}`, isActive ? (sortState.direction === "asc" ? "▲" : "▼") : "↕");
+              const indicator = createElement$7("span", `text-[0.6rem] ${isActive ? "text-sky-300" : "text-slate-500"}`, isActive ? (sortState.direction === "asc" ? "▲" : "▼") : "↕", doc);
               if (column.align === "right") {
                   labelWrapper.appendChild(indicator);
               }
@@ -1048,7 +1082,8 @@
           headerRow.appendChild(th);
       }
       thead.appendChild(headerRow);
-      const tbody = table.tBodies[0] ?? createElement("tbody", "text-[0.75rem]");
+      const tbody = table.tBodies[0] ??
+          createElement$7("tbody", "text-[0.75rem]", undefined, doc);
       tbody.className = "text-[0.75rem]";
       tbody.replaceChildren();
       if (!table.contains(thead)) {
@@ -1063,30 +1098,39 @@
       }
       return { container, tbody };
   }
-  let columnMenuElement = null;
-  let columnMenuCleanup = null;
-  function ensureColumnMenuElement() {
-      if (!columnMenuElement) {
-          columnMenuElement = createElement("div");
-          columnMenuElement.dataset.sidebarRole = SidebarRole.ColumnVisibilityMenu;
-          columnMenuElement.style.pointerEvents = "auto";
-          columnMenuElement.style.zIndex = "2147483647";
+  const columnMenuStates = new WeakMap();
+  function ensureColumnMenuState(doc) {
+      let state = columnMenuStates.get(doc);
+      if (!state) {
+          state = { element: null, cleanup: null };
+          columnMenuStates.set(doc, state);
       }
-      columnMenuElement.className =
+      return state;
+  }
+  function ensureColumnMenuElement(doc) {
+      const state = ensureColumnMenuState(doc);
+      if (!state.element) {
+          state.element = createElement$7("div", undefined, undefined, doc);
+          state.element.dataset.sidebarRole = SidebarRole.ColumnVisibilityMenu;
+          state.element.style.pointerEvents = "auto";
+          state.element.style.zIndex = "2147483647";
+      }
+      state.element.className =
           "fixed z-[2147483647] min-w-[200px] overflow-hidden rounded-md border " +
               "border-slate-700/80 bg-slate-950/95 text-sm text-slate-100 shadow-2xl " +
               "backdrop-blur";
-      return columnMenuElement;
+      return state.element;
   }
-  function hideColumnVisibilityMenu() {
-      if (columnMenuCleanup) {
-          const cleanup = columnMenuCleanup;
-          columnMenuCleanup = null;
+  function hideColumnVisibilityMenu(doc = document) {
+      const state = ensureColumnMenuState(doc);
+      if (state.cleanup) {
+          const cleanup = state.cleanup;
+          state.cleanup = null;
           cleanup();
           return;
       }
-      if (columnMenuElement && columnMenuElement.parentElement) {
-          columnMenuElement.parentElement.removeChild(columnMenuElement);
+      if (state.element && state.element.parentElement) {
+          state.element.parentElement.removeChild(state.element);
       }
   }
   function isColumnVisibilitySupported(view) {
@@ -1095,28 +1139,30 @@
   }
   function showColumnVisibilityMenu(options) {
       const { leaf, anchor, onChange } = options;
+      const doc = anchor.ownerDocument ?? document;
+      const win = doc.defaultView ?? window;
       const baseHeaders = getTableHeadersForView(leaf.view);
       if (!baseHeaders || baseHeaders.length === 0) {
-          hideColumnVisibilityMenu();
+          hideColumnVisibilityMenu(doc);
           return;
       }
       const visibility = ensureColumnVisibilityState(leaf, leaf.view, baseHeaders);
       const hideableHeaders = baseHeaders.filter((header) => header.hideable !== false);
-      hideColumnVisibilityMenu();
-      const menu = ensureColumnMenuElement();
+      hideColumnVisibilityMenu(doc);
+      const menu = ensureColumnMenuElement(doc);
       menu.style.visibility = "hidden";
       menu.style.left = "0px";
       menu.style.top = "0px";
-      const wrapper = createElement("div", "flex flex-col");
-      wrapper.appendChild(createElement("div", "border-b border-slate-800/80 px-3 py-2 text-xs font-semibold uppercase " +
-          "tracking-wide text-slate-300", "Columns"));
-      const list = createElement("div", "py-1");
+      const wrapper = createElement$7("div", "flex flex-col", undefined, doc);
+      wrapper.appendChild(createElement$7("div", "border-b border-slate-800/80 px-3 py-2 text-xs font-semibold uppercase " +
+          "tracking-wide text-slate-300", "Columns", doc));
+      const list = createElement$7("div", "py-1", undefined, doc);
       for (const header of baseHeaders) {
           const key = header.key;
-          const item = createElement("label", `${header.hideable === false
+          const item = createElement$7("label", `${header.hideable === false
             ? "cursor-default text-slate-300"
-            : "cursor-pointer text-slate-200 hover:bg-slate-800/70"} flex items-center gap-3 px-3 py-2 text-xs transition-colors`);
-          const checkbox = document.createElement("input");
+            : "cursor-pointer text-slate-200 hover:bg-slate-800/70"} flex items-center gap-3 px-3 py-2 text-xs transition-colors`, undefined, doc);
+          const checkbox = doc.createElement("input");
           checkbox.type = "checkbox";
           checkbox.className =
               "h-3.5 w-3.5 rounded border border-slate-600 bg-slate-900 text-sky-400 " +
@@ -1124,11 +1170,11 @@
           checkbox.checked = visibility[key] !== false;
           checkbox.disabled = header.hideable === false;
           item.appendChild(checkbox);
-          const label = createElement("span", "flex-1 truncate", header.label);
+          const label = createElement$7("span", "flex-1 truncate", header.label, doc);
           item.appendChild(label);
           if (header.hideable === false) {
               item.title = "This column is always visible.";
-              item.appendChild(createElement("span", "rounded-full border border-slate-700/70 px-2 py-0.5 text-[0.6rem] font-semibold uppercase tracking-wide text-slate-400", "Pinned"));
+              item.appendChild(createElement$7("span", "rounded-full border border-slate-700/70 px-2 py-0.5 text-[0.6rem] font-semibold uppercase tracking-wide text-slate-400", "Pinned", doc));
           }
           checkbox.addEventListener("change", () => {
               if (header.hideable === false) {
@@ -1158,16 +1204,16 @@
           list.appendChild(item);
       }
       if (list.childElementCount === 0) {
-          hideColumnVisibilityMenu();
+          hideColumnVisibilityMenu(doc);
           return;
       }
       wrapper.appendChild(list);
       menu.replaceChildren(wrapper);
-      document.body.appendChild(menu);
+      doc.body.appendChild(menu);
       const menuRect = menu.getBoundingClientRect();
       const anchorRect = anchor.getBoundingClientRect();
-      const viewportWidth = window.innerWidth;
-      const viewportHeight = window.innerHeight;
+      const viewportWidth = win.innerWidth;
+      const viewportHeight = win.innerHeight;
       let top = anchorRect.bottom + 6;
       let left = anchorRect.left;
       if (top + menuRect.height > viewportHeight - 8) {
@@ -1186,6 +1232,7 @@
       menu.style.top = `${top}px`;
       menu.style.visibility = "visible";
       const cleanupHandlers = [];
+      const state = ensureColumnMenuState(doc);
       const cleanupMenu = () => {
           while (cleanupHandlers.length > 0) {
               const cleanup = cleanupHandlers.pop();
@@ -1199,13 +1246,13 @@
           if (menu.parentElement) {
               menu.parentElement.removeChild(menu);
           }
-          if (columnMenuCleanup === cleanupMenu) {
-              columnMenuCleanup = null;
+          if (state.cleanup === cleanupMenu) {
+              state.cleanup = null;
           }
       };
-      columnMenuCleanup = cleanupMenu;
-      window.setTimeout(() => {
-          if (columnMenuCleanup !== cleanupMenu) {
+      state.cleanup = cleanupMenu;
+      win.setTimeout(() => {
+          if (state.cleanup !== cleanupMenu) {
               return;
           }
           const handlePointerDown = (event) => {
@@ -1213,29 +1260,29 @@
                   return;
               }
               if (!menu.contains(event.target) && !anchor.contains(event.target)) {
-                  hideColumnVisibilityMenu();
+                  hideColumnVisibilityMenu(doc);
               }
           };
           const handleKeyDown = (event) => {
               if (event.key === "Escape") {
-                  hideColumnVisibilityMenu();
+                  hideColumnVisibilityMenu(doc);
               }
           };
           const handleScroll = (event) => {
               if (!event.isTrusted) {
                   return;
               }
-              hideColumnVisibilityMenu();
+              hideColumnVisibilityMenu(doc);
           };
-          const handleBlur = () => hideColumnVisibilityMenu();
-          document.addEventListener("pointerdown", handlePointerDown, true);
-          document.addEventListener("keydown", handleKeyDown, true);
-          window.addEventListener("scroll", handleScroll, true);
-          window.addEventListener("blur", handleBlur);
-          cleanupHandlers.push(() => document.removeEventListener("pointerdown", handlePointerDown, true));
-          cleanupHandlers.push(() => document.removeEventListener("keydown", handleKeyDown, true));
-          cleanupHandlers.push(() => window.removeEventListener("scroll", handleScroll, true));
-          cleanupHandlers.push(() => window.removeEventListener("blur", handleBlur));
+          const handleBlur = () => hideColumnVisibilityMenu(doc);
+          doc.addEventListener("pointerdown", handlePointerDown, true);
+          doc.addEventListener("keydown", handleKeyDown, true);
+          win.addEventListener("scroll", handleScroll, true);
+          win.addEventListener("blur", handleBlur);
+          cleanupHandlers.push(() => doc.removeEventListener("pointerdown", handlePointerDown, true));
+          cleanupHandlers.push(() => doc.removeEventListener("keydown", handleKeyDown, true));
+          cleanupHandlers.push(() => win.removeEventListener("scroll", handleScroll, true));
+          cleanupHandlers.push(() => win.removeEventListener("blur", handleBlur));
       }, 0);
   }
   function compareSortValues(a, b, direction) {
@@ -1283,6 +1330,20 @@
       return true;
   }
 
+  let viewDocument$6 = document;
+  function withViewDocument$6(doc, fn) {
+      const previous = viewDocument$6;
+      viewDocument$6 = doc;
+      try {
+          return fn();
+      }
+      finally {
+          viewDocument$6 = previous;
+      }
+  }
+  function createElement$6(tag, className, textContent) {
+      return createElement$7(tag, className, textContent, viewDocument$6);
+  }
   const PLAYER_ALERT_CLASS = "bg-red-500 text-white";
   const PLAYER_COUNT_CLASS = "font-semibold";
   const PLAYER_NUMERIC_CLASS = "font-mono text-[0.75rem]";
@@ -1418,6 +1479,7 @@
                   x: event.clientX,
                   y: event.clientY,
                   title: target.name,
+                  document: viewDocument$6,
                   items: [
                       {
                           label: actionLabel,
@@ -1469,6 +1531,7 @@
               x: event.clientX,
               y: event.clientY,
               title: target.label,
+              document: viewDocument$6,
               items,
           });
       };
@@ -1481,7 +1544,7 @@
       const metrics = getMetrics(player, snapshot, metricsCache);
       const rowKey = player.id;
       const isLobbyPlayer = Boolean(player.isLobbyPlayer);
-      const tr = createElement("tr", "hover:bg-slate-800/50 transition-colors");
+      const tr = createElement$6("tr", "hover:bg-slate-800/50 transition-colors");
       tr.dataset.rowKey = rowKey;
       applyPersistentHover(tr, leaf, rowKey, "bg-slate-800/50");
       if (!isLobbyPlayer) {
@@ -1497,7 +1560,7 @@
       }
       const labelHeader = headers.find((header) => header.key === "label");
       if (labelHeader) {
-          const firstCell = createElement("td", cellClassForColumn(labelHeader, "align-top"));
+          const firstCell = createElement$6("td", cellClassForColumn(labelHeader, "align-top"));
           let subtitleClassName;
           const subtitle = (() => {
               if (isLobbyPlayer) {
@@ -1564,7 +1627,7 @@
       const { group, leaf, snapshot, tbody, requestRender, groupType, metricsCache, actions, headers, } = options;
       const groupKey = `${groupType}:${group.key}`;
       const expanded = leaf.expandedGroups.has(groupKey);
-      const row = createElement("tr", "bg-slate-900/70 hover:bg-slate-800/60 transition-colors font-semibold");
+      const row = createElement$6("tr", "bg-slate-900/70 hover:bg-slate-800/60 transition-colors font-semibold");
       row.dataset.groupKey = groupKey;
       applyPersistentHover(row, leaf, groupKey, "bg-slate-800/60");
       const eligiblePlayers = group.players.filter((player) => !player.isSelf && !player.isLobbyPlayer);
@@ -1577,7 +1640,7 @@
       }
       const labelHeader = headers.find((header) => header.key === "label");
       if (labelHeader) {
-          const firstCell = createElement("td", cellClassForColumn(labelHeader, "align-top", {
+          const firstCell = createElement$6("td", cellClassForColumn(labelHeader, "align-top", {
               variant: "expandable",
           }));
           firstCell.appendChild(createLabelBlock({
@@ -1642,7 +1705,7 @@
           const className = [config?.cellClass, config?.getValueClass?.(context)]
               .filter(Boolean)
               .join(" ");
-          const td = createElement("td", cellClassForColumn(column, className));
+          const td = createElement$6("td", cellClassForColumn(column, className));
           td.textContent = config?.getValue?.(context) ?? "";
           row.appendChild(td);
       }
@@ -1667,27 +1730,28 @@
           ]
               .filter(Boolean)
               .join(" ");
-          const td = createElement("td", cellClassForColumn(column, className, { variant }));
+          const td = createElement$6("td", cellClassForColumn(column, className, { variant }));
           td.textContent = config?.getAggregateValue?.(context) ?? "";
           row.appendChild(td);
       }
   }
   function createLabelBlock(options) {
       const { label, subtitle, subtitleClassName, indent, expanded, toggleAttribute, rowKey, onToggle, focus, persistHover, onToggleHoverChange, } = options;
-      const container = createElement("div", "flex items-start gap-3");
+      const container = createElement$6("div", "flex items-start gap-3");
       container.style.marginLeft = `${indent * 1.5}rem`;
-      const labelBlock = createElement("div", "space-y-1");
+      const labelBlock = createElement$6("div", "space-y-1");
       const labelEl = createPlayerNameElement(label, focus, {
           asBlock: true,
           className: "block font-semibold text-slate-100 transition-colors hover:text-sky-200",
+          document: viewDocument$6,
       });
       labelBlock.appendChild(labelEl);
       if (subtitle) {
           const defaultSubtitleClass = "text-[0.65rem] uppercase tracking-wide text-slate-400";
-          labelBlock.appendChild(createElement("div", subtitleClassName ?? defaultSubtitleClass, subtitle));
+          labelBlock.appendChild(createElement$6("div", subtitleClassName ?? defaultSubtitleClass, subtitle));
       }
       if (toggleAttribute && rowKey && typeof expanded === "boolean" && onToggle) {
-          const button = createElement("button", "flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-slate-700 bg-slate-800 text-slate-300 hover:text-slate-50 focus:outline-none focus:ring-2 focus:ring-sky-500/60 transition-colors");
+          const button = createElement$6("button", "flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-slate-700 bg-slate-800 text-slate-300 hover:text-slate-50 focus:outline-none focus:ring-2 focus:ring-sky-500/60 transition-colors");
           button.setAttribute(toggleAttribute, rowKey);
           button.type = "button";
           let currentExpanded = expanded;
@@ -1966,146 +2030,173 @@
       });
   }
   function renderPlayersView(options) {
-      const { leaf, snapshot, sortState, onSort, existingContainer, actions } = options;
-      const metricsCache = new Map();
-      const visibleHeaders = getVisibleHeaders(leaf, leaf.view, TABLE_HEADERS);
-      const { container, tbody } = createTableShell({
-          sortState,
-          onSort,
-          existingContainer,
-          view: leaf.view,
-          headers: visibleHeaders,
-      });
-      const players = [...snapshot.players].sort((a, b) => comparePlayers({ a, b, sortState, snapshot, metricsCache }));
-      for (const player of players) {
-          appendPlayerRows({
-              player,
-              indent: 0,
-              leaf,
-              snapshot,
-              tbody,
-              metricsCache,
-              actions,
+      return withViewDocument$6(options.ui.document, () => {
+          const { leaf, snapshot, sortState, onSort, existingContainer, actions } = options;
+          const metricsCache = new Map();
+          const visibleHeaders = getVisibleHeaders(leaf, leaf.view, TABLE_HEADERS);
+          const { container, tbody } = createTableShell({
+              sortState,
+              onSort,
+              existingContainer,
+              view: leaf.view,
               headers: visibleHeaders,
+              document: viewDocument$6,
           });
-      }
-      registerContextMenuDelegation(container, actions);
-      return container;
+          const players = [...snapshot.players].sort((a, b) => comparePlayers({ a, b, sortState, snapshot, metricsCache }));
+          for (const player of players) {
+              appendPlayerRows({
+                  player,
+                  indent: 0,
+                  leaf,
+                  snapshot,
+                  tbody,
+                  metricsCache,
+                  actions,
+                  headers: visibleHeaders,
+              });
+          }
+          registerContextMenuDelegation(container, actions);
+          return container;
+      });
   }
   function renderClanView(options) {
-      const { leaf, snapshot, requestRender, sortState, onSort, existingContainer, actions, } = options;
-      const metricsCache = new Map();
-      const visibleHeaders = getVisibleHeaders(leaf, leaf.view, TABLE_HEADERS);
-      const { container, tbody } = createTableShell({
-          sortState,
-          onSort,
-          existingContainer,
-          view: leaf.view,
-          headers: visibleHeaders,
-      });
-      const groups = groupPlayers({
-          players: snapshot.players,
-          snapshot,
-          metricsCache,
-          getKey: (player) => extractClanTag(player.name),
-          sortState,
-      });
-      for (const group of groups) {
-          appendGroupRows({
-              group,
-              leaf,
-              snapshot,
-              tbody,
-              requestRender,
-              groupType: "clan",
-              metricsCache,
-              actions,
+      return withViewDocument$6(options.ui.document, () => {
+          const { leaf, snapshot, requestRender, sortState, onSort, existingContainer, actions, } = options;
+          const metricsCache = new Map();
+          const visibleHeaders = getVisibleHeaders(leaf, leaf.view, TABLE_HEADERS);
+          const { container, tbody } = createTableShell({
+              sortState,
+              onSort,
+              existingContainer,
+              view: leaf.view,
               headers: visibleHeaders,
+              document: viewDocument$6,
           });
-      }
-      registerContextMenuDelegation(container, actions);
-      return container;
+          const groups = groupPlayers({
+              players: snapshot.players,
+              snapshot,
+              metricsCache,
+              getKey: (player) => extractClanTag(player.name),
+              sortState,
+          });
+          for (const group of groups) {
+              appendGroupRows({
+                  group,
+                  leaf,
+                  snapshot,
+                  tbody,
+                  requestRender,
+                  groupType: "clan",
+                  metricsCache,
+                  actions,
+                  headers: visibleHeaders,
+              });
+          }
+          registerContextMenuDelegation(container, actions);
+          return container;
+      });
   }
   function renderTeamView(options) {
-      const { leaf, snapshot, requestRender, sortState, onSort, existingContainer, actions, } = options;
-      const metricsCache = new Map();
-      const visibleHeaders = getVisibleHeaders(leaf, leaf.view, TABLE_HEADERS);
-      const { container, tbody } = createTableShell({
-          sortState,
-          onSort,
-          existingContainer,
-          view: leaf.view,
-          headers: visibleHeaders,
-      });
-      const groups = groupPlayers({
-          players: snapshot.players,
-          snapshot,
-          metricsCache,
-          getKey: (player) => player.team ?? "Solo",
-          sortState,
-      });
-      for (const group of groups) {
-          appendGroupRows({
-              group,
-              leaf,
-              snapshot,
-              tbody,
-              requestRender,
-              groupType: "team",
-              metricsCache,
-              actions,
+      return withViewDocument$6(options.ui.document, () => {
+          const { leaf, snapshot, requestRender, sortState, onSort, existingContainer, actions, } = options;
+          const metricsCache = new Map();
+          const visibleHeaders = getVisibleHeaders(leaf, leaf.view, TABLE_HEADERS);
+          const { container, tbody } = createTableShell({
+              sortState,
+              onSort,
+              existingContainer,
+              view: leaf.view,
               headers: visibleHeaders,
+              document: viewDocument$6,
           });
-      }
-      registerContextMenuDelegation(container, actions);
-      return container;
+          const groups = groupPlayers({
+              players: snapshot.players,
+              snapshot,
+              metricsCache,
+              getKey: (player) => player.team ?? "Solo",
+              sortState,
+          });
+          for (const group of groups) {
+              appendGroupRows({
+                  group,
+                  leaf,
+                  snapshot,
+                  tbody,
+                  requestRender,
+                  groupType: "team",
+                  metricsCache,
+                  actions,
+                  headers: visibleHeaders,
+              });
+          }
+          registerContextMenuDelegation(container, actions);
+          return container;
+      });
   }
 
-  function renderShipView(options) {
-      const { leaf, snapshot, sortState, onSort, existingContainer } = options;
-      const visibleHeaders = getVisibleHeaders(leaf, leaf.view, SHIP_HEADERS);
-      const { container, tbody } = createTableShell({
-          sortState,
-          onSort,
-          existingContainer,
-          view: leaf.view,
-          headers: visibleHeaders,
-      });
-      const playerLookup = new Map(snapshot.players.map((player) => [player.id, player]));
-      const ships = [...snapshot.ships].sort((a, b) => compareShips({ a, b, sortState }));
-      for (const ship of ships) {
-          const rowKey = `ship:${ship.id}`;
-          const row = createElement("tr", "hover:bg-slate-800/50 transition-colors");
-          applyPersistentHover(row, leaf, rowKey, "bg-slate-800/50");
-          row.dataset.rowKey = rowKey;
-          for (const column of visibleHeaders) {
-              const td = createElement("td", cellClassForColumn(column, getShipExtraCellClass(column.key)));
-              switch (column.key) {
-                  case "origin":
-                      td.appendChild(createCoordinateButton(ship.origin));
-                      break;
-                  case "current":
-                      td.appendChild(createCoordinateButton(ship.current));
-                      break;
-                  case "destination":
-                      td.appendChild(createCoordinateButton(ship.destination));
-                      break;
-                  case "owner": {
-                      const ownerRecord = playerLookup.get(ship.ownerId);
-                      td.appendChild(createPlayerNameElement(ship.ownerName, ownerRecord?.position, {
-                          className: "inline-flex max-w-full items-center gap-1 text-left text-slate-200 hover:text-sky-200",
-                      }));
-                      break;
-                  }
-                  default:
-                      td.textContent = getShipCellValue(column.key, ship);
-                      break;
-              }
-              row.appendChild(td);
-          }
-          tbody.appendChild(row);
+  let viewDocument$5 = document;
+  function withViewDocument$5(doc, fn) {
+      const previous = viewDocument$5;
+      viewDocument$5 = doc;
+      try {
+          return fn();
       }
-      return container;
+      finally {
+          viewDocument$5 = previous;
+      }
+  }
+  function createElement$5(tag, className, textContent) {
+      return createElement$7(tag, className, textContent, viewDocument$5);
+  }
+  function renderShipView(options) {
+      return withViewDocument$5(options.ui.document, () => {
+          const { leaf, snapshot, sortState, onSort, existingContainer } = options;
+          const visibleHeaders = getVisibleHeaders(leaf, leaf.view, SHIP_HEADERS);
+          const { container, tbody } = createTableShell({
+              sortState,
+              onSort,
+              existingContainer,
+              view: leaf.view,
+              headers: visibleHeaders,
+              document: viewDocument$5,
+          });
+          const playerLookup = new Map(snapshot.players.map((player) => [player.id, player]));
+          const ships = [...snapshot.ships].sort((a, b) => compareShips({ a, b, sortState }));
+          for (const ship of ships) {
+              const rowKey = `ship:${ship.id}`;
+              const row = createElement$5("tr", "hover:bg-slate-800/50 transition-colors");
+              applyPersistentHover(row, leaf, rowKey, "bg-slate-800/50");
+              row.dataset.rowKey = rowKey;
+              for (const column of visibleHeaders) {
+                  const td = createElement$5("td", cellClassForColumn(column, getShipExtraCellClass(column.key)));
+                  switch (column.key) {
+                      case "origin":
+                          td.appendChild(createCoordinateButton(ship.origin));
+                          break;
+                      case "current":
+                          td.appendChild(createCoordinateButton(ship.current));
+                          break;
+                      case "destination":
+                          td.appendChild(createCoordinateButton(ship.destination));
+                          break;
+                      case "owner": {
+                          const ownerRecord = playerLookup.get(ship.ownerId);
+                          td.appendChild(createPlayerNameElement(ship.ownerName, ownerRecord?.position, {
+                              className: "inline-flex max-w-full items-center gap-1 text-left text-slate-200 hover:text-sky-200",
+                              document: viewDocument$5,
+                          }));
+                          break;
+                      }
+                      default:
+                          td.textContent = getShipCellValue(column.key, ship);
+                          break;
+                  }
+                  row.appendChild(td);
+              }
+              tbody.appendChild(row);
+          }
+          return container;
+      });
   }
   function getShipExtraCellClass(key) {
       switch (key) {
@@ -2225,10 +2316,10 @@
   }
   function createCoordinateButton(summary) {
       if (!summary) {
-          return createElement("span", "text-slate-500", "–");
+          return createElement$5("span", "text-slate-500", "–");
       }
       const label = formatTileSummary(summary);
-      const button = createElement("button", "inline-flex max-w-full items-center rounded-sm px-0 text-left text-sky-300 transition-colors hover:text-sky-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-500/60", label);
+      const button = createElement$5("button", "inline-flex max-w-full items-center rounded-sm px-0 text-left text-sky-300 transition-colors hover:text-sky-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-500/60", label);
       button.type = "button";
       button.title = `Focus on ${label}`;
       attachImmediateTileFocus(button, () => {
@@ -2237,73 +2328,90 @@
       return button;
   }
 
-  function renderPlayerPanelView(options) {
-      const { leaf, snapshot, existingContainer } = options;
-      const containerClass = "relative flex-1 overflow-auto border border-slate-900/70 bg-slate-950/60 backdrop-blur-sm";
-      const canReuse = !!existingContainer &&
-          existingContainer.dataset.sidebarRole === SidebarRole.PlayerPanel &&
-          existingContainer.dataset.sidebarView === leaf.view;
-      const container = canReuse
-          ? existingContainer
-          : createElement("div", containerClass);
-      container.className = containerClass;
-      container.dataset.sidebarRole = SidebarRole.PlayerPanel;
-      container.dataset.sidebarView = leaf.view;
-      const content = createElement("div", "flex min-h-full flex-col gap-6 p-4 text-sm text-slate-100");
-      const playerId = leaf.selectedPlayerId;
-      if (!playerId) {
-          content.appendChild(createElement("p", "text-slate-400 italic", "Select a player from any table to view their details."));
+  let viewDocument$4 = document;
+  function withViewDocument$4(doc, fn) {
+      const previous = viewDocument$4;
+      viewDocument$4 = doc;
+      try {
+          return fn();
       }
-      else {
-          const player = snapshot.players.find((entry) => entry.id === playerId);
-          if (!player) {
-              content.appendChild(createElement("p", "text-slate-400 italic", "That player is no longer available in the latest snapshot."));
+      finally {
+          viewDocument$4 = previous;
+      }
+  }
+  function createElement$4(tag, className, textContent) {
+      return createElement$7(tag, className, textContent, viewDocument$4);
+  }
+  function renderPlayerPanelView(options) {
+      return withViewDocument$4(options.ui.document, () => {
+          const { leaf, snapshot, existingContainer } = options;
+          const containerClass = "relative flex-1 overflow-auto border border-slate-900/70 bg-slate-950/60 backdrop-blur-sm";
+          const canReuse = !!existingContainer &&
+              existingContainer.dataset.sidebarRole === SidebarRole.PlayerPanel &&
+              existingContainer.dataset.sidebarView === leaf.view;
+          const container = canReuse
+              ? existingContainer
+              : createElement$4("div", containerClass);
+          container.className = containerClass;
+          container.dataset.sidebarRole = SidebarRole.PlayerPanel;
+          container.dataset.sidebarView = leaf.view;
+          const content = createElement$4("div", "flex min-h-full flex-col gap-6 p-4 text-sm text-slate-100");
+          const playerId = leaf.selectedPlayerId;
+          if (!playerId) {
+              content.appendChild(createElement$4("p", "text-slate-400 italic", "Select a player from any table to view their details."));
           }
           else {
-              const header = createElement("div", "space-y-3");
-              const title = createElement("div", "flex flex-wrap items-baseline justify-between gap-3");
-              const name = createPlayerNameElement(player.name, player.position, {
-                  asBlock: true,
-                  className: "text-lg font-semibold text-slate-100 transition-colors hover:text-sky-200",
-              });
-              title.appendChild(name);
-              const meta = [player.clan, player.team].filter(Boolean).join(" • ");
-              if (meta) {
-                  title.appendChild(createElement("div", "text-xs uppercase tracking-wide text-slate-400", meta));
+              const player = snapshot.players.find((entry) => entry.id === playerId);
+              if (!player) {
+                  content.appendChild(createElement$4("p", "text-slate-400 italic", "That player is no longer available in the latest snapshot."));
               }
-              header.appendChild(title);
-              const summary = createElement("div", "grid gap-3 sm:grid-cols-3 text-[0.75rem]");
-              summary.appendChild(createSummaryStat$1("Tiles", formatNumber(player.tiles)));
-              summary.appendChild(createSummaryStat$1("Gold", formatNumber(player.gold)));
-              summary.appendChild(createSummaryStat$1("Troops", formatTroopCount(player.troops)));
-              header.appendChild(summary);
-              const playerStoppedBySelf = isTradeStoppedBySelf(player);
-              const playerStoppedByOther = isTradeStoppedByOther(player);
-              if (playerStoppedBySelf || playerStoppedByOther) {
-                  let tradeMessage = "Trading is currently stopped with this player.";
-                  if (playerStoppedBySelf && playerStoppedByOther) {
-                      tradeMessage =
-                          "Trading is currently stopped by both you and this player.";
+              else {
+                  const header = createElement$4("div", "space-y-3");
+                  const title = createElement$4("div", "flex flex-wrap items-baseline justify-between gap-3");
+                  const name = createPlayerNameElement(player.name, player.position, {
+                      asBlock: true,
+                      className: "text-lg font-semibold text-slate-100 transition-colors hover:text-sky-200",
+                      document: viewDocument$4,
+                  });
+                  title.appendChild(name);
+                  const meta = [player.clan, player.team].filter(Boolean).join(" • ");
+                  if (meta) {
+                      title.appendChild(createElement$4("div", "text-xs uppercase tracking-wide text-slate-400", meta));
                   }
-                  else if (playerStoppedBySelf) {
-                      tradeMessage = "You have stopped trading with this player.";
+                  header.appendChild(title);
+                  const summary = createElement$4("div", "grid gap-3 sm:grid-cols-3 text-[0.75rem]");
+                  summary.appendChild(createSummaryStat$1("Tiles", formatNumber(player.tiles)));
+                  summary.appendChild(createSummaryStat$1("Gold", formatNumber(player.gold)));
+                  summary.appendChild(createSummaryStat$1("Troops", formatTroopCount(player.troops)));
+                  header.appendChild(summary);
+                  const playerStoppedBySelf = isTradeStoppedBySelf(player);
+                  const playerStoppedByOther = isTradeStoppedByOther(player);
+                  if (playerStoppedBySelf || playerStoppedByOther) {
+                      let tradeMessage = "Trading is currently stopped with this player.";
+                      if (playerStoppedBySelf && playerStoppedByOther) {
+                          tradeMessage =
+                              "Trading is currently stopped by both you and this player.";
+                      }
+                      else if (playerStoppedBySelf) {
+                          tradeMessage = "You have stopped trading with this player.";
+                      }
+                      else {
+                          tradeMessage = "This player has stopped trading with you.";
+                      }
+                      header.appendChild(createElement$4("p", "text-[0.7rem] font-semibold uppercase tracking-wide text-amber-300", tradeMessage));
                   }
-                  else {
-                      tradeMessage = "This player has stopped trading with you.";
-                  }
-                  header.appendChild(createElement("p", "text-[0.7rem] font-semibold uppercase tracking-wide text-amber-300", tradeMessage));
+                  content.appendChild(header);
+                  content.appendChild(renderPlayerDetails(player, snapshot));
               }
-              content.appendChild(header);
-              content.appendChild(renderPlayerDetails(player, snapshot));
           }
-      }
-      container.replaceChildren(content);
-      return container;
+          container.replaceChildren(content);
+          return container;
+      });
   }
   function renderPlayerDetails(player, snapshot) {
-      const wrapper = createElement("div", "space-y-4 text-[0.75rem] text-slate-100");
+      const wrapper = createElement$4("div", "space-y-4 text-[0.75rem] text-slate-100");
       const metrics = computePlayerMetrics(player, snapshot);
-      const badgeRow = createElement("div", "flex flex-wrap gap-2");
+      const badgeRow = createElement$4("div", "flex flex-wrap gap-2");
       badgeRow.appendChild(createBadge("⚠️ Incoming", metrics.incoming));
       badgeRow.appendChild(createBadge("⚔️ Outgoing", metrics.outgoing));
       badgeRow.appendChild(createBadge("🌱 Expanding", metrics.expanding));
@@ -2314,7 +2422,7 @@
       badgeRow.appendChild(createBadge("☠️ Eliminated", metrics.eliminated));
       badgeRow.appendChild(createBadge("🛡️ Stable", metrics.stable, metrics.stable > 0));
       wrapper.appendChild(badgeRow);
-      const grid = createElement("div", "grid gap-4 md:grid-cols-2");
+      const grid = createElement$4("div", "grid gap-4 md:grid-cols-2");
       grid.appendChild(createDetailSection("Incoming attacks", player.incomingAttacks, (attack) => `${attack.from} – ${formatTroopCount(attack.troops)} troops`));
       grid.appendChild(createDetailSection("Outgoing attacks", player.outgoingAttacks, (attack) => `${attack.target} – ${formatTroopCount(attack.troops)} troops`));
       grid.appendChild(createDetailSection("Defensive supports", player.defensiveSupports, (support) => `${support.ally} – ${formatTroopCount(support.troops)} troops`));
@@ -2331,38 +2439,38 @@
       return wrapper;
   }
   function createDetailSection(title, entries, toLabel) {
-      const section = createElement("section", "space-y-2");
-      const heading = createElement("h4", "font-semibold uppercase text-slate-300 tracking-wide text-[0.7rem]", title);
+      const section = createElement$4("section", "space-y-2");
+      const heading = createElement$4("h4", "font-semibold uppercase text-slate-300 tracking-wide text-[0.7rem]", title);
       section.appendChild(heading);
       if (!entries.length) {
-          section.appendChild(createElement("p", "text-slate-500 italic", "No records."));
+          section.appendChild(createElement$4("p", "text-slate-500 italic", "No records."));
           return section;
       }
-      const list = createElement("ul", "space-y-2");
+      const list = createElement$4("ul", "space-y-2");
       for (const entry of entries) {
-          const item = createElement("li", "rounded-md border border-slate-800 bg-slate-900/80 px-3 py-2");
-          item.appendChild(createElement("div", "font-medium text-slate-200", toLabel(entry)));
+          const item = createElement$4("li", "rounded-md border border-slate-800 bg-slate-900/80 px-3 py-2");
+          item.appendChild(createElement$4("div", "font-medium text-slate-200", toLabel(entry)));
           list.appendChild(item);
       }
       section.appendChild(list);
       return section;
   }
   function createBadge(label, value, highlight = value > 0) {
-      const badge = createElement("span", `inline-flex items-center gap-1 rounded-full px-3 py-1 text-[0.65rem] font-semibold ${highlight
+      const badge = createElement$4("span", `inline-flex items-center gap-1 rounded-full px-3 py-1 text-[0.65rem] font-semibold ${highlight
         ? "bg-sky-500/20 text-sky-200 border border-sky-500/40"
         : "bg-slate-800/80 text-slate-300"}`);
       const [emoji, ...rest] = label.split(" ");
-      const emojiSpan = createElement("span", "text-base");
+      const emojiSpan = createElement$4("span", "text-base");
       emojiSpan.textContent = emoji;
       badge.appendChild(emojiSpan);
-      badge.appendChild(createElement("span", "", rest.join(" ")));
-      badge.appendChild(createElement("span", "font-mono text-[0.7rem]", String(value)));
+      badge.appendChild(createElement$4("span", "", rest.join(" ")));
+      badge.appendChild(createElement$4("span", "font-mono text-[0.7rem]", String(value)));
       return badge;
   }
   function createSummaryStat$1(label, value) {
-      const wrapper = createElement("div", "rounded-md border border-slate-800/70 bg-slate-900/70 px-3 py-2");
-      const title = createElement("div", "text-[0.65rem] uppercase tracking-wide text-slate-400", label);
-      const content = createElement("div", "font-mono text-base text-slate-100", value);
+      const wrapper = createElement$4("div", "rounded-md border border-slate-800/70 bg-slate-900/70 px-3 py-2");
+      const title = createElement$4("div", "text-[0.65rem] uppercase tracking-wide text-slate-400", label);
+      const content = createElement$4("div", "font-mono text-base text-slate-100", value);
       wrapper.appendChild(title);
       wrapper.appendChild(content);
       return wrapper;
@@ -2378,6 +2486,20 @@
       return snapshot.sidebarActions ?? EMPTY_ACTIONS_STATE;
   }
 
+  let viewDocument$3 = document;
+  function withViewDocument$3(doc, fn) {
+      const previous = viewDocument$3;
+      viewDocument$3 = doc;
+      try {
+          return fn();
+      }
+      finally {
+          viewDocument$3 = previous;
+      }
+  }
+  function createElement$3(tag, className, textContent) {
+      return createElement$7(tag, className, textContent, viewDocument$3);
+  }
   let editorSettingIdCounter = 0;
   function nextEditorSettingId() {
       editorSettingIdCounter += 1;
@@ -2432,486 +2554,492 @@
       }
   }
   function renderActionsDirectoryView(options) {
-      const { leaf, snapshot, existingContainer, actions, sortState, onSort } = options;
-      const state = getActionsState(snapshot);
-      const runningSignature = state.running.length === 0
-          ? "none"
-          : state.running
-              .map((run) => [run.id, run.actionId, run.status, run.lastUpdatedMs ?? "0"].join(":"))
-              .sort()
-              .join("|");
-      const signature = `${state.revision}:${state.runningRevision}:${state.selectedActionId ?? ""}:${runningSignature}`;
-      const sortSignature = `${sortState.key}:${sortState.direction}`;
-      const isDirectoryContainer = !!existingContainer &&
-          existingContainer.dataset.sidebarRole === SidebarRole.ActionsDirectory;
-      const visibleHeaders = getVisibleHeaders(leaf, leaf.view, ACTIONS_TABLE_HEADERS);
-      const visibilitySignature = getColumnVisibilitySignature(visibleHeaders);
-      if (isDirectoryContainer &&
-          existingContainer.dataset.signature === signature &&
-          existingContainer.dataset.sortState === sortSignature &&
-          existingContainer.dataset.columnVisibilitySignature === visibilitySignature) {
-          existingContainer.dataset.columnVisibilitySignature = visibilitySignature;
-          return existingContainer;
-      }
-      const { container, tbody } = createTableShell({
-          sortState,
-          onSort,
-          existingContainer: isDirectoryContainer ? existingContainer : undefined,
-          view: leaf.view,
-          headers: visibleHeaders,
-          role: SidebarRole.ActionsDirectory,
-      });
-      container.dataset.signature = signature;
-      container.dataset.sortState = sortSignature;
-      container.dataset.columnVisibilitySignature = visibilitySignature;
-      const runningLookup = new Set(state.running.map((run) => run.actionId));
-      const cellBaseClass = `${TABLE_CELL_BASE_CLASS} align-top`;
-      const visibleKeys = new Set(visibleHeaders.map((header) => header.key));
-      const getStatusRank = (action) => {
-          if (runningLookup.has(action.id)) {
-              return 0;
+      return withViewDocument$3(options.ui.document, () => {
+          const { leaf, snapshot, existingContainer, actions, sortState, onSort } = options;
+          const state = getActionsState(snapshot);
+          const runningSignature = state.running.length === 0
+              ? "none"
+              : state.running
+                  .map((run) => [run.id, run.actionId, run.status, run.lastUpdatedMs ?? "0"].join(":"))
+                  .sort()
+                  .join("|");
+          const signature = `${state.revision}:${state.runningRevision}:${state.selectedActionId ?? ""}:${runningSignature}`;
+          const sortSignature = `${sortState.key}:${sortState.direction}`;
+          const isDirectoryContainer = !!existingContainer &&
+              existingContainer.dataset.sidebarRole === SidebarRole.ActionsDirectory;
+          const visibleHeaders = getVisibleHeaders(leaf, leaf.view, ACTIONS_TABLE_HEADERS);
+          const visibilitySignature = getColumnVisibilitySignature(visibleHeaders);
+          if (isDirectoryContainer &&
+              existingContainer.dataset.signature === signature &&
+              existingContainer.dataset.sortState === sortSignature &&
+              existingContainer.dataset.columnVisibilitySignature === visibilitySignature) {
+              existingContainer.dataset.columnVisibilitySignature = visibilitySignature;
+              return existingContainer;
           }
-          return action.enabled ? 1 : 2;
-      };
-      const getEnabledRank = (action) => action.enabled ? 0 : 1;
-      if (state.actions.length === 0) {
-          const row = createElement("tr", "hover:bg-transparent");
-          const cell = createElement("td", `${cellBaseClass} text-center text-slate-400`, "No actions yet. Create a new action to get started.");
-          cell.colSpan = Math.max(1, visibleHeaders.length);
-          row.appendChild(cell);
-          tbody.appendChild(row);
-      }
-      else {
-          const sortedActions = [...state.actions];
-          if (sortState.key === "label") {
-              sortedActions.sort((a, b) => compareSortValues(a.name.toLowerCase(), b.name.toLowerCase(), sortState.direction));
-          }
-          else if (sortState.key === "status") {
-              sortedActions.sort((a, b) => {
-                  const cmp = compareSortValues(getStatusRank(a), getStatusRank(b), sortState.direction);
-                  if (cmp !== 0) {
-                      return cmp;
-                  }
-                  return compareSortValues(a.name.toLowerCase(), b.name.toLowerCase(), "asc");
-              });
-          }
-          else if (sortState.key === "enabled") {
-              sortedActions.sort((a, b) => {
-                  const cmp = compareSortValues(getEnabledRank(a), getEnabledRank(b), sortState.direction);
-                  if (cmp !== 0) {
-                      return cmp;
-                  }
-                  return compareSortValues(a.name.toLowerCase(), b.name.toLowerCase(), "asc");
-              });
-          }
-          for (const action of sortedActions) {
-              const isSelected = state.selectedActionId === action.id;
-              const isRunning = runningLookup.has(action.id);
-              const row = createElement("tr", "cursor-pointer transition-colors hover:bg-slate-800/40");
-              applyRowSelectionIndicator(row, isSelected);
-              row.dataset.actionId = action.id;
-              row.addEventListener("click", () => {
-                  actions.selectAction?.(action.id);
-              });
-              const nameCell = createElement("td", `${cellBaseClass} text-left`);
-              const nameLine = createElement("div", "flex flex-wrap items-center gap-2");
-              const nameLabel = createPlayerNameElement(action.name, undefined, {
-                  className: "font-semibold text-slate-100 transition-colors hover:text-sky-200",
-              });
-              nameLine.appendChild(nameLabel);
-              nameCell.appendChild(nameLine);
-              const statusCell = createElement("td", `${cellBaseClass} text-left`);
-              const statusBadges = createElement("div", "flex flex-wrap items-center gap-2");
-              const updateStatusBadges = (enabled) => {
-                  statusBadges.replaceChildren();
-                  if (isRunning) {
-                      statusBadges.appendChild(createActionStatusBadge("Running"));
-                  }
-                  if (!enabled) {
-                      statusBadges.appendChild(createActionStatusBadge("Disabled"));
-                  }
-                  else if (!isRunning) {
-                      statusBadges.appendChild(createActionStatusBadge("Enabled"));
-                  }
-              };
-              let currentEnabled = action.enabled;
-              updateStatusBadges(currentEnabled);
-              statusCell.appendChild(statusBadges);
-              if (visibleKeys.has("status")) {
-                  row.appendChild(statusCell);
+          const { container, tbody } = createTableShell({
+              sortState,
+              onSort,
+              existingContainer: isDirectoryContainer ? existingContainer : undefined,
+              view: leaf.view,
+              headers: visibleHeaders,
+              role: SidebarRole.ActionsDirectory,
+              document: viewDocument$3,
+          });
+          container.dataset.signature = signature;
+          container.dataset.sortState = sortSignature;
+          container.dataset.columnVisibilitySignature = visibilitySignature;
+          const runningLookup = new Set(state.running.map((run) => run.actionId));
+          const cellBaseClass = `${TABLE_CELL_BASE_CLASS} align-top`;
+          const visibleKeys = new Set(visibleHeaders.map((header) => header.key));
+          const getStatusRank = (action) => {
+              if (runningLookup.has(action.id)) {
+                  return 0;
               }
-              const toggleCell = createElement("td", `${cellBaseClass} text-center`);
-              const toggleWrapper = createElement("div", "flex justify-center");
-              const toggleButton = createElement("button", "relative inline-flex h-6 w-12 shrink-0 items-center rounded-full border transition-colors focus:outline-none focus:ring-2 focus:ring-sky-500/60");
-              toggleButton.type = "button";
-              toggleButton.setAttribute("role", "switch");
-              const srToggleLabel = createElement("span", "sr-only", "Toggle action");
-              const toggleKnob = createElement("span", "pointer-events-none absolute left-1 h-4 w-4 rounded-full shadow transition-transform duration-150 ease-out");
-              toggleButton.appendChild(srToggleLabel);
-              toggleButton.appendChild(toggleKnob);
-              const runButton = createElement("button", "rounded-md border border-sky-500/50 bg-sky-500/10 px-3 py-1 text-xs font-semibold text-sky-100 transition-colors hover:bg-sky-500/20", "Run");
-              runButton.type = "button";
-              const updateRunButton = (enabled) => {
-                  if (enabled) {
-                      runButton.disabled = false;
-                      runButton.classList.remove("cursor-not-allowed", "opacity-40", "pointer-events-none", "hover:bg-sky-500/10");
-                      runButton.classList.add("hover:bg-sky-500/20");
-                      runButton.title = "";
-                  }
-                  else {
-                      runButton.disabled = true;
-                      runButton.classList.add("cursor-not-allowed", "opacity-40", "pointer-events-none", "hover:bg-sky-500/10");
-                      runButton.classList.remove("hover:bg-sky-500/20");
-                      runButton.title = "Enable this action to run it.";
-                  }
-              };
-              updateRunButton(currentEnabled);
-              runButton.addEventListener("click", (event) => {
-                  event.stopPropagation();
-                  if (!currentEnabled) {
-                      return;
-                  }
-                  actions.startAction?.(action.id);
-              });
-              const editButton = createElement("button", "rounded-md border border-slate-700 bg-slate-800/70 px-3 py-1 text-xs font-medium text-slate-200 transition-colors hover:border-sky-500/60 hover:text-sky-200", "Edit");
-              editButton.type = "button";
-              editButton.addEventListener("click", (event) => {
-                  event.stopPropagation();
-                  actions.selectAction?.(action.id);
-              });
-              const updateToggleAppearance = (enabled) => {
-                  toggleButton.setAttribute("aria-checked", enabled ? "true" : "false");
-                  toggleButton.classList.toggle("border-emerald-400/60", enabled);
-                  toggleButton.classList.toggle("bg-emerald-500/40", enabled);
-                  toggleButton.classList.toggle("hover:bg-emerald-500/50", enabled);
-                  toggleButton.classList.toggle("border-slate-700", !enabled);
-                  toggleButton.classList.toggle("bg-slate-800/70", !enabled);
-                  toggleButton.classList.toggle("hover:bg-slate-700/80", !enabled);
-                  toggleKnob.classList.toggle("bg-emerald-100", enabled);
-                  toggleKnob.classList.toggle("bg-slate-300", !enabled);
-                  toggleKnob.style.transform = enabled
-                      ? "translateX(1.5rem)"
-                      : "translateX(0)";
-                  toggleButton.title = enabled
-                      ? "Disable this action"
-                      : "Enable this action";
-              };
-              updateToggleAppearance(currentEnabled);
-              toggleButton.addEventListener("click", (event) => {
-                  event.stopPropagation();
-                  currentEnabled = !currentEnabled;
-                  updateToggleAppearance(currentEnabled);
-                  updateRunButton(currentEnabled);
-                  updateStatusBadges(currentEnabled);
-                  actions.setActionEnabled?.(action.id, currentEnabled);
-              });
-              toggleWrapper.appendChild(toggleButton);
-              toggleCell.appendChild(toggleWrapper);
-              if (visibleKeys.has("toggle")) {
-                  row.appendChild(toggleCell);
-              }
-              const controlsCell = createElement("td", `${cellBaseClass} text-right`);
-              const controls = createElement("div", "flex justify-end gap-2");
-              controls.appendChild(runButton);
-              controls.appendChild(editButton);
-              controlsCell.appendChild(controls);
-              if (visibleKeys.has("controls")) {
-                  row.appendChild(controlsCell);
-              }
-              if (visibleKeys.has("name")) {
-                  row.insertBefore(nameCell, row.firstChild);
-              }
+              return action.enabled ? 1 : 2;
+          };
+          const getEnabledRank = (action) => action.enabled ? 0 : 1;
+          if (state.actions.length === 0) {
+              const row = createElement$3("tr", "hover:bg-transparent");
+              const cell = createElement$3("td", `${cellBaseClass} text-center text-slate-400`, "No actions yet. Create a new action to get started.");
+              cell.colSpan = Math.max(1, visibleHeaders.length);
+              row.appendChild(cell);
               tbody.appendChild(row);
           }
-      }
-      return container;
+          else {
+              const sortedActions = [...state.actions];
+              if (sortState.key === "label") {
+                  sortedActions.sort((a, b) => compareSortValues(a.name.toLowerCase(), b.name.toLowerCase(), sortState.direction));
+              }
+              else if (sortState.key === "status") {
+                  sortedActions.sort((a, b) => {
+                      const cmp = compareSortValues(getStatusRank(a), getStatusRank(b), sortState.direction);
+                      if (cmp !== 0) {
+                          return cmp;
+                      }
+                      return compareSortValues(a.name.toLowerCase(), b.name.toLowerCase(), "asc");
+                  });
+              }
+              else if (sortState.key === "enabled") {
+                  sortedActions.sort((a, b) => {
+                      const cmp = compareSortValues(getEnabledRank(a), getEnabledRank(b), sortState.direction);
+                      if (cmp !== 0) {
+                          return cmp;
+                      }
+                      return compareSortValues(a.name.toLowerCase(), b.name.toLowerCase(), "asc");
+                  });
+              }
+              for (const action of sortedActions) {
+                  const isSelected = state.selectedActionId === action.id;
+                  const isRunning = runningLookup.has(action.id);
+                  const row = createElement$3("tr", "cursor-pointer transition-colors hover:bg-slate-800/40");
+                  applyRowSelectionIndicator(row, isSelected);
+                  row.dataset.actionId = action.id;
+                  row.addEventListener("click", () => {
+                      actions.selectAction?.(action.id);
+                  });
+                  const nameCell = createElement$3("td", `${cellBaseClass} text-left`);
+                  const nameLine = createElement$3("div", "flex flex-wrap items-center gap-2");
+                  const nameLabel = createPlayerNameElement(action.name, undefined, {
+                      className: "font-semibold text-slate-100 transition-colors hover:text-sky-200",
+                      document: viewDocument$3,
+                  });
+                  nameLine.appendChild(nameLabel);
+                  nameCell.appendChild(nameLine);
+                  const statusCell = createElement$3("td", `${cellBaseClass} text-left`);
+                  const statusBadges = createElement$3("div", "flex flex-wrap items-center gap-2");
+                  const updateStatusBadges = (enabled) => {
+                      statusBadges.replaceChildren();
+                      if (isRunning) {
+                          statusBadges.appendChild(createActionStatusBadge("Running"));
+                      }
+                      if (!enabled) {
+                          statusBadges.appendChild(createActionStatusBadge("Disabled"));
+                      }
+                      else if (!isRunning) {
+                          statusBadges.appendChild(createActionStatusBadge("Enabled"));
+                      }
+                  };
+                  let currentEnabled = action.enabled;
+                  updateStatusBadges(currentEnabled);
+                  statusCell.appendChild(statusBadges);
+                  if (visibleKeys.has("status")) {
+                      row.appendChild(statusCell);
+                  }
+                  const toggleCell = createElement$3("td", `${cellBaseClass} text-center`);
+                  const toggleWrapper = createElement$3("div", "flex justify-center");
+                  const toggleButton = createElement$3("button", "relative inline-flex h-6 w-12 shrink-0 items-center rounded-full border transition-colors focus:outline-none focus:ring-2 focus:ring-sky-500/60");
+                  toggleButton.type = "button";
+                  toggleButton.setAttribute("role", "switch");
+                  const srToggleLabel = createElement$3("span", "sr-only", "Toggle action");
+                  const toggleKnob = createElement$3("span", "pointer-events-none absolute left-1 h-4 w-4 rounded-full shadow transition-transform duration-150 ease-out");
+                  toggleButton.appendChild(srToggleLabel);
+                  toggleButton.appendChild(toggleKnob);
+                  const runButton = createElement$3("button", "rounded-md border border-sky-500/50 bg-sky-500/10 px-3 py-1 text-xs font-semibold text-sky-100 transition-colors hover:bg-sky-500/20", "Run");
+                  runButton.type = "button";
+                  const updateRunButton = (enabled) => {
+                      if (enabled) {
+                          runButton.disabled = false;
+                          runButton.classList.remove("cursor-not-allowed", "opacity-40", "pointer-events-none", "hover:bg-sky-500/10");
+                          runButton.classList.add("hover:bg-sky-500/20");
+                          runButton.title = "";
+                      }
+                      else {
+                          runButton.disabled = true;
+                          runButton.classList.add("cursor-not-allowed", "opacity-40", "pointer-events-none", "hover:bg-sky-500/10");
+                          runButton.classList.remove("hover:bg-sky-500/20");
+                          runButton.title = "Enable this action to run it.";
+                      }
+                  };
+                  updateRunButton(currentEnabled);
+                  runButton.addEventListener("click", (event) => {
+                      event.stopPropagation();
+                      if (!currentEnabled) {
+                          return;
+                      }
+                      actions.startAction?.(action.id);
+                  });
+                  const editButton = createElement$3("button", "rounded-md border border-slate-700 bg-slate-800/70 px-3 py-1 text-xs font-medium text-slate-200 transition-colors hover:border-sky-500/60 hover:text-sky-200", "Edit");
+                  editButton.type = "button";
+                  editButton.addEventListener("click", (event) => {
+                      event.stopPropagation();
+                      actions.selectAction?.(action.id);
+                  });
+                  const updateToggleAppearance = (enabled) => {
+                      toggleButton.setAttribute("aria-checked", enabled ? "true" : "false");
+                      toggleButton.classList.toggle("border-emerald-400/60", enabled);
+                      toggleButton.classList.toggle("bg-emerald-500/40", enabled);
+                      toggleButton.classList.toggle("hover:bg-emerald-500/50", enabled);
+                      toggleButton.classList.toggle("border-slate-700", !enabled);
+                      toggleButton.classList.toggle("bg-slate-800/70", !enabled);
+                      toggleButton.classList.toggle("hover:bg-slate-700/80", !enabled);
+                      toggleKnob.classList.toggle("bg-emerald-100", enabled);
+                      toggleKnob.classList.toggle("bg-slate-300", !enabled);
+                      toggleKnob.style.transform = enabled
+                          ? "translateX(1.5rem)"
+                          : "translateX(0)";
+                      toggleButton.title = enabled
+                          ? "Disable this action"
+                          : "Enable this action";
+                  };
+                  updateToggleAppearance(currentEnabled);
+                  toggleButton.addEventListener("click", (event) => {
+                      event.stopPropagation();
+                      currentEnabled = !currentEnabled;
+                      updateToggleAppearance(currentEnabled);
+                      updateRunButton(currentEnabled);
+                      updateStatusBadges(currentEnabled);
+                      actions.setActionEnabled?.(action.id, currentEnabled);
+                  });
+                  toggleWrapper.appendChild(toggleButton);
+                  toggleCell.appendChild(toggleWrapper);
+                  if (visibleKeys.has("toggle")) {
+                      row.appendChild(toggleCell);
+                  }
+                  const controlsCell = createElement$3("td", `${cellBaseClass} text-right`);
+                  const controls = createElement$3("div", "flex justify-end gap-2");
+                  controls.appendChild(runButton);
+                  controls.appendChild(editButton);
+                  controlsCell.appendChild(controls);
+                  if (visibleKeys.has("controls")) {
+                      row.appendChild(controlsCell);
+                  }
+                  if (visibleKeys.has("name")) {
+                      row.insertBefore(nameCell, row.firstChild);
+                  }
+                  tbody.appendChild(row);
+              }
+          }
+          return container;
+      });
   }
   function renderActionEditorView(options) {
-      const { leaf, snapshot, existingContainer, actions } = options;
-      const state = getActionsState(snapshot);
-      const selectedAction = state.actions.find((action) => action.id === state.selectedActionId);
-      const signature = selectedAction
-          ? `${state.revision}:${selectedAction.id}:${selectedAction.updatedAtMs}`
-          : `${state.revision}:none`;
-      const prior = existingContainer;
-      const isEditorContainer = !!prior && prior.dataset.sidebarRole === SidebarRole.ActionEditor;
-      const container = isEditorContainer
-          ? prior
-          : createElement("div", "relative flex-1 overflow-auto border border-slate-900/70 bg-slate-950/60 backdrop-blur-sm");
-      container.className =
-          "relative flex-1 overflow-auto border border-slate-900/70 bg-slate-950/60 backdrop-blur-sm";
-      container.dataset.sidebarRole = SidebarRole.ActionEditor;
-      container.dataset.sidebarView = leaf.view;
-      if (container.dataset.signature === signature) {
-          return container;
-      }
-      container.dataset.signature = signature;
-      container.formState = undefined;
-      if (!selectedAction) {
-          container.replaceChildren(createElement("div", "flex h-full items-center justify-center p-6 text-center text-sm text-slate-400", state.actions.length === 0
-              ? "Create an action to begin editing its script."
-              : "Select an action from the Actions view to edit its script and settings."));
-          return container;
-      }
-      const formState = {
-          id: selectedAction.id,
-          name: selectedAction.name,
-          runMode: selectedAction.runMode,
-          enabled: selectedAction.enabled,
-          description: selectedAction.description ?? "",
-          runIntervalTicks: selectedAction.runIntervalTicks ?? 1,
-          code: selectedAction.code,
-          settings: selectedAction.settings.map((setting) => ({
-              id: setting.id ?? nextEditorSettingId(),
-              key: setting.key,
-              label: setting.label,
-              type: setting.type,
-              value: setting.value ?? defaultValueForType(setting.type),
-          })),
-      };
-      container.formState = formState;
-      const layout = createElement("div", "flex min-h-full flex-col gap-6 p-4 text-sm text-slate-100");
-      const header = createElement("div", "flex flex-wrap items-start justify-between gap-3 border-b border-slate-800/70 pb-3");
-      const initialTitle = formState.name.trim();
-      const titlePreview = createElement("div", "text-lg font-semibold text-slate-100", initialTitle === "" ? "Untitled action" : formState.name);
-      const descriptionPreview = createElement("div", "text-sm text-slate-400", formState.description.trim() === ""
-          ? "Add a description..."
-          : formState.description);
-      if (formState.description.trim() === "") {
-          descriptionPreview.classList.add("italic", "text-slate-500");
-      }
-      const headerText = createElement("div", "flex flex-col gap-1");
-      headerText.appendChild(titlePreview);
-      headerText.appendChild(descriptionPreview);
-      header.appendChild(headerText);
-      const headerMeta = createElement("div", "flex flex-col items-end gap-2 text-right text-[0.7rem] text-slate-400");
-      const enabledToggleWrapper = createElement("div", "flex items-center");
-      const enabledToggle = createElement("button", "relative inline-flex h-6 w-12 shrink-0 items-center rounded-full border transition-colors focus:outline-none focus:ring-2 focus:ring-sky-500/60");
-      enabledToggle.type = "button";
-      enabledToggle.setAttribute("role", "switch");
-      const srEnabledLabel = createElement("span", "sr-only", "Toggle action");
-      const enabledToggleKnob = createElement("span", "pointer-events-none absolute left-1 h-4 w-4 rounded-full shadow transition-transform duration-150 ease-out");
-      enabledToggle.appendChild(srEnabledLabel);
-      enabledToggle.appendChild(enabledToggleKnob);
-      const updateToggleAppearance = (enabled) => {
-          enabledToggle.setAttribute("aria-checked", enabled ? "true" : "false");
-          enabledToggle.classList.toggle("border-emerald-400/60", enabled);
-          enabledToggle.classList.toggle("bg-emerald-500/40", enabled);
-          enabledToggle.classList.toggle("hover:bg-emerald-500/50", enabled);
-          enabledToggle.classList.toggle("border-slate-700", !enabled);
-          enabledToggle.classList.toggle("bg-slate-800/70", !enabled);
-          enabledToggle.classList.toggle("hover:bg-slate-700/80", !enabled);
-          enabledToggleKnob.classList.toggle("bg-emerald-100", enabled);
-          enabledToggleKnob.classList.toggle("bg-slate-300", !enabled);
-          enabledToggleKnob.style.transform = enabled
-              ? "translateX(1.5rem)"
-              : "translateX(0)";
-          enabledToggle.title = enabled
-              ? "Disable this action"
-              : "Enable this action";
-      };
-      updateToggleAppearance(formState.enabled);
-      enabledToggleWrapper.appendChild(enabledToggle);
-      headerMeta.appendChild(enabledToggleWrapper);
-      const headerMode = createElement("div", "", describeRunMode(formState.runMode));
-      headerMeta.appendChild(headerMode);
-      headerMeta.appendChild(createElement("div", "text-[0.65rem] uppercase tracking-wide text-slate-500", `Last updated ${formatTimestamp(selectedAction.updatedAtMs)}`));
-      header.appendChild(headerMeta);
-      layout.appendChild(header);
-      const nameField = createElement("label", "flex flex-col gap-1");
-      nameField.appendChild(createElement("span", "text-xs uppercase tracking-wide text-slate-400", "Name"));
-      const nameInput = document.createElement("input");
-      nameInput.type = "text";
-      nameInput.className =
-          "rounded-md border border-slate-700 bg-slate-900/80 px-3 py-1.5 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-sky-500/70";
-      nameInput.value = formState.name;
-      nameInput.addEventListener("input", () => {
-          formState.name = nameInput.value;
-          const trimmed = nameInput.value.trim();
-          titlePreview.textContent =
-              trimmed === "" ? "Untitled action" : nameInput.value;
-      });
-      nameField.appendChild(nameInput);
-      layout.appendChild(nameField);
-      const descriptionField = createElement("label", "flex flex-col gap-1");
-      descriptionField.appendChild(createElement("span", "text-xs uppercase tracking-wide text-slate-400", "Description"));
-      const descriptionInput = document.createElement("textarea");
-      descriptionInput.className =
-          "min-h-[72px] w-full rounded-md border border-slate-700 bg-slate-900/80 px-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-sky-500/70";
-      descriptionInput.value = formState.description;
-      descriptionInput.addEventListener("input", () => {
-          formState.description = descriptionInput.value;
-          const trimmed = descriptionInput.value.trim();
-          if (trimmed === "") {
-              descriptionPreview.textContent = "Add a description...";
-              descriptionPreview.classList.add("italic", "text-slate-500");
+      return withViewDocument$3(options.ui.document, () => {
+          const { leaf, snapshot, existingContainer, actions } = options;
+          const state = getActionsState(snapshot);
+          const selectedAction = state.actions.find((action) => action.id === state.selectedActionId);
+          const signature = selectedAction
+              ? `${state.revision}:${selectedAction.id}:${selectedAction.updatedAtMs}`
+              : `${state.revision}:none`;
+          const prior = existingContainer;
+          const isEditorContainer = !!prior && prior.dataset.sidebarRole === SidebarRole.ActionEditor;
+          const container = isEditorContainer
+              ? prior
+              : createElement$3("div", "relative flex-1 overflow-auto border border-slate-900/70 bg-slate-950/60 backdrop-blur-sm");
+          container.className =
+              "relative flex-1 overflow-auto border border-slate-900/70 bg-slate-950/60 backdrop-blur-sm";
+          container.dataset.sidebarRole = SidebarRole.ActionEditor;
+          container.dataset.sidebarView = leaf.view;
+          if (container.dataset.signature === signature) {
+              return container;
           }
-          else {
-              descriptionPreview.textContent = descriptionInput.value;
-              descriptionPreview.classList.remove("italic", "text-slate-500");
+          container.dataset.signature = signature;
+          container.formState = undefined;
+          if (!selectedAction) {
+              container.replaceChildren(createElement$3("div", "flex h-full items-center justify-center p-6 text-center text-sm text-slate-400", state.actions.length === 0
+                  ? "Create an action to begin editing its script."
+                  : "Select an action from the Actions view to edit its script and settings."));
+              return container;
           }
-      });
-      descriptionField.appendChild(descriptionInput);
-      layout.appendChild(descriptionField);
-      const runConfigRow = createElement("div", "flex flex-wrap gap-4");
-      const modeField = createElement("label", "flex flex-col gap-1");
-      modeField.appendChild(createElement("span", "text-xs uppercase tracking-wide text-slate-400", "Run mode"));
-      const modeSelect = document.createElement("select");
-      modeSelect.className =
-          "w-48 rounded-md border border-slate-700 bg-slate-900/80 px-3 py-1.5 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-sky-500/70";
-      for (const option of [
-          { value: "continuous", label: "Continuous" },
-          { value: "once", label: "Run once" },
-          { value: "event", label: "Event-driven" },
-      ]) {
-          const opt = document.createElement("option");
-          opt.value = option.value;
-          opt.textContent = option.label;
-          modeSelect.appendChild(opt);
-      }
-      modeSelect.value = formState.runMode;
-      modeField.appendChild(modeSelect);
-      runConfigRow.appendChild(modeField);
-      const intervalField = createElement("label", "flex flex-col gap-1");
-      intervalField.appendChild(createElement("span", "text-xs uppercase tracking-wide text-slate-400", "Run every (ticks)"));
-      const intervalInput = document.createElement("input");
-      intervalInput.type = "number";
-      intervalInput.min = "1";
-      intervalInput.className =
-          "w-40 rounded-md border border-slate-700 bg-slate-900/80 px-3 py-1.5 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-sky-500/70";
-      intervalInput.value = String(formState.runIntervalTicks);
-      intervalInput.addEventListener("change", () => {
-          const numeric = Number(intervalInput.value);
-          const normalized = Number.isFinite(numeric) && numeric > 0 ? Math.floor(numeric) : 1;
-          intervalInput.value = String(normalized);
-          formState.runIntervalTicks = normalized;
-      });
-      intervalField.appendChild(intervalInput);
-      if (formState.runMode !== "continuous") {
-          intervalField.classList.add("hidden");
-      }
-      runConfigRow.appendChild(intervalField);
-      modeSelect.addEventListener("change", () => {
-          formState.runMode = modeSelect.value;
-          headerMode.textContent = describeRunMode(formState.runMode);
-          intervalField.classList.toggle("hidden", formState.runMode !== "continuous");
-      });
-      layout.appendChild(runConfigRow);
-      const codeField = createElement("div", "flex flex-col gap-2");
-      codeField.appendChild(createElement("span", "text-xs uppercase tracking-wide text-slate-400", "Script"));
-      const codeArea = document.createElement("textarea");
-      codeArea.className =
-          "min-h-[220px] w-full rounded-md border border-slate-700 bg-slate-950/80 px-3 py-2 font-mono text-xs text-slate-100 focus:outline-none focus:ring-2 focus:ring-sky-500/70";
-      codeArea.value = formState.code;
-      codeArea.spellcheck = false;
-      codeArea.addEventListener("input", () => {
-          formState.code = codeArea.value;
-      });
-      codeField.appendChild(codeArea);
-      layout.appendChild(codeField);
-      const settingsSection = createElement("div", "flex flex-col gap-3");
-      const settingsHeader = createElement("div", "flex items-center justify-between gap-2");
-      settingsHeader.appendChild(createElement("span", "text-xs uppercase tracking-wide text-slate-400", "Settings"));
-      const settingsList = createElement("div", "flex flex-col gap-3");
-      const removeSetting = (settingId) => {
-          const index = formState.settings.findIndex((entry) => entry.id === settingId);
-          if (index !== -1) {
-              formState.settings.splice(index, 1);
-          }
-      };
-      for (const setting of formState.settings) {
-          settingsList.appendChild(createActionSettingEditorCard(formState, setting, removeSetting));
-      }
-      const addSettingButton = createElement("button", "rounded-md border border-slate-700 bg-slate-900/70 px-3 py-1 text-xs font-medium text-slate-200 transition-colors hover:border-sky-500/60 hover:text-sky-200", "Add setting");
-      addSettingButton.type = "button";
-      addSettingButton.addEventListener("click", () => {
-          const newSetting = {
-              id: nextEditorSettingId(),
-              key: "",
-              label: "",
-              type: "text",
-              value: "",
-          };
-          formState.settings.push(newSetting);
-          settingsList.appendChild(createActionSettingEditorCard(formState, newSetting, removeSetting));
-      });
-      settingsHeader.appendChild(addSettingButton);
-      settingsSection.appendChild(settingsHeader);
-      if (formState.settings.length === 0) {
-          settingsSection.appendChild(createElement("p", "text-[0.75rem] text-slate-400", "Add settings to expose configurable values that can be adjusted while the action runs."));
-      }
-      settingsSection.appendChild(settingsList);
-      layout.appendChild(settingsSection);
-      const footer = createElement("div", "flex flex-wrap items-center justify-between gap-3 border-t border-slate-800/70 pt-4");
-      const leftControls = createElement("div", "flex items-center gap-2");
-      const runButton = createElement("button", "rounded-md border border-sky-500/60 bg-sky-500/20 px-3 py-1.5 text-xs font-semibold text-sky-100 transition-colors hover:bg-sky-500/30", "Run action");
-      runButton.type = "button";
-      const applyRunButtonState = (enabled) => {
-          if (enabled) {
-              runButton.disabled = false;
-              runButton.classList.remove("cursor-not-allowed", "opacity-40", "pointer-events-none", "hover:bg-sky-500/10");
-              runButton.classList.add("hover:bg-sky-500/20");
-              runButton.title = "";
-          }
-          else {
-              runButton.disabled = true;
-              runButton.classList.add("cursor-not-allowed", "opacity-40", "pointer-events-none", "hover:bg-sky-500/10");
-              runButton.classList.remove("hover:bg-sky-500/20");
-              runButton.title = "Enable this action to run it.";
-          }
-      };
-      applyRunButtonState(formState.enabled);
-      runButton.addEventListener("click", () => {
-          if (!formState.enabled) {
-              return;
-          }
-          actions.startAction?.(selectedAction.id);
-      });
-      leftControls.appendChild(runButton);
-      enabledToggle.addEventListener("click", () => {
-          const nextEnabled = !formState.enabled;
-          formState.enabled = nextEnabled;
-          updateToggleAppearance(nextEnabled);
-          applyRunButtonState(nextEnabled);
-          actions.setActionEnabled?.(selectedAction.id, nextEnabled);
-      });
-      footer.appendChild(leftControls);
-      const rightControls = createElement("div", "flex items-center gap-2");
-      const deleteButton = createElement("button", "rounded-md border border-rose-500/50 bg-rose-500/10 px-3 py-1.5 text-xs font-semibold text-rose-200 transition-colors hover:bg-rose-500/20", "Delete");
-      deleteButton.type = "button";
-      deleteButton.addEventListener("click", () => {
-          actions.deleteAction?.(selectedAction.id);
-      });
-      const saveButton = createElement("button", "rounded-md border border-sky-500/60 bg-sky-500/20 px-4 py-1.5 text-xs font-semibold text-sky-100 transition-colors hover:bg-sky-500/30", "Save changes");
-      saveButton.type = "button";
-      saveButton.addEventListener("click", () => {
-          const update = {
-              name: formState.name,
-              code: formState.code,
-              runMode: formState.runMode,
-              enabled: formState.enabled,
-              description: formState.description,
-              runIntervalTicks: formState.runIntervalTicks,
-              settings: formState.settings.map((setting) => ({
-                  id: setting.id,
+          const formState = {
+              id: selectedAction.id,
+              name: selectedAction.name,
+              runMode: selectedAction.runMode,
+              enabled: selectedAction.enabled,
+              description: selectedAction.description ?? "",
+              runIntervalTicks: selectedAction.runIntervalTicks ?? 1,
+              code: selectedAction.code,
+              settings: selectedAction.settings.map((setting) => ({
+                  id: setting.id ?? nextEditorSettingId(),
                   key: setting.key,
                   label: setting.label,
                   type: setting.type,
-                  value: setting.type === "number"
-                      ? Number(setting.value)
-                      : setting.type === "toggle"
-                          ? Boolean(setting.value)
-                          : String(setting.value ?? ""),
+                  value: setting.value ?? defaultValueForType(setting.type),
               })),
           };
-          actions.saveAction?.(selectedAction.id, update);
+          container.formState = formState;
+          const layout = createElement$3("div", "flex min-h-full flex-col gap-6 p-4 text-sm text-slate-100");
+          const header = createElement$3("div", "flex flex-wrap items-start justify-between gap-3 border-b border-slate-800/70 pb-3");
+          const initialTitle = formState.name.trim();
+          const titlePreview = createElement$3("div", "text-lg font-semibold text-slate-100", initialTitle === "" ? "Untitled action" : formState.name);
+          const descriptionPreview = createElement$3("div", "text-sm text-slate-400", formState.description.trim() === ""
+              ? "Add a description..."
+              : formState.description);
+          if (formState.description.trim() === "") {
+              descriptionPreview.classList.add("italic", "text-slate-500");
+          }
+          const headerText = createElement$3("div", "flex flex-col gap-1");
+          headerText.appendChild(titlePreview);
+          headerText.appendChild(descriptionPreview);
+          header.appendChild(headerText);
+          const headerMeta = createElement$3("div", "flex flex-col items-end gap-2 text-right text-[0.7rem] text-slate-400");
+          const enabledToggleWrapper = createElement$3("div", "flex items-center");
+          const enabledToggle = createElement$3("button", "relative inline-flex h-6 w-12 shrink-0 items-center rounded-full border transition-colors focus:outline-none focus:ring-2 focus:ring-sky-500/60");
+          enabledToggle.type = "button";
+          enabledToggle.setAttribute("role", "switch");
+          const srEnabledLabel = createElement$3("span", "sr-only", "Toggle action");
+          const enabledToggleKnob = createElement$3("span", "pointer-events-none absolute left-1 h-4 w-4 rounded-full shadow transition-transform duration-150 ease-out");
+          enabledToggle.appendChild(srEnabledLabel);
+          enabledToggle.appendChild(enabledToggleKnob);
+          const updateToggleAppearance = (enabled) => {
+              enabledToggle.setAttribute("aria-checked", enabled ? "true" : "false");
+              enabledToggle.classList.toggle("border-emerald-400/60", enabled);
+              enabledToggle.classList.toggle("bg-emerald-500/40", enabled);
+              enabledToggle.classList.toggle("hover:bg-emerald-500/50", enabled);
+              enabledToggle.classList.toggle("border-slate-700", !enabled);
+              enabledToggle.classList.toggle("bg-slate-800/70", !enabled);
+              enabledToggle.classList.toggle("hover:bg-slate-700/80", !enabled);
+              enabledToggleKnob.classList.toggle("bg-emerald-100", enabled);
+              enabledToggleKnob.classList.toggle("bg-slate-300", !enabled);
+              enabledToggleKnob.style.transform = enabled
+                  ? "translateX(1.5rem)"
+                  : "translateX(0)";
+              enabledToggle.title = enabled
+                  ? "Disable this action"
+                  : "Enable this action";
+          };
+          updateToggleAppearance(formState.enabled);
+          enabledToggleWrapper.appendChild(enabledToggle);
+          headerMeta.appendChild(enabledToggleWrapper);
+          const headerMode = createElement$3("div", "", describeRunMode(formState.runMode));
+          headerMeta.appendChild(headerMode);
+          headerMeta.appendChild(createElement$3("div", "text-[0.65rem] uppercase tracking-wide text-slate-500", `Last updated ${formatTimestamp(selectedAction.updatedAtMs)}`));
+          header.appendChild(headerMeta);
+          layout.appendChild(header);
+          const nameField = createElement$3("label", "flex flex-col gap-1");
+          nameField.appendChild(createElement$3("span", "text-xs uppercase tracking-wide text-slate-400", "Name"));
+          const nameInput = viewDocument$3.createElement("input");
+          nameInput.type = "text";
+          nameInput.className =
+              "rounded-md border border-slate-700 bg-slate-900/80 px-3 py-1.5 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-sky-500/70";
+          nameInput.value = formState.name;
+          nameInput.addEventListener("input", () => {
+              formState.name = nameInput.value;
+              const trimmed = nameInput.value.trim();
+              titlePreview.textContent =
+                  trimmed === "" ? "Untitled action" : nameInput.value;
+          });
+          nameField.appendChild(nameInput);
+          layout.appendChild(nameField);
+          const descriptionField = createElement$3("label", "flex flex-col gap-1");
+          descriptionField.appendChild(createElement$3("span", "text-xs uppercase tracking-wide text-slate-400", "Description"));
+          const descriptionInput = viewDocument$3.createElement("textarea");
+          descriptionInput.className =
+              "min-h-[72px] w-full rounded-md border border-slate-700 bg-slate-900/80 px-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-sky-500/70";
+          descriptionInput.value = formState.description;
+          descriptionInput.addEventListener("input", () => {
+              formState.description = descriptionInput.value;
+              const trimmed = descriptionInput.value.trim();
+              if (trimmed === "") {
+                  descriptionPreview.textContent = "Add a description...";
+                  descriptionPreview.classList.add("italic", "text-slate-500");
+              }
+              else {
+                  descriptionPreview.textContent = descriptionInput.value;
+                  descriptionPreview.classList.remove("italic", "text-slate-500");
+              }
+          });
+          descriptionField.appendChild(descriptionInput);
+          layout.appendChild(descriptionField);
+          const runConfigRow = createElement$3("div", "flex flex-wrap gap-4");
+          const modeField = createElement$3("label", "flex flex-col gap-1");
+          modeField.appendChild(createElement$3("span", "text-xs uppercase tracking-wide text-slate-400", "Run mode"));
+          const modeSelect = viewDocument$3.createElement("select");
+          modeSelect.className =
+              "w-48 rounded-md border border-slate-700 bg-slate-900/80 px-3 py-1.5 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-sky-500/70";
+          for (const option of [
+              { value: "continuous", label: "Continuous" },
+              { value: "once", label: "Run once" },
+              { value: "event", label: "Event-driven" },
+          ]) {
+              const opt = viewDocument$3.createElement("option");
+              opt.value = option.value;
+              opt.textContent = option.label;
+              modeSelect.appendChild(opt);
+          }
+          modeSelect.value = formState.runMode;
+          modeField.appendChild(modeSelect);
+          runConfigRow.appendChild(modeField);
+          const intervalField = createElement$3("label", "flex flex-col gap-1");
+          intervalField.appendChild(createElement$3("span", "text-xs uppercase tracking-wide text-slate-400", "Run every (ticks)"));
+          const intervalInput = viewDocument$3.createElement("input");
+          intervalInput.type = "number";
+          intervalInput.min = "1";
+          intervalInput.className =
+              "w-40 rounded-md border border-slate-700 bg-slate-900/80 px-3 py-1.5 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-sky-500/70";
+          intervalInput.value = String(formState.runIntervalTicks);
+          intervalInput.addEventListener("change", () => {
+              const numeric = Number(intervalInput.value);
+              const normalized = Number.isFinite(numeric) && numeric > 0 ? Math.floor(numeric) : 1;
+              intervalInput.value = String(normalized);
+              formState.runIntervalTicks = normalized;
+          });
+          intervalField.appendChild(intervalInput);
+          if (formState.runMode !== "continuous") {
+              intervalField.classList.add("hidden");
+          }
+          runConfigRow.appendChild(intervalField);
+          modeSelect.addEventListener("change", () => {
+              formState.runMode = modeSelect.value;
+              headerMode.textContent = describeRunMode(formState.runMode);
+              intervalField.classList.toggle("hidden", formState.runMode !== "continuous");
+          });
+          layout.appendChild(runConfigRow);
+          const codeField = createElement$3("div", "flex flex-col gap-2");
+          codeField.appendChild(createElement$3("span", "text-xs uppercase tracking-wide text-slate-400", "Script"));
+          const codeArea = viewDocument$3.createElement("textarea");
+          codeArea.className =
+              "min-h-[220px] w-full rounded-md border border-slate-700 bg-slate-950/80 px-3 py-2 font-mono text-xs text-slate-100 focus:outline-none focus:ring-2 focus:ring-sky-500/70";
+          codeArea.value = formState.code;
+          codeArea.spellcheck = false;
+          codeArea.addEventListener("input", () => {
+              formState.code = codeArea.value;
+          });
+          codeField.appendChild(codeArea);
+          layout.appendChild(codeField);
+          const settingsSection = createElement$3("div", "flex flex-col gap-3");
+          const settingsHeader = createElement$3("div", "flex items-center justify-between gap-2");
+          settingsHeader.appendChild(createElement$3("span", "text-xs uppercase tracking-wide text-slate-400", "Settings"));
+          const settingsList = createElement$3("div", "flex flex-col gap-3");
+          const removeSetting = (settingId) => {
+              const index = formState.settings.findIndex((entry) => entry.id === settingId);
+              if (index !== -1) {
+                  formState.settings.splice(index, 1);
+              }
+          };
+          for (const setting of formState.settings) {
+              settingsList.appendChild(createActionSettingEditorCard(formState, setting, removeSetting));
+          }
+          const addSettingButton = createElement$3("button", "rounded-md border border-slate-700 bg-slate-900/70 px-3 py-1 text-xs font-medium text-slate-200 transition-colors hover:border-sky-500/60 hover:text-sky-200", "Add setting");
+          addSettingButton.type = "button";
+          addSettingButton.addEventListener("click", () => {
+              const newSetting = {
+                  id: nextEditorSettingId(),
+                  key: "",
+                  label: "",
+                  type: "text",
+                  value: "",
+              };
+              formState.settings.push(newSetting);
+              settingsList.appendChild(createActionSettingEditorCard(formState, newSetting, removeSetting));
+          });
+          settingsHeader.appendChild(addSettingButton);
+          settingsSection.appendChild(settingsHeader);
+          if (formState.settings.length === 0) {
+              settingsSection.appendChild(createElement$3("p", "text-[0.75rem] text-slate-400", "Add settings to expose configurable values that can be adjusted while the action runs."));
+          }
+          settingsSection.appendChild(settingsList);
+          layout.appendChild(settingsSection);
+          const footer = createElement$3("div", "flex flex-wrap items-center justify-between gap-3 border-t border-slate-800/70 pt-4");
+          const leftControls = createElement$3("div", "flex items-center gap-2");
+          const runButton = createElement$3("button", "rounded-md border border-sky-500/60 bg-sky-500/20 px-3 py-1.5 text-xs font-semibold text-sky-100 transition-colors hover:bg-sky-500/30", "Run action");
+          runButton.type = "button";
+          const applyRunButtonState = (enabled) => {
+              if (enabled) {
+                  runButton.disabled = false;
+                  runButton.classList.remove("cursor-not-allowed", "opacity-40", "pointer-events-none", "hover:bg-sky-500/10");
+                  runButton.classList.add("hover:bg-sky-500/20");
+                  runButton.title = "";
+              }
+              else {
+                  runButton.disabled = true;
+                  runButton.classList.add("cursor-not-allowed", "opacity-40", "pointer-events-none", "hover:bg-sky-500/10");
+                  runButton.classList.remove("hover:bg-sky-500/20");
+                  runButton.title = "Enable this action to run it.";
+              }
+          };
+          applyRunButtonState(formState.enabled);
+          runButton.addEventListener("click", () => {
+              if (!formState.enabled) {
+                  return;
+              }
+              actions.startAction?.(selectedAction.id);
+          });
+          leftControls.appendChild(runButton);
+          enabledToggle.addEventListener("click", () => {
+              const nextEnabled = !formState.enabled;
+              formState.enabled = nextEnabled;
+              updateToggleAppearance(nextEnabled);
+              applyRunButtonState(nextEnabled);
+              actions.setActionEnabled?.(selectedAction.id, nextEnabled);
+          });
+          footer.appendChild(leftControls);
+          const rightControls = createElement$3("div", "flex items-center gap-2");
+          const deleteButton = createElement$3("button", "rounded-md border border-rose-500/50 bg-rose-500/10 px-3 py-1.5 text-xs font-semibold text-rose-200 transition-colors hover:bg-rose-500/20", "Delete");
+          deleteButton.type = "button";
+          deleteButton.addEventListener("click", () => {
+              actions.deleteAction?.(selectedAction.id);
+          });
+          const saveButton = createElement$3("button", "rounded-md border border-sky-500/60 bg-sky-500/20 px-4 py-1.5 text-xs font-semibold text-sky-100 transition-colors hover:bg-sky-500/30", "Save changes");
+          saveButton.type = "button";
+          saveButton.addEventListener("click", () => {
+              const update = {
+                  name: formState.name,
+                  code: formState.code,
+                  runMode: formState.runMode,
+                  enabled: formState.enabled,
+                  description: formState.description,
+                  runIntervalTicks: formState.runIntervalTicks,
+                  settings: formState.settings.map((setting) => ({
+                      id: setting.id,
+                      key: setting.key,
+                      label: setting.label,
+                      type: setting.type,
+                      value: setting.type === "number"
+                          ? Number(setting.value)
+                          : setting.type === "toggle"
+                              ? Boolean(setting.value)
+                              : String(setting.value ?? ""),
+                  })),
+              };
+              actions.saveAction?.(selectedAction.id, update);
+          });
+          rightControls.appendChild(deleteButton);
+          rightControls.appendChild(saveButton);
+          footer.appendChild(rightControls);
+          layout.appendChild(footer);
+          container.replaceChildren(layout);
+          return container;
       });
-      rightControls.appendChild(deleteButton);
-      rightControls.appendChild(saveButton);
-      footer.appendChild(rightControls);
-      layout.appendChild(footer);
-      container.replaceChildren(layout);
-      return container;
   }
   function createActionStatusBadge(status) {
       const baseClass = "rounded-full px-2 py-0.5 text-[0.6rem] font-semibold uppercase tracking-wide";
@@ -2920,14 +3048,14 @@
           Running: "bg-emerald-500/20 text-emerald-200",
           Disabled: "bg-slate-700/60 text-slate-200",
       };
-      return createElement("span", `${baseClass} ${styles[status]}`, status);
+      return createElement$3("span", `${baseClass} ${styles[status]}`, status);
   }
   function createActionSettingEditorCard(formState, setting, onRemove) {
-      const card = createElement("div", "rounded-md border border-slate-800/70 bg-slate-900/70 p-3");
-      const header = createElement("div", "flex flex-wrap items-center gap-3");
-      const labelField = createElement("label", "flex min-w-[160px] flex-1 flex-col gap-1");
-      labelField.appendChild(createElement("span", "text-[0.65rem] uppercase tracking-wide text-slate-400", "Label"));
-      const labelInput = document.createElement("input");
+      const card = createElement$3("div", "rounded-md border border-slate-800/70 bg-slate-900/70 p-3");
+      const header = createElement$3("div", "flex flex-wrap items-center gap-3");
+      const labelField = createElement$3("label", "flex min-w-[160px] flex-1 flex-col gap-1");
+      labelField.appendChild(createElement$3("span", "text-[0.65rem] uppercase tracking-wide text-slate-400", "Label"));
+      const labelInput = viewDocument$3.createElement("input");
       labelInput.type = "text";
       labelInput.className =
           "rounded-md border border-slate-700 bg-slate-950/70 px-3 py-1 text-xs text-slate-100 focus:outline-none focus:ring-2 focus:ring-sky-500/70";
@@ -2937,9 +3065,9 @@
       });
       labelField.appendChild(labelInput);
       header.appendChild(labelField);
-      const keyField = createElement("label", "flex w-36 flex-col gap-1");
-      keyField.appendChild(createElement("span", "text-[0.65rem] uppercase tracking-wide text-slate-400", "Key"));
-      const keyInput = document.createElement("input");
+      const keyField = createElement$3("label", "flex w-36 flex-col gap-1");
+      keyField.appendChild(createElement$3("span", "text-[0.65rem] uppercase tracking-wide text-slate-400", "Key"));
+      const keyInput = viewDocument$3.createElement("input");
       keyInput.type = "text";
       keyInput.className =
           "rounded-md border border-slate-700 bg-slate-950/70 px-3 py-1 text-xs text-slate-100 focus:outline-none focus:ring-2 focus:ring-sky-500/70";
@@ -2949,9 +3077,9 @@
       });
       keyField.appendChild(keyInput);
       header.appendChild(keyField);
-      const typeField = createElement("label", "flex w-32 flex-col gap-1");
-      typeField.appendChild(createElement("span", "text-[0.65rem] uppercase tracking-wide text-slate-400", "Type"));
-      const typeSelect = document.createElement("select");
+      const typeField = createElement$3("label", "flex w-32 flex-col gap-1");
+      typeField.appendChild(createElement$3("span", "text-[0.65rem] uppercase tracking-wide text-slate-400", "Type"));
+      const typeSelect = viewDocument$3.createElement("select");
       typeSelect.className =
           "rounded-md border border-slate-700 bg-slate-950/70 px-2 py-1 text-xs text-slate-100 focus:outline-none focus:ring-2 focus:ring-sky-500/70";
       for (const option of [
@@ -2959,7 +3087,7 @@
           { value: "number", label: "Number" },
           { value: "toggle", label: "Toggle" },
       ]) {
-          const opt = document.createElement("option");
+          const opt = viewDocument$3.createElement("option");
           opt.value = option.value;
           opt.textContent = option.label;
           typeSelect.appendChild(opt);
@@ -2967,7 +3095,7 @@
       typeSelect.value = setting.type;
       typeField.appendChild(typeSelect);
       header.appendChild(typeField);
-      const removeButton = createElement("button", "rounded-md border border-slate-700 bg-transparent px-2 py-1 text-xs text-slate-300 transition-colors hover:border-rose-500/60 hover:text-rose-300", "Remove");
+      const removeButton = createElement$3("button", "rounded-md border border-slate-700 bg-transparent px-2 py-1 text-xs text-slate-300 transition-colors hover:border-rose-500/60 hover:text-rose-300", "Remove");
       removeButton.type = "button";
       removeButton.addEventListener("click", (event) => {
           event.preventDefault();
@@ -2976,9 +3104,9 @@
       });
       header.appendChild(removeButton);
       card.appendChild(header);
-      const valueWrapper = createElement("div", "mt-3 flex flex-col gap-1");
-      valueWrapper.appendChild(createElement("span", "text-[0.65rem] uppercase tracking-wide text-slate-400", "Value"));
-      const valueContainer = createElement("div", "flex items-center gap-2");
+      const valueWrapper = createElement$3("div", "mt-3 flex flex-col gap-1");
+      valueWrapper.appendChild(createElement$3("span", "text-[0.65rem] uppercase tracking-wide text-slate-400", "Value"));
+      const valueContainer = createElement$3("div", "flex items-center gap-2");
       const updateValue = (value) => {
           setting.value = value;
       };
@@ -2998,7 +3126,7 @@
   function createSettingValueInput(setting, onChange) {
       switch (setting.type) {
           case "number": {
-              const input = document.createElement("input");
+              const input = viewDocument$3.createElement("input");
               input.type = "number";
               input.className =
                   "w-40 rounded-md border border-slate-700 bg-slate-950/70 px-3 py-1 text-xs text-slate-100 focus:outline-none focus:ring-2 focus:ring-sky-500/70";
@@ -3010,8 +3138,8 @@
               return input;
           }
           case "toggle": {
-              const wrapper = createElement("label", "flex items-center gap-2 text-xs text-slate-200");
-              const toggle = document.createElement("input");
+              const wrapper = createElement$3("label", "flex items-center gap-2 text-xs text-slate-200");
+              const toggle = viewDocument$3.createElement("input");
               toggle.type = "checkbox";
               toggle.className =
                   "h-4 w-4 rounded border border-slate-600 bg-slate-900 text-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-500";
@@ -3020,11 +3148,11 @@
                   onChange(toggle.checked);
               });
               wrapper.appendChild(toggle);
-              wrapper.appendChild(createElement("span", "", "Enabled"));
+              wrapper.appendChild(createElement$3("span", "", "Enabled"));
               return wrapper;
           }
           default: {
-              const input = document.createElement("input");
+              const input = viewDocument$3.createElement("input");
               input.type = "text";
               input.className =
                   "w-full rounded-md border border-slate-700 bg-slate-950/70 px-3 py-1 text-xs text-slate-100 focus:outline-none focus:ring-2 focus:ring-sky-500/70";
@@ -3037,206 +3165,226 @@
       }
   }
 
+  let viewDocument$2 = document;
+  function withViewDocument$2(doc, fn) {
+      const previous = viewDocument$2;
+      viewDocument$2 = doc;
+      try {
+          return fn();
+      }
+      finally {
+          viewDocument$2 = previous;
+      }
+  }
+  function createElement$2(tag, className, textContent) {
+      return createElement$7(tag, className, textContent, viewDocument$2);
+  }
   function renderRunningActionsView(options) {
-      const { leaf, snapshot, existingContainer, actions, sortState, onSort } = options;
-      const state = getActionsState(snapshot);
-      const signature = `${state.runningRevision}:${state.selectedRunningActionId ?? ""}:${state.running.length}`;
-      const sortSignature = `${sortState.key}:${sortState.direction}`;
-      const isContainer = !!existingContainer &&
-          existingContainer.dataset.sidebarRole === SidebarRole.RunningActions;
-      const visibleHeaders = getVisibleHeaders(leaf, leaf.view, RUNNING_ACTIONS_TABLE_HEADERS);
-      const visibilitySignature = getColumnVisibilitySignature(visibleHeaders);
-      if (isContainer &&
-          existingContainer.dataset.signature === signature &&
-          existingContainer.dataset.sortState === sortSignature &&
-          existingContainer.dataset.columnVisibilitySignature === visibilitySignature) {
-          existingContainer.dataset.columnVisibilitySignature = visibilitySignature;
-          return existingContainer;
-      }
-      const { container, tbody } = createTableShell({
-          sortState,
-          onSort,
-          existingContainer: isContainer ? existingContainer : undefined,
-          view: leaf.view,
-          headers: visibleHeaders,
-          role: SidebarRole.RunningActions,
-      });
-      container.dataset.signature = signature;
-      container.dataset.sortState = sortSignature;
-      container.dataset.columnVisibilitySignature = visibilitySignature;
-      const cellBaseClass = `${TABLE_CELL_BASE_CLASS} align-top`;
-      const visibleKeys = new Set(visibleHeaders.map((header) => header.key));
-      const getStatusRank = (run) => {
-          const rank = {
-              running: 0,
-              completed: 1,
-              stopped: 2,
-              failed: 3,
+      return withViewDocument$2(options.ui.document, () => {
+          const { leaf, snapshot, existingContainer, actions, sortState, onSort } = options;
+          const state = getActionsState(snapshot);
+          const signature = `${state.runningRevision}:${state.selectedRunningActionId ?? ""}:${state.running.length}`;
+          const sortSignature = `${sortState.key}:${sortState.direction}`;
+          const isContainer = !!existingContainer &&
+              existingContainer.dataset.sidebarRole === SidebarRole.RunningActions;
+          const visibleHeaders = getVisibleHeaders(leaf, leaf.view, RUNNING_ACTIONS_TABLE_HEADERS);
+          const visibilitySignature = getColumnVisibilitySignature(visibleHeaders);
+          if (isContainer &&
+              existingContainer.dataset.signature === signature &&
+              existingContainer.dataset.sortState === sortSignature &&
+              existingContainer.dataset.columnVisibilitySignature === visibilitySignature) {
+              existingContainer.dataset.columnVisibilitySignature = visibilitySignature;
+              return existingContainer;
+          }
+          const { container, tbody } = createTableShell({
+              sortState,
+              onSort,
+              existingContainer: isContainer ? existingContainer : undefined,
+              view: leaf.view,
+              headers: visibleHeaders,
+              role: SidebarRole.RunningActions,
+              document: viewDocument$2,
+          });
+          container.dataset.signature = signature;
+          container.dataset.sortState = sortSignature;
+          container.dataset.columnVisibilitySignature = visibilitySignature;
+          const cellBaseClass = `${TABLE_CELL_BASE_CLASS} align-top`;
+          const visibleKeys = new Set(visibleHeaders.map((header) => header.key));
+          const getStatusRank = (run) => {
+              const rank = {
+                  running: 0,
+                  completed: 1,
+                  stopped: 2,
+                  failed: 3,
+              };
+              return rank[run.status] ?? 4;
           };
-          return rank[run.status] ?? 4;
-      };
-      if (state.running.length === 0) {
-          const row = createElement("tr", "hover:bg-transparent");
-          const cell = createElement("td", `${cellBaseClass} text-center text-slate-400`, "No actions are currently running.");
-          cell.colSpan = Math.max(1, visibleHeaders.length);
-          row.appendChild(cell);
-          tbody.appendChild(row);
-          return container;
-      }
-      const runs = [...state.running];
-      if (sortState.key === "label") {
-          runs.sort((a, b) => compareSortValues(a.name.toLowerCase(), b.name.toLowerCase(), sortState.direction));
-      }
-      else if (sortState.key === "status") {
-          runs.sort((a, b) => {
-              const cmp = compareSortValues(getStatusRank(a), getStatusRank(b), sortState.direction);
-              if (cmp !== 0) {
-                  return cmp;
+          if (state.running.length === 0) {
+              const row = createElement$2("tr", "hover:bg-transparent");
+              const cell = createElement$2("td", `${cellBaseClass} text-center text-slate-400`, "No actions are currently running.");
+              cell.colSpan = Math.max(1, visibleHeaders.length);
+              row.appendChild(cell);
+              tbody.appendChild(row);
+              return container;
+          }
+          const runs = [...state.running];
+          if (sortState.key === "label") {
+              runs.sort((a, b) => compareSortValues(a.name.toLowerCase(), b.name.toLowerCase(), sortState.direction));
+          }
+          else if (sortState.key === "status") {
+              runs.sort((a, b) => {
+                  const cmp = compareSortValues(getStatusRank(a), getStatusRank(b), sortState.direction);
+                  if (cmp !== 0) {
+                      return cmp;
+                  }
+                  return compareSortValues(a.name.toLowerCase(), b.name.toLowerCase(), "asc");
+              });
+          }
+          for (const run of runs) {
+              const isSelected = state.selectedRunningActionId === run.id;
+              const row = createElement$2("tr", "cursor-pointer transition-colors hover:bg-slate-800/40");
+              applyRowSelectionIndicator(row, isSelected);
+              row.dataset.runningActionId = run.id;
+              row.addEventListener("click", () => {
+                  actions.selectRunningAction?.(run.id);
+              });
+              const nameCell = createElement$2("td", `${cellBaseClass} text-left`);
+              const nameLine = createElement$2("div", "flex flex-wrap items-center gap-2");
+              const nameLabel = createPlayerNameElement(run.name, undefined, {
+                  className: "font-semibold text-slate-100 transition-colors hover:text-sky-200",
+                  document: viewDocument$2,
+              });
+              nameLine.appendChild(nameLabel);
+              nameCell.appendChild(nameLine);
+              const statusCell = createElement$2("td", `${cellBaseClass} text-left`);
+              statusCell.appendChild(createRunStatusBadge(run.status));
+              const modeCell = createElement$2("td", `${cellBaseClass} text-[0.75rem] uppercase tracking-wide text-slate-400`, getRunModeLabel(run.runMode));
+              const startedCell = createElement$2("td", `${cellBaseClass} text-[0.75rem] text-slate-300`, formatTimestamp(run.startedAtMs));
+              const controlsCell = createElement$2("td", `${cellBaseClass} text-right`);
+              const stopButton = createElement$2("button", "rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-1 text-xs font-semibold text-rose-200 transition-colors hover:bg-rose-500/20", "Stop");
+              stopButton.type = "button";
+              stopButton.addEventListener("click", (event) => {
+                  event.stopPropagation();
+                  actions.stopRunningAction?.(run.id);
+              });
+              if (run.status !== "running") {
+                  stopButton.disabled = true;
+                  stopButton.classList.add("cursor-not-allowed", "opacity-50");
               }
-              return compareSortValues(a.name.toLowerCase(), b.name.toLowerCase(), "asc");
-          });
-      }
-      for (const run of runs) {
-          const isSelected = state.selectedRunningActionId === run.id;
-          const row = createElement("tr", "cursor-pointer transition-colors hover:bg-slate-800/40");
-          applyRowSelectionIndicator(row, isSelected);
-          row.dataset.runningActionId = run.id;
-          row.addEventListener("click", () => {
-              actions.selectRunningAction?.(run.id);
-          });
-          const nameCell = createElement("td", `${cellBaseClass} text-left`);
-          const nameLine = createElement("div", "flex flex-wrap items-center gap-2");
-          const nameLabel = createPlayerNameElement(run.name, undefined, {
-              className: "font-semibold text-slate-100 transition-colors hover:text-sky-200",
-          });
-          nameLine.appendChild(nameLabel);
-          nameCell.appendChild(nameLine);
-          const statusCell = createElement("td", `${cellBaseClass} text-left`);
-          statusCell.appendChild(createRunStatusBadge(run.status));
-          const modeCell = createElement("td", `${cellBaseClass} text-[0.75rem] uppercase tracking-wide text-slate-400`, getRunModeLabel(run.runMode));
-          const startedCell = createElement("td", `${cellBaseClass} text-[0.75rem] text-slate-300`, formatTimestamp(run.startedAtMs));
-          const controlsCell = createElement("td", `${cellBaseClass} text-right`);
-          const stopButton = createElement("button", "rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-1 text-xs font-semibold text-rose-200 transition-colors hover:bg-rose-500/20", "Stop");
+              controlsCell.appendChild(stopButton);
+              if (visibleKeys.has("name")) {
+                  row.appendChild(nameCell);
+              }
+              if (visibleKeys.has("status")) {
+                  row.appendChild(statusCell);
+              }
+              if (visibleKeys.has("mode")) {
+                  row.appendChild(modeCell);
+              }
+              if (visibleKeys.has("started")) {
+                  row.appendChild(startedCell);
+              }
+              if (visibleKeys.has("controls")) {
+                  row.appendChild(controlsCell);
+              }
+              tbody.appendChild(row);
+          }
+          return container;
+      });
+  }
+  function renderRunningActionDetailView(options) {
+      return withViewDocument$2(options.ui.document, () => {
+          const { leaf, snapshot, existingContainer, actions } = options;
+          const state = getActionsState(snapshot);
+          const selectedRun = state.running.find((run) => run.id === state.selectedRunningActionId);
+          const signature = selectedRun
+              ? `${state.runningRevision}:${selectedRun.id}:${selectedRun.lastUpdatedMs}`
+              : `${state.runningRevision}:none`;
+          const isContainer = !!existingContainer &&
+              existingContainer.dataset.sidebarRole === SidebarRole.RunningActionDetail;
+          const container = isContainer
+              ? existingContainer
+              : createElement$2("div", "relative flex-1 overflow-auto border border-slate-900/70 bg-slate-950/60 backdrop-blur-sm");
+          container.className =
+              "relative flex-1 overflow-auto border border-slate-900/70 bg-slate-950/60 backdrop-blur-sm";
+          container.dataset.sidebarRole = SidebarRole.RunningActionDetail;
+          container.dataset.sidebarView = leaf.view;
+          if (container.dataset.signature === signature) {
+              return container;
+          }
+          container.dataset.signature = signature;
+          if (!selectedRun) {
+              container.replaceChildren(createElement$2("div", "flex h-full items-center justify-center p-6 text-center text-sm text-slate-400", state.running.length === 0
+                  ? "No actions are currently running."
+                  : "Select a running action to adjust its settings."));
+              return container;
+          }
+          const layout = createElement$2("div", "flex min-h-full flex-col gap-6 p-4 text-sm text-slate-100");
+          const header = createElement$2("div", "flex flex-wrap items-start justify-between gap-3 border-b border-slate-800/70 pb-3");
+          const headerText = createElement$2("div", "flex flex-col gap-1");
+          const titleLine = createElement$2("div", "flex flex-wrap items-center gap-2 text-lg font-semibold text-slate-100");
+          titleLine.appendChild(createElement$2("span", "", selectedRun.name));
+          titleLine.appendChild(createRunStatusBadge(selectedRun.status));
+          headerText.appendChild(titleLine);
+          const trimmedDescription = selectedRun.description?.trim() ?? "";
+          if (trimmedDescription !== "") {
+              headerText.appendChild(createElement$2("div", "text-sm text-slate-400", trimmedDescription));
+          }
+          headerText.appendChild(createElement$2("div", "text-[0.7rem] text-slate-400", describeRunMode(selectedRun.runMode)));
+          header.appendChild(headerText);
+          const stopButton = createElement$2("button", "rounded-md border border-rose-500/50 bg-rose-500/10 px-3 py-1.5 text-xs font-semibold text-rose-200 transition-colors hover:bg-rose-500/20", "Stop action");
           stopButton.type = "button";
-          stopButton.addEventListener("click", (event) => {
-              event.stopPropagation();
-              actions.stopRunningAction?.(run.id);
+          stopButton.addEventListener("click", () => {
+              actions.stopRunningAction?.(selectedRun.id);
           });
-          if (run.status !== "running") {
+          if (selectedRun.status !== "running") {
               stopButton.disabled = true;
               stopButton.classList.add("cursor-not-allowed", "opacity-50");
           }
-          controlsCell.appendChild(stopButton);
-          if (visibleKeys.has("name")) {
-              row.appendChild(nameCell);
+          header.appendChild(stopButton);
+          layout.appendChild(header);
+          const meta = createElement$2("div", "grid gap-3 text-[0.75rem] sm:grid-cols-3");
+          meta.appendChild(createSummaryStat("Status", formatRunStatus(selectedRun.status)));
+          meta.appendChild(createSummaryStat("Started", formatTimestamp(selectedRun.startedAtMs)));
+          meta.appendChild(createSummaryStat("Last update", formatTimestamp(selectedRun.lastUpdatedMs)));
+          layout.appendChild(meta);
+          if (selectedRun.runMode === "continuous") {
+              const intervalField = createElement$2("label", "flex w-full max-w-xs flex-col gap-1");
+              intervalField.appendChild(createElement$2("span", "text-xs uppercase tracking-wide text-slate-400", "Run every (ticks)"));
+              const intervalInput = viewDocument$2.createElement("input");
+              intervalInput.type = "number";
+              intervalInput.min = "1";
+              intervalInput.className =
+                  "w-full rounded-md border border-slate-700 bg-slate-900/80 px-3 py-1.5 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-sky-500/70";
+              intervalInput.value = String(selectedRun.runIntervalTicks ?? 1);
+              intervalInput.addEventListener("change", () => {
+                  const numeric = Number(intervalInput.value);
+                  const normalized = Number.isFinite(numeric) && numeric > 0 ? Math.floor(numeric) : 1;
+                  intervalInput.value = String(normalized);
+                  if (normalized === selectedRun.runIntervalTicks) {
+                      return;
+                  }
+                  actions.setRunningActionInterval?.(selectedRun.id, normalized);
+              });
+              intervalField.appendChild(intervalInput);
+              layout.appendChild(intervalField);
           }
-          if (visibleKeys.has("status")) {
-              row.appendChild(statusCell);
+          const settingsSection = createElement$2("div", "flex flex-col gap-3");
+          settingsSection.appendChild(createElement$2("span", "text-xs uppercase tracking-wide text-slate-400", "Runtime settings"));
+          const settingsList = createElement$2("div", "flex flex-col gap-3");
+          if (selectedRun.settings.length === 0) {
+              settingsList.appendChild(createElement$2("p", "text-[0.75rem] text-slate-400", "This action does not expose any runtime settings."));
           }
-          if (visibleKeys.has("mode")) {
-              row.appendChild(modeCell);
-          }
-          if (visibleKeys.has("started")) {
-              row.appendChild(startedCell);
-          }
-          if (visibleKeys.has("controls")) {
-              row.appendChild(controlsCell);
-          }
-          tbody.appendChild(row);
-      }
-      return container;
-  }
-  function renderRunningActionDetailView(options) {
-      const { leaf, snapshot, existingContainer, actions } = options;
-      const state = getActionsState(snapshot);
-      const selectedRun = state.running.find((run) => run.id === state.selectedRunningActionId);
-      const signature = selectedRun
-          ? `${state.runningRevision}:${selectedRun.id}:${selectedRun.lastUpdatedMs}`
-          : `${state.runningRevision}:none`;
-      const isContainer = !!existingContainer &&
-          existingContainer.dataset.sidebarRole === SidebarRole.RunningActionDetail;
-      const container = isContainer
-          ? existingContainer
-          : createElement("div", "relative flex-1 overflow-auto border border-slate-900/70 bg-slate-950/60 backdrop-blur-sm");
-      container.className =
-          "relative flex-1 overflow-auto border border-slate-900/70 bg-slate-950/60 backdrop-blur-sm";
-      container.dataset.sidebarRole = SidebarRole.RunningActionDetail;
-      container.dataset.sidebarView = leaf.view;
-      if (container.dataset.signature === signature) {
-          return container;
-      }
-      container.dataset.signature = signature;
-      if (!selectedRun) {
-          container.replaceChildren(createElement("div", "flex h-full items-center justify-center p-6 text-center text-sm text-slate-400", state.running.length === 0
-              ? "No actions are currently running."
-              : "Select a running action to adjust its settings."));
-          return container;
-      }
-      const layout = createElement("div", "flex min-h-full flex-col gap-6 p-4 text-sm text-slate-100");
-      const header = createElement("div", "flex flex-wrap items-start justify-between gap-3 border-b border-slate-800/70 pb-3");
-      const headerText = createElement("div", "flex flex-col gap-1");
-      const titleLine = createElement("div", "flex flex-wrap items-center gap-2 text-lg font-semibold text-slate-100");
-      titleLine.appendChild(createElement("span", "", selectedRun.name));
-      titleLine.appendChild(createRunStatusBadge(selectedRun.status));
-      headerText.appendChild(titleLine);
-      const trimmedDescription = selectedRun.description?.trim() ?? "";
-      if (trimmedDescription !== "") {
-          headerText.appendChild(createElement("div", "text-sm text-slate-400", trimmedDescription));
-      }
-      headerText.appendChild(createElement("div", "text-[0.7rem] text-slate-400", describeRunMode(selectedRun.runMode)));
-      header.appendChild(headerText);
-      const stopButton = createElement("button", "rounded-md border border-rose-500/50 bg-rose-500/10 px-3 py-1.5 text-xs font-semibold text-rose-200 transition-colors hover:bg-rose-500/20", "Stop action");
-      stopButton.type = "button";
-      stopButton.addEventListener("click", () => {
-          actions.stopRunningAction?.(selectedRun.id);
-      });
-      if (selectedRun.status !== "running") {
-          stopButton.disabled = true;
-          stopButton.classList.add("cursor-not-allowed", "opacity-50");
-      }
-      header.appendChild(stopButton);
-      layout.appendChild(header);
-      const meta = createElement("div", "grid gap-3 text-[0.75rem] sm:grid-cols-3");
-      meta.appendChild(createSummaryStat("Status", formatRunStatus(selectedRun.status)));
-      meta.appendChild(createSummaryStat("Started", formatTimestamp(selectedRun.startedAtMs)));
-      meta.appendChild(createSummaryStat("Last update", formatTimestamp(selectedRun.lastUpdatedMs)));
-      layout.appendChild(meta);
-      if (selectedRun.runMode === "continuous") {
-          const intervalField = createElement("label", "flex w-full max-w-xs flex-col gap-1");
-          intervalField.appendChild(createElement("span", "text-xs uppercase tracking-wide text-slate-400", "Run every (ticks)"));
-          const intervalInput = document.createElement("input");
-          intervalInput.type = "number";
-          intervalInput.min = "1";
-          intervalInput.className =
-              "w-full rounded-md border border-slate-700 bg-slate-900/80 px-3 py-1.5 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-sky-500/70";
-          intervalInput.value = String(selectedRun.runIntervalTicks ?? 1);
-          intervalInput.addEventListener("change", () => {
-              const numeric = Number(intervalInput.value);
-              const normalized = Number.isFinite(numeric) && numeric > 0 ? Math.floor(numeric) : 1;
-              intervalInput.value = String(normalized);
-              if (normalized === selectedRun.runIntervalTicks) {
-                  return;
+          else {
+              for (const setting of selectedRun.settings) {
+                  settingsList.appendChild(createRunningSettingField(selectedRun.id, setting, actions));
               }
-              actions.setRunningActionInterval?.(selectedRun.id, normalized);
-          });
-          intervalField.appendChild(intervalInput);
-          layout.appendChild(intervalField);
-      }
-      const settingsSection = createElement("div", "flex flex-col gap-3");
-      settingsSection.appendChild(createElement("span", "text-xs uppercase tracking-wide text-slate-400", "Runtime settings"));
-      const settingsList = createElement("div", "flex flex-col gap-3");
-      if (selectedRun.settings.length === 0) {
-          settingsList.appendChild(createElement("p", "text-[0.75rem] text-slate-400", "This action does not expose any runtime settings."));
-      }
-      else {
-          for (const setting of selectedRun.settings) {
-              settingsList.appendChild(createRunningSettingField(selectedRun.id, setting, actions));
           }
-      }
-      settingsSection.appendChild(settingsList);
-      layout.appendChild(settingsSection);
-      container.replaceChildren(layout);
-      return container;
+          settingsSection.appendChild(settingsList);
+          layout.appendChild(settingsSection);
+          container.replaceChildren(layout);
+          return container;
+      });
   }
   function createRunStatusBadge(status) {
       const baseClass = "rounded-full px-2 py-0.5 text-[0.6rem] font-semibold uppercase tracking-wide";
@@ -3247,32 +3395,32 @@
           failed: "bg-rose-500/20 text-rose-200",
       };
       const className = `${baseClass} ${styles[status] ?? "bg-slate-700/60 text-slate-200"}`;
-      return createElement("span", className, formatRunStatus(status));
+      return createElement$2("span", className, formatRunStatus(status));
   }
   function createSummaryStat(label, value) {
-      const wrapper = createElement("div", "rounded-md border border-slate-800/70 bg-slate-900/70 px-3 py-2");
-      const title = createElement("div", "text-[0.65rem] uppercase tracking-wide text-slate-400", label);
-      const content = createElement("div", "font-mono text-base text-slate-100", value);
+      const wrapper = createElement$2("div", "rounded-md border border-slate-800/70 bg-slate-900/70 px-3 py-2");
+      const title = createElement$2("div", "text-[0.65rem] uppercase tracking-wide text-slate-400", label);
+      const content = createElement$2("div", "font-mono text-base text-slate-100", value);
       wrapper.appendChild(title);
       wrapper.appendChild(content);
       return wrapper;
   }
   function createRunningSettingField(runId, setting, actions) {
-      const field = createElement("div", "rounded-md border border-slate-800/70 bg-slate-900/70 p-3");
-      const header = createElement("div", "flex items-center justify-between gap-2");
+      const field = createElement$2("div", "rounded-md border border-slate-800/70 bg-slate-900/70 p-3");
+      const header = createElement$2("div", "flex items-center justify-between gap-2");
       const rawLabel = setting.label?.trim() ?? "";
       const rawKey = setting.key?.trim() ?? "";
       const displayLabel = rawLabel !== "" ? rawLabel : rawKey !== "" ? rawKey : "Setting";
-      header.appendChild(createElement("div", "text-sm font-medium text-slate-100", displayLabel));
-      header.appendChild(createElement("span", "text-[0.65rem] uppercase tracking-wide text-slate-400", setting.type));
+      header.appendChild(createElement$2("div", "text-sm font-medium text-slate-100", displayLabel));
+      header.appendChild(createElement$2("span", "text-[0.65rem] uppercase tracking-wide text-slate-400", setting.type));
       field.appendChild(header);
       if (setting.key) {
-          field.appendChild(createElement("div", "text-[0.65rem] text-slate-500", `Key: ${setting.key}`));
+          field.appendChild(createElement$2("div", "text-[0.65rem] text-slate-500", `Key: ${setting.key}`));
       }
-      const controlContainer = createElement("div", "mt-3");
+      const controlContainer = createElement$2("div", "mt-3");
       switch (setting.type) {
           case "number": {
-              const input = document.createElement("input");
+              const input = viewDocument$2.createElement("input");
               input.type = "number";
               input.className =
                   "w-40 rounded-md border border-slate-700 bg-slate-950/70 px-3 py-1 text-xs text-slate-100 focus:outline-none focus:ring-2 focus:ring-sky-500/70";
@@ -3285,8 +3433,8 @@
               break;
           }
           case "toggle": {
-              const wrapper = createElement("label", "flex items-center gap-2 text-xs text-slate-200");
-              const toggle = document.createElement("input");
+              const wrapper = createElement$2("label", "flex items-center gap-2 text-xs text-slate-200");
+              const toggle = viewDocument$2.createElement("input");
               toggle.type = "checkbox";
               toggle.className =
                   "h-4 w-4 rounded border border-slate-600 bg-slate-900 text-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-500";
@@ -3295,12 +3443,12 @@
                   actions.updateRunningActionSetting?.(runId, setting.id, toggle.checked);
               });
               wrapper.appendChild(toggle);
-              wrapper.appendChild(createElement("span", "", "Enabled"));
+              wrapper.appendChild(createElement$2("span", "", "Enabled"));
               controlContainer.appendChild(wrapper);
               break;
           }
           default: {
-              const input = document.createElement("input");
+              const input = viewDocument$2.createElement("input");
               input.type = "text";
               input.className =
                   "w-full rounded-md border border-slate-700 bg-slate-950/70 px-3 py-1 text-xs text-slate-100 focus:outline-none focus:ring-2 focus:ring-sky-500/70";
@@ -3316,111 +3464,130 @@
       return field;
   }
 
+  let viewDocument$1 = document;
+  function withViewDocument$1(doc, fn) {
+      const previous = viewDocument$1;
+      viewDocument$1 = doc;
+      try {
+          return fn();
+      }
+      finally {
+          viewDocument$1 = previous;
+      }
+  }
+  function createElement$1(tag, className, textContent) {
+      return createElement$7(tag, className, textContent, viewDocument$1);
+  }
   function renderLogView(options) {
-      const { leaf, snapshot, existingContainer, actions, sortState, onSort, searchFilter, } = options;
-      const logActions = actions;
-      const logs = snapshot.sidebarLogs ?? [];
-      const revision = snapshot.sidebarLogRevision ?? 0;
-      const followEnabled = leaf.logFollowEnabled !== false;
-      const supportedSortKeys = [
-          "timestamp",
-          "level",
-          "source",
-          "message",
-      ];
-      let activeSortState = sortState;
-      if (!supportedSortKeys.includes(sortState.key)) {
-          const fallbackDirection = getDefaultDirection("timestamp");
-          activeSortState = { key: "timestamp", direction: fallbackDirection };
-          leaf.sortStates[leaf.view] = activeSortState;
-      }
-      const sortSignature = `${activeSortState.key}:${activeSortState.direction}`;
-      const isLogContainer = !!existingContainer &&
-          existingContainer.dataset.sidebarRole === SidebarRole.LogView;
-      const visibleHeaders = getVisibleHeaders(leaf, leaf.view, LOG_TABLE_HEADERS);
-      const visibilitySignature = getColumnVisibilitySignature(visibleHeaders);
-      if (isLogContainer) {
-          existingContainer.dataset.logFollowState = followEnabled
-              ? "following"
-              : "paused";
-          existingContainer.dataset.logStickToBottom = followEnabled
-              ? "true"
-              : "false";
-          const previousRevision = Number(existingContainer.dataset.logRevision ?? "-1");
-          const previousSortState = existingContainer.dataset.sortState ?? "";
-          const previousVisibility = existingContainer.dataset.columnVisibilitySignature ?? "";
-          const previousSearchFilter = existingContainer.dataset.searchFilter ?? "";
-          if (previousRevision === revision &&
-              previousSortState === sortSignature &&
-              previousVisibility === visibilitySignature &&
-              previousSearchFilter === (searchFilter ?? "")) {
-              existingContainer.dataset.logRevision = String(revision);
-              existingContainer.dataset.sortState = sortSignature;
-              existingContainer.dataset.columnVisibilitySignature = visibilitySignature;
-              existingContainer.dataset.searchFilter = searchFilter ?? "";
-              return existingContainer;
+      return withViewDocument$1(options.ui.document, () => {
+          const { leaf, snapshot, existingContainer, actions, sortState, onSort, searchFilter, } = options;
+          const logActions = actions;
+          const logs = snapshot.sidebarLogs ?? [];
+          const revision = snapshot.sidebarLogRevision ?? 0;
+          const followEnabled = leaf.logFollowEnabled !== false;
+          const supportedSortKeys = [
+              "timestamp",
+              "level",
+              "source",
+              "message",
+          ];
+          let activeSortState = sortState;
+          if (!supportedSortKeys.includes(sortState.key)) {
+              const fallbackDirection = getDefaultDirection("timestamp");
+              activeSortState = { key: "timestamp", direction: fallbackDirection };
+              leaf.sortStates[leaf.view] = activeSortState;
           }
-      }
-      const { container, tbody } = createTableShell({
-          sortState: activeSortState,
-          onSort,
-          existingContainer: isLogContainer ? existingContainer : undefined,
-          view: leaf.view,
-          headers: visibleHeaders,
-          role: SidebarRole.LogView,
+          const sortSignature = `${activeSortState.key}:${activeSortState.direction}`;
+          const isLogContainer = !!existingContainer &&
+              existingContainer.dataset.sidebarRole === SidebarRole.LogView;
+          const visibleHeaders = getVisibleHeaders(leaf, leaf.view, LOG_TABLE_HEADERS);
+          const visibilitySignature = getColumnVisibilitySignature(visibleHeaders);
+          if (isLogContainer) {
+              existingContainer.dataset.logFollowState = followEnabled
+                  ? "following"
+                  : "paused";
+              existingContainer.dataset.logStickToBottom = followEnabled
+                  ? "true"
+                  : "false";
+              const previousRevision = Number(existingContainer.dataset.logRevision ?? "-1");
+              const previousSortState = existingContainer.dataset.sortState ?? "";
+              const previousVisibility = existingContainer.dataset.columnVisibilitySignature ?? "";
+              const previousSearchFilter = existingContainer.dataset.searchFilter ?? "";
+              if (previousRevision === revision &&
+                  previousSortState === sortSignature &&
+                  previousVisibility === visibilitySignature &&
+                  previousSearchFilter === (searchFilter ?? "")) {
+                  existingContainer.dataset.logRevision = String(revision);
+                  existingContainer.dataset.sortState = sortSignature;
+                  existingContainer.dataset.columnVisibilitySignature = visibilitySignature;
+                  existingContainer.dataset.searchFilter = searchFilter ?? "";
+                  return existingContainer;
+              }
+          }
+          const { container, tbody } = createTableShell({
+              sortState: activeSortState,
+              onSort,
+              existingContainer: isLogContainer ? existingContainer : undefined,
+              view: leaf.view,
+              headers: visibleHeaders,
+              role: SidebarRole.LogView,
+              document: viewDocument$1,
+          });
+          container.dataset.logFollowState = followEnabled ? "following" : "paused";
+          container.dataset.logStickToBottom = followEnabled ? "true" : "false";
+          container.dataset.logRevision = String(revision);
+          container.dataset.sortState = sortSignature;
+          container.dataset.columnVisibilitySignature = visibilitySignature;
+          container.dataset.searchFilter = searchFilter ?? "";
+          const visibleKeys = new Set(visibleHeaders.map((header) => header.key));
+          if (logs.length === 0) {
+              const emptyRow = createElement$1("tr");
+              const emptyCell = createElement$1("td", `${TABLE_CELL_BASE_CLASS} py-8 text-center text-[0.75rem] italic text-slate-500`, "No log messages yet.");
+              emptyCell.colSpan = Math.max(1, visibleHeaders.length);
+              emptyRow.appendChild(emptyCell);
+              tbody.appendChild(emptyRow);
+          }
+          else {
+              const sortedLogs = [...logs];
+              switch (activeSortState.key) {
+                  case "timestamp":
+                      sortedLogs.sort((a, b) => compareSortValues(a.timestampMs, b.timestampMs, activeSortState.direction));
+                      break;
+                  case "level":
+                      sortedLogs.sort((a, b) => compareSortValues(getLogLevelWeight(a.level), getLogLevelWeight(b.level), activeSortState.direction));
+                      break;
+                  case "source":
+                      sortedLogs.sort((a, b) => compareSortValues((a.source ?? "").toLowerCase(), (b.source ?? "").toLowerCase(), activeSortState.direction));
+                      break;
+                  case "message":
+                      sortedLogs.sort((a, b) => compareSortValues(getLogMessageSortValue(a), getLogMessageSortValue(b), activeSortState.direction));
+                      break;
+                  default:
+                      break;
+              }
+              for (const entry of sortedLogs) {
+                  tbody.appendChild(renderLogRow(entry, logActions, visibleKeys));
+              }
+          }
+          return container;
       });
-      container.dataset.logFollowState = followEnabled ? "following" : "paused";
-      container.dataset.logStickToBottom = followEnabled ? "true" : "false";
-      container.dataset.logRevision = String(revision);
-      container.dataset.sortState = sortSignature;
-      container.dataset.columnVisibilitySignature = visibilitySignature;
-      container.dataset.searchFilter = searchFilter ?? "";
-      const visibleKeys = new Set(visibleHeaders.map((header) => header.key));
-      if (logs.length === 0) {
-          const emptyRow = createElement("tr");
-          const emptyCell = createElement("td", `${TABLE_CELL_BASE_CLASS} py-8 text-center text-[0.75rem] italic text-slate-500`, "No log messages yet.");
-          emptyCell.colSpan = Math.max(1, visibleHeaders.length);
-          emptyRow.appendChild(emptyCell);
-          tbody.appendChild(emptyRow);
-      }
-      else {
-          const sortedLogs = [...logs];
-          switch (activeSortState.key) {
-              case "timestamp":
-                  sortedLogs.sort((a, b) => compareSortValues(a.timestampMs, b.timestampMs, activeSortState.direction));
-                  break;
-              case "level":
-                  sortedLogs.sort((a, b) => compareSortValues(getLogLevelWeight(a.level), getLogLevelWeight(b.level), activeSortState.direction));
-                  break;
-              case "source":
-                  sortedLogs.sort((a, b) => compareSortValues((a.source ?? "").toLowerCase(), (b.source ?? "").toLowerCase(), activeSortState.direction));
-                  break;
-              case "message":
-                  sortedLogs.sort((a, b) => compareSortValues(getLogMessageSortValue(a), getLogMessageSortValue(b), activeSortState.direction));
-                  break;
-          }
-          for (const entry of sortedLogs) {
-              tbody.appendChild(renderLogRow(entry, logActions, visibleKeys));
-          }
-      }
-      return container;
   }
   function renderLogRow(entry, actions, visibleKeys) {
-      const row = createElement("tr", "transition-colors hover:bg-slate-900/40");
+      const row = createElement$1("tr", "transition-colors hover:bg-slate-900/40");
       row.dataset.sidebarRole = SidebarRole.LogEntry;
       row.dataset.logEntryId = entry.id;
       row.dataset.logLevel = entry.level;
       row.dataset.logTimestamp = String(entry.timestampMs);
       row.style.boxShadow = `inset 0.25rem 0 0 0 ${getLogAccentColor(entry.level)}`;
       const cellBaseClass = `${TABLE_CELL_BASE_CLASS} align-top`;
-      const timestampCell = createElement("td", `${cellBaseClass} font-mono text-[0.75rem] text-slate-300 whitespace-nowrap`, formatTimestamp(entry.timestampMs));
-      const levelCell = createElement("td", `${cellBaseClass} text-center`);
-      const levelBadge = createElement("span", `inline-flex items-center justify-center rounded px-1.5 py-0.5 text-[0.65rem] font-semibold uppercase tracking-wide ${getLogLevelBadgeClass(entry.level)}`, entry.level.toUpperCase());
+      const timestampCell = createElement$1("td", `${cellBaseClass} font-mono text-[0.75rem] text-slate-300 whitespace-nowrap`, formatTimestamp(entry.timestampMs));
+      const levelCell = createElement$1("td", `${cellBaseClass} text-center`);
+      const levelBadge = createElement$1("span", `inline-flex items-center justify-center rounded px-1.5 py-0.5 text-[0.65rem] font-semibold uppercase tracking-wide ${getLogLevelBadgeClass(entry.level)}`, entry.level.toUpperCase());
       levelCell.appendChild(levelBadge);
       const hasSource = !!entry.source && entry.source.trim().length > 0;
-      const sourceCell = createElement("td", `${cellBaseClass} text-[0.75rem] text-slate-400 whitespace-nowrap`, hasSource ? entry.source : "–");
+      const sourceCell = createElement$1("td", `${cellBaseClass} text-[0.75rem] text-slate-400 whitespace-nowrap`, hasSource ? entry.source : "–");
       const messageCellClass = `${cellBaseClass} font-mono text-[0.75rem] whitespace-pre-wrap break-words `;
-      const messageCell = createElement("td", `${messageCellClass}${getLogMessageClass(entry.level)}`);
+      const messageCell = createElement$1("td", `${messageCellClass}${getLogMessageClass(entry.level)}`);
       if (entry.tokens && entry.tokens.length > 0) {
           messageCell.appendChild(renderLogTokens(entry.tokens, actions));
       }
@@ -3465,10 +3632,10 @@
       return entry.message.toLowerCase();
   }
   function renderLogTokens(tokens, actions) {
-      const fragment = document.createDocumentFragment();
+      const fragment = viewDocument$1.createDocumentFragment();
       for (const token of tokens) {
           if (token.type === "text") {
-              fragment.appendChild(document.createTextNode(token.text));
+              fragment.appendChild(viewDocument$1.createTextNode(token.text));
               continue;
           }
           fragment.appendChild(createLogMentionPill(token, actions));
@@ -3476,18 +3643,18 @@
       return fragment;
   }
   function createLogMentionPill(token, actions) {
-      const button = createElement("button", "inline-flex max-w-full items-center gap-1 rounded-full border border-slate-700/70 bg-slate-900/40 px-2.5 py-0.5 text-[0.65rem] font-semibold text-slate-200 transition-colors hover:border-sky-500/70 hover:text-sky-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-500/60");
+      const button = createElement$1("button", "inline-flex max-w-full items-center gap-1 rounded-full border border-slate-700/70 bg-slate-900/40 px-2.5 py-0.5 text-[0.65rem] font-semibold text-slate-200 transition-colors hover:border-sky-500/70 hover:text-sky-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-500/60");
       button.type = "button";
       button.dataset.sidebarRole = SidebarRole.LogMention;
       button.dataset.mentionType = token.type;
       button.dataset.mentionId = token.id;
       if (token.color) {
           button.style.borderColor = token.color;
-          const swatch = createElement("span", "h-2 w-2 shrink-0 rounded-full border border-slate-900/70");
+          const swatch = createElement$1("span", "h-2 w-2 shrink-0 rounded-full border border-slate-900/70");
           swatch.style.backgroundColor = token.color;
           button.appendChild(swatch);
       }
-      const label = createElement("span", "max-w-[10rem] truncate text-left", token.label);
+      const label = createElement$1("span", "max-w-[10rem] truncate text-left", token.label);
       label.title = token.label;
       button.appendChild(label);
       switch (token.type) {
@@ -3555,103 +3722,121 @@
       }
   }
 
+  let viewDocument = document;
+  function withViewDocument(doc, fn) {
+      const previous = viewDocument;
+      viewDocument = doc;
+      try {
+          return fn();
+      }
+      finally {
+          viewDocument = previous;
+      }
+  }
+  function createElement(tag, className, textContent) {
+      return createElement$7(tag, className, textContent, viewDocument);
+  }
   function renderOverlayView(options) {
-      const { leaf, snapshot, existingContainer, actions, sortState, onSort } = options;
-      const overlays = snapshot.sidebarOverlays ?? [];
-      const revision = snapshot.sidebarOverlayRevision ?? 0;
-      const signature = `${revision}:${overlays
-        .map((overlay) => `${overlay.id}:${overlay.enabled ? 1 : 0}`)
-        .join("|")}`;
-      const sortSignature = `${sortState.key}:${sortState.direction}`;
-      const isOverlayContainer = !!existingContainer &&
-          existingContainer.dataset.sidebarRole === SidebarRole.OverlaysDirectory;
-      const visibleHeaders = getVisibleHeaders(leaf, leaf.view, OVERLAY_TABLE_HEADERS);
-      const visibilitySignature = getColumnVisibilitySignature(visibleHeaders);
-      if (isOverlayContainer &&
-          existingContainer.dataset.signature === signature &&
-          existingContainer.dataset.sortState === sortSignature &&
-          existingContainer.dataset.columnVisibilitySignature === visibilitySignature) {
-          existingContainer.dataset.columnVisibilitySignature = visibilitySignature;
-          return existingContainer;
-      }
-      const { container, tbody } = createTableShell({
-          sortState,
-          onSort,
-          existingContainer: isOverlayContainer ? existingContainer : undefined,
-          view: leaf.view,
-          headers: visibleHeaders,
-          role: SidebarRole.OverlaysDirectory,
-      });
-      container.dataset.signature = signature;
-      container.dataset.sortState = sortSignature;
-      container.dataset.columnVisibilitySignature = visibilitySignature;
-      const cellBaseClass = `${TABLE_CELL_BASE_CLASS} align-top`;
-      const visibleKeys = new Set(visibleHeaders.map((header) => header.key));
-      if (overlays.length === 0) {
-          const row = createElement("tr", "hover:bg-transparent");
-          const cell = createElement("td", `${cellBaseClass} text-center text-slate-400`, "No overlays available.");
-          cell.colSpan = Math.max(1, visibleHeaders.length);
-          row.appendChild(cell);
-          tbody.appendChild(row);
-          return container;
-      }
-      const sortedOverlays = [...overlays];
-      if (sortState.key === "label") {
-          sortedOverlays.sort((a, b) => compareSortValues(a.label.toLowerCase(), b.label.toLowerCase(), sortState.direction));
-      }
-      else if (sortState.key === "status") {
-          sortedOverlays.sort((a, b) => compareSortValues(a.enabled ? 1 : 0, b.enabled ? 1 : 0, sortState.direction));
-      }
-      for (const overlay of sortedOverlays) {
-          const row = createElement("tr", "transition-colors hover:bg-slate-800/40");
-          const nameCell = createElement("td", `${cellBaseClass} text-left`);
-          const nameStack = createElement("div", "flex flex-col gap-1");
-          const nameLabel = createElement("span", "font-semibold text-slate-100", overlay.label);
-          nameStack.appendChild(nameLabel);
-          nameCell.appendChild(nameStack);
-          const statusCell = createElement("td", `${cellBaseClass} text-right`);
-          const toggleWrapper = createElement("div", "flex justify-end");
-          const toggleButton = createElement("button", "relative inline-flex h-6 w-12 items-center rounded-full border transition-colors focus:outline-none focus:ring-2 focus:ring-sky-500/60");
-          toggleButton.type = "button";
-          toggleButton.setAttribute("role", "switch");
-          const srToggleLabel = createElement("span", "sr-only", "Toggle overlay");
-          const toggleKnob = createElement("span", "pointer-events-none absolute left-1 h-4 w-4 rounded-full shadow transition-transform duration-150 ease-out");
-          toggleButton.appendChild(srToggleLabel);
-          toggleButton.appendChild(toggleKnob);
-          const updateToggleAppearance = (enabled) => {
-              toggleButton.setAttribute("aria-checked", enabled ? "true" : "false");
-              toggleButton.classList.toggle("border-emerald-400/60", enabled);
-              toggleButton.classList.toggle("bg-emerald-500/40", enabled);
-              toggleButton.classList.toggle("hover:bg-emerald-500/50", enabled);
-              toggleButton.classList.toggle("border-slate-700", !enabled);
-              toggleButton.classList.toggle("bg-slate-800/70", !enabled);
-              toggleButton.classList.toggle("hover:bg-slate-700/80", !enabled);
-              toggleKnob.classList.toggle("bg-emerald-100", enabled);
-              toggleKnob.classList.toggle("bg-slate-300", !enabled);
-              toggleKnob.style.transform = enabled
-                  ? "translateX(1.5rem)"
-                  : "translateX(0)";
-              toggleButton.title = enabled ? "Disable overlay" : "Enable overlay";
-          };
-          let currentEnabled = overlay.enabled;
-          updateToggleAppearance(currentEnabled);
-          toggleButton.addEventListener("click", (event) => {
-              event.stopPropagation();
-              currentEnabled = !currentEnabled;
-              updateToggleAppearance(currentEnabled);
-              actions.setOverlayEnabled?.(overlay.id, currentEnabled);
+      return withViewDocument(options.ui.document, () => {
+          const { leaf, snapshot, existingContainer, actions, sortState, onSort } = options;
+          const overlays = snapshot.sidebarOverlays ?? [];
+          const revision = snapshot.sidebarOverlayRevision ?? 0;
+          const signature = `${revision}:${overlays
+            .map((overlay) => `${overlay.id}:${overlay.enabled ? 1 : 0}`)
+            .join("|")}`;
+          const sortSignature = `${sortState.key}:${sortState.direction}`;
+          const isOverlayContainer = !!existingContainer &&
+              existingContainer.dataset.sidebarRole === SidebarRole.OverlaysDirectory;
+          const visibleHeaders = getVisibleHeaders(leaf, leaf.view, OVERLAY_TABLE_HEADERS);
+          const visibilitySignature = getColumnVisibilitySignature(visibleHeaders);
+          if (isOverlayContainer &&
+              existingContainer.dataset.signature === signature &&
+              existingContainer.dataset.sortState === sortSignature &&
+              existingContainer.dataset.columnVisibilitySignature ===
+                  visibilitySignature) {
+              existingContainer.dataset.columnVisibilitySignature = visibilitySignature;
+              return existingContainer;
+          }
+          const { container, tbody } = createTableShell({
+              sortState,
+              onSort,
+              existingContainer: isOverlayContainer ? existingContainer : undefined,
+              view: leaf.view,
+              headers: visibleHeaders,
+              role: SidebarRole.OverlaysDirectory,
+              document: viewDocument,
           });
-          toggleWrapper.appendChild(toggleButton);
-          statusCell.appendChild(toggleWrapper);
-          if (visibleKeys.has("status")) {
-              row.appendChild(statusCell);
+          container.dataset.signature = signature;
+          container.dataset.sortState = sortSignature;
+          container.dataset.columnVisibilitySignature = visibilitySignature;
+          const cellBaseClass = `${TABLE_CELL_BASE_CLASS} align-top`;
+          const visibleKeys = new Set(visibleHeaders.map((header) => header.key));
+          if (overlays.length === 0) {
+              const row = createElement("tr", "hover:bg-transparent");
+              const cell = createElement("td", `${cellBaseClass} text-center text-slate-400`, "No overlays available.");
+              cell.colSpan = Math.max(1, visibleHeaders.length);
+              row.appendChild(cell);
+              tbody.appendChild(row);
+              return container;
           }
-          if (visibleKeys.has("name")) {
-              row.insertBefore(nameCell, row.firstChild);
+          const sortedOverlays = [...overlays];
+          if (sortState.key === "label") {
+              sortedOverlays.sort((a, b) => compareSortValues(a.label.toLowerCase(), b.label.toLowerCase(), sortState.direction));
           }
-          tbody.appendChild(row);
-      }
-      return container;
+          else if (sortState.key === "status") {
+              sortedOverlays.sort((a, b) => compareSortValues(a.enabled ? 1 : 0, b.enabled ? 1 : 0, sortState.direction));
+          }
+          for (const overlay of sortedOverlays) {
+              const row = createElement("tr", "transition-colors hover:bg-slate-800/40");
+              const nameCell = createElement("td", `${cellBaseClass} text-left`);
+              const nameStack = createElement("div", "flex flex-col gap-1");
+              const nameLabel = createElement("span", "font-semibold text-slate-100", overlay.label);
+              nameStack.appendChild(nameLabel);
+              nameCell.appendChild(nameStack);
+              const statusCell = createElement("td", `${cellBaseClass} text-right`);
+              const toggleWrapper = createElement("div", "flex justify-end");
+              const toggleButton = createElement("button", "relative inline-flex h-6 w-12 items-center rounded-full border transition-colors focus:outline-none focus:ring-2 focus:ring-sky-500/60");
+              toggleButton.type = "button";
+              toggleButton.setAttribute("role", "switch");
+              const srToggleLabel = createElement("span", "sr-only", "Toggle overlay");
+              const toggleKnob = createElement("span", "pointer-events-none absolute left-1 h-4 w-4 rounded-full shadow transition-transform duration-150 ease-out");
+              toggleButton.appendChild(srToggleLabel);
+              toggleButton.appendChild(toggleKnob);
+              const updateToggleAppearance = (enabled) => {
+                  toggleButton.setAttribute("aria-checked", enabled ? "true" : "false");
+                  toggleButton.classList.toggle("border-emerald-400/60", enabled);
+                  toggleButton.classList.toggle("bg-emerald-500/40", enabled);
+                  toggleButton.classList.toggle("hover:bg-emerald-500/50", enabled);
+                  toggleButton.classList.toggle("border-slate-700", !enabled);
+                  toggleButton.classList.toggle("bg-slate-800/70", !enabled);
+                  toggleButton.classList.toggle("hover:bg-slate-700/80", !enabled);
+                  toggleKnob.classList.toggle("bg-emerald-100", enabled);
+                  toggleKnob.classList.toggle("bg-slate-300", !enabled);
+                  toggleKnob.style.transform = enabled
+                      ? "translateX(1.5rem)"
+                      : "translateX(0)";
+                  toggleButton.title = enabled ? "Disable overlay" : "Enable overlay";
+              };
+              let currentEnabled = overlay.enabled;
+              updateToggleAppearance(currentEnabled);
+              toggleButton.addEventListener("click", (event) => {
+                  event.stopPropagation();
+                  currentEnabled = !currentEnabled;
+                  updateToggleAppearance(currentEnabled);
+                  actions.setOverlayEnabled?.(overlay.id, currentEnabled);
+              });
+              toggleWrapper.appendChild(toggleButton);
+              statusCell.appendChild(toggleWrapper);
+              if (visibleKeys.has("status")) {
+                  row.appendChild(statusCell);
+              }
+              if (visibleKeys.has("name")) {
+                  row.insertBefore(nameCell, row.firstChild);
+              }
+              tbody.appendChild(row);
+          }
+          return container;
+      });
   }
 
   const DEFAULT_ACTIONS = {
@@ -3673,7 +3858,7 @@
       clearLogs: () => undefined,
       setOverlayEnabled: () => undefined,
   };
-  function buildViewContent(leaf, snapshot, requestRender, existingContainer, lifecycle, actions, searchFilter) {
+  function buildViewContent(leaf, snapshot, requestRender, ui, existingContainer, lifecycle, actions, searchFilter) {
       const view = leaf.view;
       const sortState = ensureSortState(leaf, view);
       const viewActions = actions ?? DEFAULT_ACTIONS;
@@ -3693,6 +3878,7 @@
                   leaf,
                   snapshot,
                   requestRender,
+                  ui,
                   sortState,
                   onSort: handleSort,
                   existingContainer,
@@ -3704,6 +3890,7 @@
                   leaf,
                   snapshot,
                   requestRender,
+                  ui,
                   sortState,
                   onSort: handleSort,
                   existingContainer,
@@ -3715,6 +3902,7 @@
                   leaf,
                   snapshot,
                   requestRender,
+                  ui,
                   sortState,
                   onSort: handleSort,
                   existingContainer,
@@ -3726,6 +3914,7 @@
                   leaf,
                   snapshot,
                   requestRender,
+                  ui,
                   sortState,
                   onSort: handleSort,
                   existingContainer,
@@ -3737,6 +3926,7 @@
                   leaf,
                   snapshot,
                   requestRender,
+                  ui,
                   sortState,
                   onSort: handleSort,
                   existingContainer,
@@ -3747,6 +3937,7 @@
               return renderActionsDirectoryView({
                   leaf,
                   snapshot,
+                  ui,
                   sortState,
                   onSort: handleSort,
                   existingContainer,
@@ -3756,6 +3947,7 @@
               return renderActionEditorView({
                   leaf,
                   snapshot,
+                  ui,
                   existingContainer,
                   lifecycle,
                   actions: viewActions,
@@ -3764,6 +3956,7 @@
               return renderRunningActionsView({
                   leaf,
                   snapshot,
+                  ui,
                   sortState,
                   onSort: handleSort,
                   existingContainer,
@@ -3773,6 +3966,7 @@
               return renderRunningActionDetailView({
                   leaf,
                   snapshot,
+                  ui,
                   existingContainer,
                   lifecycle,
                   actions: viewActions,
@@ -3781,6 +3975,7 @@
               return renderLogView({
                   leaf,
                   snapshot,
+                  ui,
                   sortState,
                   onSort: handleSort,
                   existingContainer,
@@ -3791,13 +3986,14 @@
               return renderOverlayView({
                   leaf,
                   snapshot,
+                  ui,
                   sortState,
                   onSort: handleSort,
                   existingContainer,
                   actions: viewActions,
               });
           default:
-              return createElement("div", "text-slate-200 text-sm", "Unsupported view");
+              return createElement$7("div", "text-slate-200 text-sm", "Unsupported view", ui.document);
       }
   }
 
@@ -3827,48 +4023,72 @@
           : PANEL_ACTION_BUTTON_BASE_CLASS;
   }
   const SIDEBAR_STYLE_ID = "openfront-strategic-sidebar-styles";
-  function ensureSidebarStyles() {
-      if (document.getElementById(SIDEBAR_STYLE_ID)) {
+  function ensureSidebarStyles(targetDocument) {
+      if (targetDocument.getElementById(SIDEBAR_STYLE_ID)) {
           return;
       }
-      const style = document.createElement("style");
+      const style = targetDocument.createElement("style");
       style.id = SIDEBAR_STYLE_ID;
-      const tableRole = SidebarRole.TableContainer;
-      style.textContent = `
-    #openfront-strategic-sidebar [data-sidebar-role="${tableRole}"] {
+      const roles = [SidebarRole.TableContainer, SidebarRole.LogView];
+      style.textContent = roles
+          .map((role) => `
+    #openfront-strategic-sidebar [data-sidebar-role="${role}"] {
       scrollbar-width: thin;
       scrollbar-color: rgba(148, 163, 184, 0.7) transparent;
     }
 
-    #openfront-strategic-sidebar [data-sidebar-role="${tableRole}"]::-webkit-scrollbar {
+    #openfront-strategic-sidebar [data-sidebar-role="${role}"]::-webkit-scrollbar {
       width: 6px;
       height: 6px;
     }
 
-    #openfront-strategic-sidebar [data-sidebar-role="${tableRole}"]::-webkit-scrollbar-thumb {
+    #openfront-strategic-sidebar [data-sidebar-role="${role}"]::-webkit-scrollbar-thumb {
       background-color: rgba(148, 163, 184, 0.7);
       border-radius: 9999px;
     }
 
-    #openfront-strategic-sidebar [data-sidebar-role="${tableRole}"]::-webkit-scrollbar-track {
+    #openfront-strategic-sidebar [data-sidebar-role="${role}"]::-webkit-scrollbar-track {
       background-color: transparent;
-    }
-  `;
-      document.head.appendChild(style);
+    }`)
+          .join("\n");
+      targetDocument.head.appendChild(style);
   }
   const OVERLAY_SELECTORS = ["game-left-sidebar", "control-panel"];
   class SidebarApp {
-      constructor(store) {
+      constructor(store, options, uiDocument = document, uiWindow = window) {
+          this.hostDocument = document;
+          this.hostWindow = window;
+          this.uiDocument = document;
+          this.uiWindow = window;
           this.overlayElements = new Map();
-          this.handleOverlayRealign = () => this.repositionGameOverlay();
+          this.handleOverlayRealign = () => this.runWithUiContext(() => this.repositionGameOverlay());
           this.handleGlobalKeyDown = (event) => this.onGlobalKeyDown(event);
           this.searchFilter = "";
           this.isSidebarHidden = false;
+          this.sidebarResizer = null;
+          this.sidebarDefaultWidth = "420px";
+          this.hostSidebarWidth = "420px";
+          this.isQuickActionsMenuOpen = false;
+          this.handleQuickActionsPointerDown = (event) => this.runWithUiContext(() => this.onQuickActionsPointerDown(event));
+          this.handleQuickActionsKeyDown = (event) => this.runWithUiContext(() => this.onQuickActionsKeyDown(event));
+          this.enableOverlayAlignment = options?.enableOverlayAlignment ?? true;
+          this.onRequestNewWindow = options?.onRequestNewWindow;
+          this.onPlayerDetailsSelected = options?.onPlayerDetailsSelected;
+          this.onSearchFilterChanged = options?.onSearchFilterChanged;
+          this.windowMode = options?.windowMode ?? "embedded";
+          this.enableGlobalHotkeys = this.windowMode === "embedded";
+          this.setUiEnvironment(uiDocument, uiWindow);
           this.store = store;
           this.snapshot = store.getSnapshot();
-          ensureSidebarStyles();
+          this.runWithUiContext(() => {
+              ensureSidebarStyles(this.uiDocument);
+          });
           this.sidebar = this.createSidebarShell();
           this.layoutContainer = this.sidebar.querySelector("[data-sidebar-layout]");
+          this.sidebarDefaultWidth =
+              this.sidebar.style.width || this.sidebarDefaultWidth;
+          this.hostSidebarWidth = this.sidebarDefaultWidth;
+          this.applySidebarLayoutMode();
           this.rootNode = createDefaultRootNode();
           this.viewActions = {
               toggleTrading: (playerIds, stopped) => this.store.setTradingStopped(playerIds, stopped),
@@ -3915,26 +4135,82 @@
           };
           this.renderLayout();
           this.store.subscribe((snapshot) => {
-              const previousSnapshot = this.snapshot;
-              const previousSelf = this.getSelfPlayer(previousSnapshot);
-              const nextSelf = this.getSelfPlayer(snapshot);
-              const joinedNewGame = (previousSnapshot.players.length === 0 &&
-                  snapshot.players.length > 0) ||
-                  (previousSelf && nextSelf && previousSelf.id !== nextSelf.id);
-              this.snapshot = snapshot;
-              if (joinedNewGame) {
-                  this.expandSelfClanmates(snapshot);
-              }
-              this.refreshAllLeaves();
+              this.runWithUiContext(() => {
+                  const previousSnapshot = this.snapshot;
+                  const previousSelf = this.getSelfPlayer(previousSnapshot);
+                  const nextSelf = this.getSelfPlayer(snapshot);
+                  const joinedNewGame = (previousSnapshot.players.length === 0 &&
+                      snapshot.players.length > 0) ||
+                      (previousSelf && nextSelf && previousSelf.id !== nextSelf.id);
+                  this.snapshot = snapshot;
+                  if (joinedNewGame) {
+                      this.expandSelfClanmates(snapshot);
+                  }
+                  this.refreshAllLeaves();
+              });
           });
-          this.observeGameOverlays();
-          this.overlayResizeObserver = new ResizeObserver(this.handleOverlayRealign);
-          this.overlayResizeObserver.observe(this.sidebar);
-          window.addEventListener("resize", this.handleOverlayRealign);
-          window.addEventListener("keydown", this.handleGlobalKeyDown);
+          if (this.enableOverlayAlignment) {
+              this.observeGameOverlays();
+              this.overlayResizeObserver = new ResizeObserver(this.handleOverlayRealign);
+              this.overlayResizeObserver.observe(this.sidebar);
+              this.hostWindow.addEventListener("resize", this.handleOverlayRealign);
+          }
+          if (this.enableGlobalHotkeys) {
+              this.hostWindow.addEventListener("keydown", this.handleGlobalKeyDown);
+          }
           this.repositionGameOverlay();
       }
+      syncPlayerDetails(playerId) {
+          this.syncPlayerSelection(playerId);
+      }
+      syncPlayerSelection(playerId) {
+          const trimmed = playerId.trim();
+          if (!trimmed) {
+              return;
+          }
+          this.applyPlayerDetailsSelection(trimmed);
+          const player = this.snapshot.players.find((entry) => entry.id === trimmed);
+          if (player) {
+              this.highlightPlayerAcrossViews(player);
+          }
+      }
+      syncSearchFilter(query) {
+          const trimmed = query.trim();
+          const next = trimmed.length >= 2 ? trimmed : "";
+          if (this.searchInput) {
+              this.searchInput.value = next;
+          }
+          this.updateSearchFilter(next, { notify: false });
+      }
+      destroy() {
+          this.runWithUiContext(() => {
+              if (this.overlayObserver) {
+                  this.overlayObserver.disconnect();
+              }
+              if (this.overlayResizeObserver) {
+                  this.overlayResizeObserver.disconnect();
+              }
+              this.hostWindow.removeEventListener("resize", this.handleOverlayRealign);
+              if (this.enableGlobalHotkeys) {
+                  this.hostWindow.removeEventListener("keydown", this.handleGlobalKeyDown);
+              }
+              this.closeQuickActionsMenu();
+          });
+      }
+      setUiEnvironment(doc, win) {
+          this.uiDocument = doc;
+          this.uiWindow = win;
+      }
+      runWithUiContext(fn) {
+          return fn();
+      }
+      createUiElement(tag, className, textContent) {
+          return createElement$7(tag, className, textContent, this.uiDocument);
+      }
       onGlobalKeyDown(event) {
+          this.runWithUiContext(() => this.handleKeyDownInternal(event));
+      }
+      handleKeyDownInternal(event) {
           if (event.defaultPrevented || event.repeat) {
               return;
           }
@@ -3960,47 +4236,75 @@
           this.toggleSidebarVisibility();
       }
       createSidebarShell() {
-          const existing = document.getElementById("openfront-strategic-sidebar");
+          const existing = this.uiDocument.getElementById("openfront-strategic-sidebar");
           if (existing) {
               existing.remove();
           }
-          const sidebar = createElement("aside", "fixed top-0 left-0 z-[2147483646] flex h-full max-w-[90vw] flex-col border-r border-slate-800/80 bg-slate-950/95 text-slate-100 shadow-2xl backdrop-blur");
+          const sidebar = this.createUiElement("aside", "fixed top-0 left-0 z-[2147483646] flex h-full max-w-[90vw] flex-col border-r border-slate-800/80 bg-slate-950/95 text-slate-100 shadow-2xl backdrop-blur");
           sidebar.id = "openfront-strategic-sidebar";
-          sidebar.style.width = "420px";
+          sidebar.style.width = this.windowMode === "standalone" ? "100%" : "420px";
+          sidebar.style.maxWidth = this.windowMode === "standalone" ? "100%" : "90vw";
           sidebar.style.fontFamily = `'Inter', 'Segoe UI', system-ui, sans-serif`;
-          const resizer = createElement("div", "group absolute right-0 top-0 flex h-full w-3 translate-x-full cursor-col-resize items-center justify-center rounded-r-full bg-transparent transition-colors duration-150 hover:bg-sky-500/10");
-          resizer.appendChild(createElement("span", "h-12 w-px rounded-full bg-slate-600/60 transition-colors duration-150 group-hover:bg-sky-400/60"));
-          resizer.addEventListener("pointerdown", (event) => this.startSidebarResize(event));
+          const resizer = this.createUiElement("div", "group absolute right-0 top-0 flex h-full w-3 translate-x-full cursor-col-resize items-center justify-center rounded-r-full bg-transparent transition-colors duration-150 hover:bg-sky-500/10");
+          resizer.dataset.sidebarResizer = "true";
+          this.sidebarResizer = resizer;
+          resizer.appendChild(this.createUiElement("span", "h-12 w-px rounded-full bg-slate-600/60 transition-colors duration-150 group-hover:bg-sky-400/60"));
+          resizer.addEventListener("pointerdown", (event) => this.runWithUiContext(() => this.startSidebarResize(event)));
           sidebar.appendChild(resizer);
-          const layout = createElement("div", "flex h-full flex-1 flex-col gap-3 overflow-hidden p-3");
+          const layout = this.createUiElement("div", "flex h-full flex-1 flex-col gap-3 overflow-hidden p-3");
           layout.dataset.sidebarLayout = "true";
           sidebar.appendChild(layout);
-          document.body.appendChild(sidebar);
+          this.uiDocument.body.appendChild(sidebar);
           return sidebar;
       }
       startSidebarResize(event) {
-          event.preventDefault();
-          const startWidth = this.sidebar.getBoundingClientRect().width;
-          const startX = event.clientX;
-          const originalUserSelect = document.body.style.userSelect;
-          document.body.style.userSelect = "none";
-          const onMove = (moveEvent) => {
-              const delta = moveEvent.clientX - startX;
-              const nextWidth = clamp(startWidth + delta, 280, window.innerWidth * 0.9);
-              this.sidebar.style.width = `${nextWidth}px`;
-              this.repositionGameOverlay();
-          };
-          const onUp = () => {
-              window.removeEventListener("pointermove", onMove);
-              window.removeEventListener("pointerup", onUp);
-              window.removeEventListener("pointercancel", onUp);
-              document.body.style.userSelect = originalUserSelect;
-          };
-          window.addEventListener("pointermove", onMove);
-          window.addEventListener("pointerup", onUp);
-          window.addEventListener("pointercancel", onUp);
+          this.runWithUiContext(() => {
+              event.preventDefault();
+              const startWidth = this.sidebar.getBoundingClientRect().width;
+              const startX = event.clientX;
+              const originalUserSelect = this.uiDocument.body.style.userSelect;
+              this.uiDocument.body.style.userSelect = "none";
+              const onMove = (moveEvent) => {
+                  const delta = moveEvent.clientX - startX;
+                  const nextWidth = clamp(startWidth + delta, 280, (this.uiWindow.innerWidth ?? window.innerWidth) * 0.9);
+                  this.sidebar.style.width = `${nextWidth}px`;
+                  this.repositionGameOverlay();
+              };
+              const onUp = () => {
+                  this.uiWindow.removeEventListener("pointermove", onMove);
+                  this.uiWindow.removeEventListener("pointerup", onUp);
+                  this.uiWindow.removeEventListener("pointercancel", onUp);
+                  this.uiDocument.body.style.userSelect = originalUserSelect;
+              };
+              this.uiWindow.addEventListener("pointermove", onMove);
+              this.uiWindow.addEventListener("pointerup", onUp);
+              this.uiWindow.addEventListener("pointercancel", onUp);
+          });
+      }
+      applySidebarLayoutMode() {
+          const resizer = this.sidebarResizer ??
+              this.sidebar.querySelector("[data-sidebar-resizer]");
+          const isStandalone = this.windowMode === "standalone";
+          const targetWidth = isStandalone
+              ? "100%"
+              : this.hostSidebarWidth || this.sidebarDefaultWidth;
+          this.sidebar.style.width = targetWidth;
+          this.sidebar.style.maxWidth = isStandalone ? "100%" : "90vw";
+          if (resizer) {
+              if (isStandalone) {
+                  resizer.style.display = "none";
+                  resizer.setAttribute("aria-hidden", "true");
+              }
+              else {
+                  resizer.style.display = "";
+                  resizer.removeAttribute("aria-hidden");
+              }
+          }
       }
       observeGameOverlays() {
+          if (!this.enableOverlayAlignment) {
+              return;
+          }
           let discovered = false;
           for (const selector of OVERLAY_SELECTORS) {
               const registration = this.overlayElements.get(selector);
@@ -4073,8 +4377,12 @@
           });
       }
       repositionGameOverlay() {
+          if (!this.enableOverlayAlignment) {
+              return;
+          }
           let missingElement = false;
-          const sidebarWidth = this.isSidebarHidden
+          const treatHidden = this.isSidebarHidden;
+          const sidebarWidth = treatHidden
               ? 0
               : this.sidebar.getBoundingClientRect().width;
           const offset = Math.round(sidebarWidth) + 16;
@@ -4085,7 +4393,7 @@
                   continue;
               }
               const target = registration.target;
-              if (this.isSidebarHidden) {
+              if (treatHidden) {
                   target.style.left = registration.originalLeft;
                   target.style.right = registration.originalRight;
                   target.style.maxWidth = registration.originalMaxWidth;
@@ -4199,7 +4507,7 @@
           return null;
       }
       findPositionedChild(root) {
-          const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
+          const walker = (root.ownerDocument ?? document).createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
           const current = walker.currentNode;
           if (current !== root) {
               const position = window.getComputedStyle(current).position;
@@ -4220,7 +4528,13 @@
           return null;
       }
       renderLayout() {
+          this.runWithUiContext(() => {
+              this.doRenderLayout();
+          });
+      }
+      doRenderLayout() {
           this.searchInput = undefined;
+          this.closeQuickActionsMenu();
           this.layoutContainer.innerHTML = "";
           this.layoutContainer.appendChild(this.buildSidebarTopBars());
           const rootElement = this.buildNodeElement(this.rootNode);
@@ -4230,47 +4544,131 @@
           this.refreshAllLeaves();
       }
       buildSidebarTopBars() {
-          const container = createElement("div", "flex gap-3");
-          const radarTile = createElement("div", "flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-slate-800/70 bg-slate-900/70 shadow-inner");
-          radarTile.appendChild(renderIcon("radar", "h-5 w-5 text-slate-200"));
-          container.appendChild(radarTile);
-          const searchWrapper = createElement("div", "relative flex-1 min-w-0 space-y-1");
-          const searchBar = createElement("label", "flex h-10 items-center rounded-lg border border-slate-800/70 bg-slate-900/70 px-2 shadow-inner");
-          const searchInput = createElement("input", "flex-1 min-w-0 bg-transparent text-sm text-slate-100 placeholder:text-slate-500 appearance-none border-none ring-0 focus:outline-none focus:ring-0 focus:border-transparent");
-          if (searchInput instanceof HTMLInputElement) {
-              searchInput.type = "search";
-              searchInput.autocomplete = "off";
-              searchInput.placeholder = "Search players, clans, teams, or coordinates…";
-              this.searchInput = searchInput;
-              searchInput.value = this.searchFilter;
-              searchInput.addEventListener("input", () => this.handleSearchInput(searchInput.value));
-              searchInput.addEventListener("keydown", (event) => {
-                  if (event.key === "Enter") {
-                      event.preventDefault();
-                      this.handleSearchSubmit();
-                  }
-              });
-          }
+          const container = this.createUiElement("div", "flex gap-3");
+          const quickActionsWrapper = this.createUiElement("div", "relative");
+          const quickActionsButton = this.createUiElement("button", "flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-slate-800/70 bg-slate-900/70 text-slate-200 shadow-inner transition hover:border-sky-500/70 focus:outline-none focus:ring-2 focus:ring-sky-500/50");
+          quickActionsButton.type = "button";
+          quickActionsButton.setAttribute("aria-haspopup", "menu");
+          quickActionsButton.setAttribute("aria-expanded", "false");
+          quickActionsButton.setAttribute("aria-label", "Open menu");
+          quickActionsButton.appendChild(renderIcon("radar", "h-5 w-5"));
+          quickActionsButton.addEventListener("click", () => this.runWithUiContext(() => this.toggleQuickActionsMenu()));
+          quickActionsWrapper.appendChild(quickActionsButton);
+          this.quickActionsButton = quickActionsButton;
+          container.appendChild(quickActionsWrapper);
+          const searchWrapper = this.createUiElement("div", "relative flex-1 min-w-0 space-y-1");
+          const searchBar = this.createUiElement("label", "flex h-10 items-center rounded-lg border border-slate-800/70 bg-slate-900/70 px-2 shadow-inner");
+          const searchInput = this.createUiElement("input", "flex-1 min-w-0 bg-transparent text-sm text-slate-100 placeholder:text-slate-500 appearance-none border-none ring-0 focus:outline-none focus:ring-0 focus:border-transparent");
+          searchInput.type = "search";
+          searchInput.autocomplete = "off";
+          searchInput.placeholder = "Search players, clans, teams, or coordinates…";
+          this.searchInput = searchInput;
+          searchInput.value = this.searchFilter;
+          searchInput.addEventListener("input", () => this.handleSearchInput(searchInput.value));
+          searchInput.addEventListener("keydown", (event) => {
+              if (event.key === "Enter") {
+                  event.preventDefault();
+                  this.handleSearchSubmit();
+              }
+          });
           searchBar.appendChild(searchInput);
           searchWrapper.appendChild(searchBar);
           container.appendChild(searchWrapper);
           return container;
       }
-      handleSearchInput(raw) {
-          const trimmed = raw.trim();
-          this.updateSearchFilter(trimmed.length >= 2 ? trimmed : "");
-      }
-      handleSearchSubmit() {
-          const query = this.searchInput?.value ?? "";
-          const trimmed = query.trim();
-          if (!trimmed) {
+      toggleQuickActionsMenu() {
+          if (this.isQuickActionsMenuOpen) {
+              this.closeQuickActionsMenu();
               return;
           }
-          this.updateSearchFilter(trimmed.length >= 2 ? trimmed : "");
-          const coordinates = this.parseCoordinates(trimmed);
-          if (coordinates) {
-              focusTile(coordinates);
+          this.openQuickActionsMenu();
+      }
+      openQuickActionsMenu() {
+          if (!this.quickActionsButton || this.isQuickActionsMenuOpen) {
+              return;
           }
+          const parent = this.quickActionsButton.parentElement;
+          if (!parent) {
+              return;
+          }
+          const menu = this.buildQuickActionsMenu();
+          parent.appendChild(menu);
+          this.quickActionsMenu = menu;
+          this.isQuickActionsMenuOpen = true;
+          this.quickActionsButton.setAttribute("aria-expanded", "true");
+          this.uiDocument.addEventListener("pointerdown", this.handleQuickActionsPointerDown, true);
+          this.uiDocument.addEventListener("keydown", this.handleQuickActionsKeyDown, true);
+      }
+      closeQuickActionsMenu() {
+          if (!this.isQuickActionsMenuOpen) {
+              return;
+          }
+          this.isQuickActionsMenuOpen = false;
+          this.quickActionsButton?.setAttribute("aria-expanded", "false");
+          if (this.quickActionsMenu?.parentElement) {
+              this.quickActionsMenu.parentElement.removeChild(this.quickActionsMenu);
+          }
+          this.quickActionsMenu = undefined;
+          this.uiDocument.removeEventListener("pointerdown", this.handleQuickActionsPointerDown, true);
+          this.uiDocument.removeEventListener("keydown", this.handleQuickActionsKeyDown, true);
+      }
+      buildQuickActionsMenu() {
+          const menu = this.createUiElement("div", "absolute left-0 z-[2147483646] mt-2 w-44 overflow-hidden rounded-lg border border-slate-800/80 bg-slate-950/95 text-sm shadow-xl backdrop-blur");
+          menu.role = "menu";
+          menu.tabIndex = -1;
+          const list = this.createUiElement("div", "py-1");
+          list.appendChild(this.createQuickActionItem("New window", "external-link", () => this.onRequestNewWindow?.()));
+          menu.appendChild(list);
+          return menu;
+      }
+      createQuickActionItem(label, icon, onSelect) {
+          const button = this.createUiElement("button", "flex w-full items-center gap-2 px-3 py-2 text-left text-slate-100 transition-colors hover:bg-slate-800/80 hover:text-sky-200", label);
+          button.type = "button";
+          button.prepend(renderIcon(icon, "h-4 w-4 text-slate-300"));
+          button.addEventListener("click", () => {
+              this.closeQuickActionsMenu();
+              this.runWithUiContext(() => onSelect?.());
+          });
+          return button;
+      }
+      onQuickActionsPointerDown(event) {
+          if (!this.isQuickActionsMenuOpen) {
+              return;
+          }
+          const target = event.target;
+          if ((target && this.quickActionsMenu?.contains(target)) ||
+              (target && this.quickActionsButton?.contains(target))) {
+              return;
+          }
+          this.closeQuickActionsMenu();
+      }
+      onQuickActionsKeyDown(event) {
+          if (!this.isQuickActionsMenuOpen) {
+              return;
+          }
+          if (event.key === "Escape") {
+              this.closeQuickActionsMenu();
+          }
+      }
+      handleSearchInput(raw) {
+          this.runWithUiContext(() => {
+              const trimmed = raw.trim();
+              this.updateSearchFilter(trimmed.length >= 2 ? trimmed : "");
+          });
+      }
+      handleSearchSubmit() {
+          this.runWithUiContext(() => {
+              const query = this.searchInput?.value ?? "";
+              const trimmed = query.trim();
+              if (!trimmed) {
+                  return;
+              }
+              this.updateSearchFilter(trimmed.length >= 2 ? trimmed : "");
+              const coordinates = this.parseCoordinates(trimmed);
+              if (coordinates) {
+                  focusTile(coordinates);
+              }
+          });
       }
       parseCoordinates(query) {
           const match = /^-?\d{1,5}\s*[, ]\s*-?\d{1,5}$/.exec(query);
@@ -4291,13 +4689,16 @@
           }
           return this.buildGroupElement(node);
       }
-      updateSearchFilter(next) {
+      updateSearchFilter(next, options) {
           const normalized = next.trim().toLowerCase();
           if (this.searchFilter === normalized) {
               return;
           }
           this.searchFilter = normalized;
           this.refreshAllLeaves();
+          if (options?.notify !== false) {
+              this.onSearchFilterChanged?.(next);
+          }
       }
       getFilteredSnapshot(view) {
           const filter = this.searchFilter.trim().toLowerCase();
@@ -4390,87 +4791,95 @@
           return this.snapshot;
       }
       buildLeafElement(leaf) {
-          const wrapper = createElement("div", "flex min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-slate-800/70 bg-slate-900/70 shadow-inner");
+          const wrapper = this.createUiElement("div", "flex min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-slate-800/70 bg-slate-900/70 shadow-inner");
           wrapper.dataset.nodeId = leaf.id;
-          const header = createElement("div", "flex items-center justify-between gap-2 border-b border-slate-800/70 bg-slate-900/80 px-3 py-2");
-          const headerControls = createElement("div", "flex items-center gap-2");
-          const select = createElement("select", "h-7 min-w-[8rem] max-w-full shrink-0 rounded-md border border-slate-700 bg-slate-900/80 px-2 py-1 text-xs text-slate-100 focus:outline-none focus:ring-2 focus:ring-sky-500/70");
+          const header = this.createUiElement("div", "flex items-center justify-between gap-2 border-b border-slate-800/70 bg-slate-900/80 px-3 py-2");
+          const headerControls = this.createUiElement("div", "flex items-center gap-2");
+          const select = this.createUiElement("select", "h-7 min-w-[8rem] max-w-full shrink-0 rounded-md border border-slate-700 bg-slate-900/80 px-2 py-1 text-xs text-slate-100 focus:outline-none focus:ring-2 focus:ring-sky-500/70");
           for (const option of VIEW_OPTIONS) {
-              const opt = document.createElement("option");
+              const opt = this.uiDocument.createElement("option");
               opt.value = option.value;
               opt.textContent = option.label;
               select.appendChild(opt);
           }
           select.value = leaf.view;
           headerControls.appendChild(select);
-          const columnVisibilityButton = createElement("button", getPanelActionButtonClass());
+          const columnVisibilityButton = this.createUiElement("button", getPanelActionButtonClass());
           columnVisibilityButton.type = "button";
           columnVisibilityButton.setAttribute("aria-label", "Choose visible columns");
           columnVisibilityButton.appendChild(renderIcon("columns", "h-4 w-4"));
           columnVisibilityButton.addEventListener("click", (event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              if (!isColumnVisibilitySupported(leaf.view)) {
-                  return;
-              }
-              showColumnVisibilityMenu({
-                  leaf,
-                  anchor: columnVisibilityButton,
-                  onChange: () => {
-                      this.refreshLeafContent(leaf);
-                  },
+              this.runWithUiContext(() => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  if (!isColumnVisibilitySupported(leaf.view)) {
+                      return;
+                  }
+                  showColumnVisibilityMenu({
+                      leaf,
+                      anchor: columnVisibilityButton,
+                      onChange: () => {
+                          this.refreshLeafContent(leaf);
+                      },
+                  });
               });
           });
           headerControls.appendChild(columnVisibilityButton);
-          const newActionButton = createElement("button", getPanelActionButtonClass());
+          const newActionButton = this.createUiElement("button", getPanelActionButtonClass());
           newActionButton.type = "button";
           newActionButton.setAttribute("aria-label", "New action");
           newActionButton.appendChild(renderIcon("plus", "h-4 w-4"));
           newActionButton.addEventListener("click", () => {
-              this.store.createAction();
+              this.runWithUiContext(() => {
+                  this.store.createAction();
+              });
           });
           headerControls.appendChild(newActionButton);
-          const clearLogsButton = createElement("button", getPanelActionButtonClass("hover:!border-rose-500/70 hover:!text-rose-200"));
+          const clearLogsButton = this.createUiElement("button", getPanelActionButtonClass("hover:!border-rose-500/70 hover:!text-rose-200"));
           clearLogsButton.type = "button";
           clearLogsButton.setAttribute("aria-label", "Clear logs");
           clearLogsButton.appendChild(renderIcon("trash", "h-4 w-4"));
           clearLogsButton.addEventListener("click", () => {
-              this.store.clearLogs();
+              this.runWithUiContext(() => {
+                  this.store.clearLogs();
+              });
           });
           headerControls.appendChild(clearLogsButton);
-          const followLogsButton = createElement("button", getPanelActionButtonClass());
+          const followLogsButton = this.createUiElement("button", getPanelActionButtonClass());
           followLogsButton.type = "button";
           followLogsButton.setAttribute("aria-label", "Toggle log auto-scroll");
           followLogsButton.appendChild(renderIcon("arrow-down", "h-4 w-4"));
           followLogsButton.addEventListener("click", () => {
-              leaf.logFollowEnabled = !leaf.logFollowEnabled;
-              if (leaf.logFollowEnabled) {
-                  this.scrollLogViewToBottom(leaf);
-              }
-              const container = leaf.contentContainer;
-              if (container && container.dataset.sidebarRole === SidebarRole.LogView) {
-                  container.dataset.logFollowState = leaf.logFollowEnabled
-                      ? "following"
-                      : "paused";
-                  container.dataset.logStickToBottom = leaf.logFollowEnabled
-                      ? "true"
-                      : "false";
-              }
-              this.updateLeafHeaderControls(leaf);
+              this.runWithUiContext(() => {
+                  leaf.logFollowEnabled = !leaf.logFollowEnabled;
+                  if (leaf.logFollowEnabled) {
+                      this.scrollLogViewToBottom(leaf);
+                  }
+                  const container = leaf.contentContainer;
+                  if (container && container.dataset.sidebarRole === SidebarRole.LogView) {
+                      container.dataset.logFollowState = leaf.logFollowEnabled
+                          ? "following"
+                          : "paused";
+                      container.dataset.logStickToBottom = leaf.logFollowEnabled
+                          ? "true"
+                          : "false";
+                  }
+                  this.updateLeafHeaderControls(leaf);
+              });
           });
           headerControls.appendChild(followLogsButton);
-          select.addEventListener("change", () => {
+          select.addEventListener("change", () => this.runWithUiContext(() => {
               leaf.view = select.value;
               this.updateLeafHeaderControls(leaf);
               this.refreshLeafContent(leaf);
-          });
+          }));
           header.appendChild(headerControls);
-          const actions = createElement("div", "flex items-center gap-2");
+          const actions = this.createUiElement("div", "flex items-center gap-2");
           actions.appendChild(this.createActionButton("Split horizontally", "split-horizontal", () => this.splitLeaf(leaf, "horizontal")));
           actions.appendChild(this.createActionButton("Split vertically", "split-vertical", () => this.splitLeaf(leaf, "vertical")));
           actions.appendChild(this.createActionButton("Close panel", "close", () => this.closeLeaf(leaf)));
           header.appendChild(actions);
-          const body = createElement("div", "flex flex-1 min-h-0 flex-col overflow-hidden");
+          const body = this.createUiElement("div", "flex flex-1 min-h-0 flex-col overflow-hidden");
           wrapper.appendChild(header);
           wrapper.appendChild(body);
           leaf.element = {
@@ -4488,19 +4897,21 @@
           return wrapper;
       }
       createActionButton(label, icon, handler) {
-          const button = createElement("button", getPanelActionButtonClass());
+          const button = this.createUiElement("button", getPanelActionButtonClass());
           button.type = "button";
           button.title = label;
           button.appendChild(renderIcon(icon, "h-4 w-4"));
           button.addEventListener("click", (event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              handler();
+              this.runWithUiContext(() => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  handler();
+              });
           });
           return button;
       }
       buildGroupElement(group) {
-          const wrapper = createElement("div", group.orientation === "horizontal"
+          const wrapper = this.createUiElement("div", group.orientation === "horizontal"
               ? "flex min-h-0 min-w-0 flex-1 flex-col"
               : "flex min-h-0 min-w-0 flex-1 flex-row");
           wrapper.dataset.groupId = group.id;
@@ -4511,20 +4922,20 @@
           }
           for (let i = 0; i < count; i++) {
               const child = group.children[i];
-              const childWrapper = createElement("div", "flex min-h-0 min-w-0 flex-1");
+              const childWrapper = this.createUiElement("div", "flex min-h-0 min-w-0 flex-1");
               childWrapper.dataset.panelChild = String(i);
               childWrapper.style.flex = `${group.sizes[i] ?? 1} 1 0%`;
               childWrapper.appendChild(this.buildNodeElement(child));
               wrapper.appendChild(childWrapper);
               if (i < count - 1) {
-                  const handle = createElement("div", group.orientation === "horizontal"
+                  const handle = this.createUiElement("div", group.orientation === "horizontal"
                       ? "group relative -my-px flex h-3 w-full cursor-row-resize items-center justify-center rounded-md bg-transparent transition-colors duration-150 hover:bg-sky-500/10"
                       : "group relative -mx-px flex w-3 h-full cursor-col-resize items-center justify-center rounded-md bg-transparent transition-colors duration-150 hover:bg-sky-500/10");
-                  handle.appendChild(createElement("span", group.orientation === "horizontal"
+                  handle.appendChild(this.createUiElement("span", group.orientation === "horizontal"
                       ? "h-px w-10 rounded-full bg-slate-600/60 transition-colors duration-150 group-hover:bg-sky-400/60"
                       : "w-px h-10 rounded-full bg-slate-600/60 transition-colors duration-150 group-hover:bg-sky-400/60"));
                   handle.dataset.handleIndex = String(i);
-                  handle.addEventListener("pointerdown", (event) => startPanelResize(group, i, event));
+                  handle.addEventListener("pointerdown", (event) => this.runWithUiContext(() => startPanelResize(group, i, event)));
                   wrapper.appendChild(handle);
               }
           }
@@ -4616,7 +5027,7 @@
           else {
               columnVisibilityButton.setAttribute("aria-hidden", "true");
               columnVisibilityButton.tabIndex = -1;
-              hideColumnVisibilityMenu();
+              hideColumnVisibilityMenu(this.uiDocument);
           }
           const shouldShowNewAction = leaf.view === "actions" || leaf.view === "actionEditor";
           element.newActionButton.style.display = shouldShowNewAction ? "" : "none";
@@ -4676,6 +5087,9 @@
           }
       }
       refreshLeafContent(leaf) {
+          this.runWithUiContext(() => this.doRefreshLeafContent(leaf));
+      }
+      doRefreshLeafContent(leaf) {
           const element = leaf.element;
           if (!element) {
               return;
@@ -4687,7 +5101,7 @@
           const previousScrollTop = leaf.scrollTop ?? previousContainer?.scrollTop ?? 0;
           const previousScrollLeft = leaf.scrollLeft ?? previousContainer?.scrollLeft ?? 0;
           const lifecycle = this.createViewLifecycle(leaf);
-          const nextContainer = buildViewContent(leaf, this.getFilteredSnapshot(leaf.view), () => this.refreshLeafContent(leaf), previousContainer ?? undefined, lifecycle.callbacks, this.viewActions, this.searchFilter);
+          const nextContainer = buildViewContent(leaf, this.getFilteredSnapshot(leaf.view), () => this.refreshLeafContent(leaf), { document: this.uiDocument, window: this.uiWindow }, previousContainer ?? undefined, lifecycle.callbacks, this.viewActions, this.searchFilter);
           const replaced = !!previousContainer && nextContainer !== previousContainer;
           if (replaced) {
               if (previousCleanup) {
@@ -4824,7 +5238,7 @@
           leaf.hoveredRowElement = null;
           leaf.hoveredRowKey = undefined;
       }
-      showPlayerDetails(playerId) {
+      applyPlayerDetailsSelection(playerId) {
           for (const leaf of this.getLeaves()) {
               if (leaf.view !== "player") {
                   continue;
@@ -4832,6 +5246,18 @@
               leaf.selectedPlayerId = playerId;
               this.refreshLeafContent(leaf);
           }
+      }
+      showPlayerDetails(playerId) {
+          const trimmed = playerId.trim();
+          if (!trimmed) {
+              return;
+          }
+          this.applyPlayerDetailsSelection(trimmed);
+          const player = this.snapshot.players.find((entry) => entry.id === trimmed);
+          if (player) {
+              this.highlightPlayerAcrossViews(player);
+          }
+          this.onPlayerDetailsSelected?.(trimmed);
       }
       focusPlayerInSidebar(playerId) {
           const trimmed = playerId?.trim();
@@ -6767,7 +7193,7 @@
           container.style.display = "none";
           container.style.alignItems = "center";
           container.style.gap = "6px";
-          const shipIcon = createElement$1(Ship);
+          const shipIcon = createElement$8(Ship);
           shipIcon.setAttribute("aria-hidden", "true");
           shipIcon.style.width = "14px";
           shipIcon.style.height = "14px";
@@ -6778,7 +7204,7 @@
           const distanceSeparator = document.createElement("span");
           distanceSeparator.textContent = "•";
           distanceSeparator.setAttribute("aria-hidden", "true");
-          const goldIcon = createElement$1(CirclePoundSterling);
+          const goldIcon = createElement$8(CirclePoundSterling);
           goldIcon.setAttribute("aria-hidden", "true");
           goldIcon.style.width = "14px";
           goldIcon.style.height = "14px";
@@ -7251,7 +7677,7 @@
           if (!this.labelIcon) {
               return null;
           }
-          const svg = createElement$1(this.labelIcon);
+          const svg = createElement$8(this.labelIcon);
           svg.setAttribute("aria-hidden", "true");
           svg.style.width = "14px";
           svg.style.height = "14px";
@@ -8699,11 +9125,11 @@
               name: "Join lobby with largest clan",
               code: "exports.run = ({ lobby, logger, state, events, snapshot }) => {\n" +
                   "  let inGame = snapshot.players.some(p => !p.isLobbyPlayer);\n" +
-                  "  events.on(\"gameAttached\", () => {\n" +
+                  '  events.on("gameAttached", () => {\n' +
                   "    inGame = true;\n" +
                   "    state.lastJoinGameId = undefined;\n" +
                   "  });\n" +
-                  "  events.on(\"gameDetached\", () => {\n" +
+                  '  events.on("gameDetached", () => {\n' +
                   "    inGame = false;\n" +
                   "    state.lastJoinGameId = undefined;\n" +
                   "    state.lastJoinedGameId = undefined;\n" +
@@ -8719,21 +9145,21 @@
                   "      return;\n" +
                   "    }\n" +
                   "    if (inGame) {\n" +
-                  "      logger.info(\"Already in an active game; skipping join.\");\n" +
+                  '      logger.info("Already in an active game; skipping join.");\n' +
                   "      state.lastJoinGameId = undefined;\n" +
                   "      return;\n" +
                   "    }\n" +
                   "    if (!queue.playerTeams) {\n" +
-                  "      logger.info(\"Skipping FFA lobby (not a team game)\");\n" +
+                  '      logger.info("Skipping FFA lobby (not a team game)");\n' +
                   "      return;\n" +
                   "    }\n" +
                   "    if (queue.playerCount >= queue.maxPlayers) {\n" +
-                  "      logger.info(\"Lobby is full; skipping join.\");\n" +
+                  '      logger.info("Lobby is full; skipping join.");\n' +
                   "      return;\n" +
                   "    }\n" +
                   "    const players = Array.isArray(queue.players) ? queue.players : [];\n" +
                   "    if (players.length === 0) {\n" +
-                  "      logger.info(\"Lobby has no visible players; skipping join.\");\n" +
+                  '      logger.info("Lobby has no visible players; skipping join.");\n' +
                   "      return;\n" +
                   "    }\n" +
                   "    const counts = new Map();\n" +
@@ -8743,7 +9169,7 @@
                   "      counts.set(tag, (counts.get(tag) ?? 0) + 1);\n" +
                   "    }\n" +
                   "    if (counts.size === 0) {\n" +
-                  "      logger.info(\"No clans detected in lobby; keeping existing name.\");\n" +
+                  '      logger.info("No clans detected in lobby; keeping existing name.");\n' +
                   "    }\n" +
                   "    let best = null;\n" +
                   "    for (const [tag, count] of counts.entries()) {\n" +
@@ -8773,15 +9199,15 @@
                   "      logger.info(`Waiting for lobby to fill more (${slotsLeft} slots remaining, waiting for ${slotThreshold} or fewer)`);\n" +
                   "      return;\n" +
                   "    }\n" +
-                  "    const currentName = (typeof lobby.getDisplayName === \"function\" && lobby.getDisplayName()) || \"\";\n" +
-                  "    const baseName = currentName.replace(/^\\s*\\[[^\\]]+\\]\\s*/, \"\").trim() || currentName.trim() || \"Player\";\n" +
+                  '    const currentName = (typeof lobby.getDisplayName === "function" && lobby.getDisplayName()) || "";\n' +
+                  '    const baseName = currentName.replace(/^\\s*\\[[^\\]]+\\]\\s*/, "").trim() || currentName.trim() || "Player";\n' +
                   "    const nextName = lobby.buildNameWithClanTag(baseName, best?.tag);\n" +
                   "    if (state.lastAppliedDisplayName !== nextName) {\n" +
                   "      if (lobby.setDisplayName(nextName)) {\n" +
                   "        state.lastAppliedDisplayName = nextName;\n" +
-                  "        logger.info(`Set lobby name to \"${nextName}\"`);\n" +
+                  '        logger.info(`Set lobby name to "${nextName}"`);\n' +
                   "      } else {\n" +
-                  "        logger.warn(\"Failed to update lobby display name.\");\n" +
+                  '        logger.warn("Failed to update lobby display name.");\n' +
                   "      }\n" +
                   "    }\n" +
                   "    const alreadyAttempted = state.lastJoinGameId === queue.gameId;\n" +
@@ -8792,12 +9218,12 @@
                   "        logger.info(`Joining lobby ${queue.gameId} with ${nextName}`);\n" +
                   "        state.lastJoinedGameId = queue.gameId;\n" +
                   "      } else {\n" +
-                  "        logger.warn(\"Could not request lobby join (maybe already in-game?)\");\n" +
+                  '        logger.warn("Could not request lobby join (maybe already in-game?)");\n' +
                   "      }\n" +
                   "    }\n" +
                   "  };\n" +
                   "  apply(snapshot.currentLobbyQueue);\n" +
-                  "  events.on(\"lobbyUpdated\", (queue) => {\n" +
+                  '  events.on("lobbyUpdated", (queue) => {\n' +
                   "    apply(queue || lobby.queue);\n" +
                   "  });\n" +
                   "};",
@@ -11690,16 +12116,23 @@
       }
   }
 
-  async function ensureTailwind() {
-      if (document.querySelector("script[data-openfront-tailwind]")) {
+  function createSessionId() {
+      if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+          return crypto.randomUUID();
+      }
+      return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  }
+  async function ensureTailwind(targetDocument) {
+      if (targetDocument.querySelector("script[data-openfront-tailwind]")) {
           return;
       }
       await new Promise((resolve) => {
-          const script = document.createElement("script");
+          const script = targetDocument.createElement("script");
           script.src = "https://cdn.tailwindcss.com?plugins=forms,typography";
           script.dataset.openfrontTailwind = "true";
           script.async = true;
-          const tailwindGlobal = window.tailwind ?? {};
+          const targetWindow = targetDocument.defaultView ?? window;
+          const tailwindGlobal = targetWindow.tailwind ?? {};
           tailwindGlobal.config = {
               corePlugins: {
                   preflight: false,
@@ -11708,22 +12141,226 @@
                   extend: {},
               },
           };
-          window.tailwind = tailwindGlobal;
+          targetWindow.tailwind = tailwindGlobal;
           script.onload = () => resolve();
           script.onerror = () => resolve();
-          document.head.appendChild(script);
+          targetDocument.head.appendChild(script);
       });
   }
+  class SidebarWindowManager {
+      constructor() {
+          this.store = new DataStore();
+          this.instances = new Set();
+          this.appsByWindow = new Map();
+          this.selectedPlayerId = null;
+          this.searchFilter = "";
+          this.createPrimarySidebar();
+      }
+      updateData(snapshot) {
+          this.pruneClosedWindows();
+          this.store.update(snapshot);
+      }
+      createPrimarySidebar() {
+          const uiWindow = window;
+          const app = new SidebarApp(this.store, {
+              enableOverlayAlignment: true,
+              onRequestNewWindow: () => this.openAdditionalWindow(),
+              onPlayerDetailsSelected: (playerId) => this.handlePlayerDetailsSelected(uiWindow, playerId),
+              onSearchFilterChanged: (query) => this.handleSearchFilterChanged(uiWindow, query),
+              windowMode: "embedded",
+          }, document, uiWindow);
+          this.instances.add(app);
+          this.appsByWindow.set(uiWindow, app);
+          this.syncAppSelection(app);
+      }
+      pruneClosedWindows() {
+          const staleApps = [];
+          for (const [uiWindow, app] of this.appsByWindow.entries()) {
+              if (uiWindow === window) {
+                  continue;
+              }
+              if (uiWindow.closed) {
+                  staleApps.push(app);
+              }
+          }
+          for (const app of staleApps) {
+              this.removeInstance(app);
+          }
+      }
+      preparePopupDocument(targetDocument) {
+          targetDocument.open();
+          targetDocument.write(`<!doctype html>
+<meta charset="utf-8">
+<title>OpenFront Sidebar</title>
+<style>
+  html,body{height:100%;margin:0;background:#020617;color:#e2e8f0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+  .df-status{display:flex;align-items:center;justify-content:center;height:100%;padding:16px;box-sizing:border-box}
+</style>
+<script data-openfront-sidebar-popup-bootstrap>
+(() => {
+  const RETRY_MS = 1000;
+  let lastSessionId = "";
+
+  const attemptRegister = () => {
+    try {
+      const opener = window.opener;
+      const api = opener && opener.openFrontStrategicSidebar;
+      if (!api || typeof api.registerPopup !== "function") {
+        return;
+      }
+      const sessionId = api.sessionId;
+      if (typeof sessionId !== "string" || !sessionId) {
+        return;
+      }
+      if (sessionId === lastSessionId) {
+        return;
+      }
+      api.registerPopup(window);
+      lastSessionId = sessionId;
+    } catch {
+      // ignore
+    }
+  };
+
+  attemptRegister();
+  setInterval(attemptRegister, RETRY_MS);
+  window.addEventListener("focus", attemptRegister);
+  window.addEventListener("pageshow", attemptRegister);
+  window.addEventListener("beforeunload", () => {
+    try {
+      const opener = window.opener;
+      const api = opener && opener.openFrontStrategicSidebar;
+      if (api && typeof api.unregisterPopup === "function") {
+        api.unregisterPopup(window.name);
+      }
+    } catch {
+      // ignore
+    }
+  });
+})();
+</script>
+<body><div class="df-status">Connecting to main window…</div></body>`);
+          targetDocument.close();
+      }
+      removeInstance(app) {
+          if (this.instances.delete(app)) {
+              app.destroy();
+          }
+          for (const [key, value] of this.appsByWindow.entries()) {
+              if (value === app) {
+                  this.appsByWindow.delete(key);
+              }
+          }
+      }
+      syncAppSelection(app) {
+          if (this.selectedPlayerId) {
+              app.syncPlayerSelection(this.selectedPlayerId);
+          }
+          if (this.searchFilter) {
+              app.syncSearchFilter(this.searchFilter);
+          }
+      }
+      handlePlayerDetailsSelected(sourceWindow, playerId) {
+          const source = this.appsByWindow.get(sourceWindow);
+          if (!source) {
+              return;
+          }
+          const normalized = playerId.trim();
+          if (!normalized) {
+              return;
+          }
+          this.selectedPlayerId = normalized;
+          for (const instance of this.instances) {
+              if (instance === source) {
+                  continue;
+              }
+              instance.syncPlayerSelection(normalized);
+          }
+      }
+      handleSearchFilterChanged(sourceWindow, query) {
+          const source = this.appsByWindow.get(sourceWindow);
+          if (!source) {
+              return;
+          }
+          const normalized = query.trim();
+          this.searchFilter = normalized;
+          for (const instance of this.instances) {
+              if (instance === source) {
+                  continue;
+              }
+              instance.syncSearchFilter(normalized);
+          }
+      }
+      registerPopup(popupWindow) {
+          this.pruneClosedWindows();
+          if (!popupWindow || popupWindow.closed) {
+              return;
+          }
+          if (this.appsByWindow.has(popupWindow)) {
+              return;
+          }
+          const targetDocument = popupWindow.document;
+          try {
+              if (targetDocument.body) {
+                  targetDocument.body.replaceChildren();
+              }
+          }
+          catch {
+              // ignore
+          }
+          void ensureTailwind(targetDocument);
+          const uiWindow = popupWindow;
+          const app = new SidebarApp(this.store, {
+              enableOverlayAlignment: false,
+              onRequestNewWindow: () => this.openAdditionalWindow(),
+              onPlayerDetailsSelected: (playerId) => this.handlePlayerDetailsSelected(uiWindow, playerId),
+              onSearchFilterChanged: (query) => this.handleSearchFilterChanged(uiWindow, query),
+              windowMode: "standalone",
+          }, targetDocument, uiWindow);
+          this.instances.add(app);
+          this.appsByWindow.set(uiWindow, app);
+          this.syncAppSelection(app);
+      }
+      unregisterPopup(popupName) {
+          this.pruneClosedWindows();
+          const normalized = popupName.trim();
+          if (!normalized) {
+              return;
+          }
+          for (const [uiWindow, app] of this.appsByWindow.entries()) {
+              if (uiWindow === window) {
+                  continue;
+              }
+              if (uiWindow.name === normalized) {
+                  this.removeInstance(app);
+                  return;
+              }
+          }
+      }
+      openAdditionalWindow() {
+          const popup = window.open("", `openfront-strategic-sidebar-${Date.now()}`, "width=460,height=900,resizable=yes,scrollbars=yes");
+          if (!popup) {
+              alert("Pop-out window was blocked. Please allow pop-ups for this site or keep the sidebar embedded.");
+              return;
+          }
+          this.preparePopupDocument(popup.document);
+          this.registerPopup(popup);
+      }
+  }
+  let windowManager = null;
   async function initializeSidebar() {
       if (window.openFrontStrategicSidebar) {
           return;
       }
-      await ensureTailwind();
-      const store = new DataStore();
-      new SidebarApp(store);
+      await ensureTailwind(document);
+      windowManager = new SidebarWindowManager();
+      const sessionId = createSessionId();
       window.openFrontStrategicSidebar = {
-          updateData: (snapshot) => store.update(snapshot),
+          updateData: (snapshot) => windowManager?.updateData(snapshot),
           logger: sidebarLogger,
+          sessionId,
+          registerPopup: (popupWindow) => windowManager?.registerPopup(popupWindow),
+          unregisterPopup: (popupName) => windowManager?.unregisterPopup(popupName),
       };
   }
   if (document.readyState === "loading") {

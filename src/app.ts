@@ -23,6 +23,14 @@ import {
 } from "./components/views";
 import { SidebarRole } from "./sidebarRoles";
 
+interface SidebarAppOptions {
+  enableOverlayAlignment?: boolean;
+  onRequestNewWindow?: () => void;
+  onPlayerDetailsSelected?: (playerId: string) => void;
+  onSearchFilterChanged?: (query: string) => void;
+  windowMode?: "embedded" | "standalone";
+}
+
 const VIEW_OPTIONS: { value: ViewType; label: string }[] = [
   { value: "players", label: "Players" },
   { value: "clanmates", label: "Clanmates" },
@@ -53,36 +61,39 @@ function getPanelActionButtonClass(extra?: string): string {
 
 const SIDEBAR_STYLE_ID = "openfront-strategic-sidebar-styles";
 
-function ensureSidebarStyles(): void {
-  if (document.getElementById(SIDEBAR_STYLE_ID)) {
+function ensureSidebarStyles(targetDocument: Document): void {
+  if (targetDocument.getElementById(SIDEBAR_STYLE_ID)) {
     return;
   }
 
-  const style = document.createElement("style");
+  const style = targetDocument.createElement("style");
   style.id = SIDEBAR_STYLE_ID;
-  const tableRole = SidebarRole.TableContainer;
-  style.textContent = `
-    #openfront-strategic-sidebar [data-sidebar-role="${tableRole}"] {
+  const roles = [SidebarRole.TableContainer, SidebarRole.LogView];
+  style.textContent = roles
+    .map(
+      (role) => `
+    #openfront-strategic-sidebar [data-sidebar-role="${role}"] {
       scrollbar-width: thin;
       scrollbar-color: rgba(148, 163, 184, 0.7) transparent;
     }
 
-    #openfront-strategic-sidebar [data-sidebar-role="${tableRole}"]::-webkit-scrollbar {
+    #openfront-strategic-sidebar [data-sidebar-role="${role}"]::-webkit-scrollbar {
       width: 6px;
       height: 6px;
     }
 
-    #openfront-strategic-sidebar [data-sidebar-role="${tableRole}"]::-webkit-scrollbar-thumb {
+    #openfront-strategic-sidebar [data-sidebar-role="${role}"]::-webkit-scrollbar-thumb {
       background-color: rgba(148, 163, 184, 0.7);
       border-radius: 9999px;
     }
 
-    #openfront-strategic-sidebar [data-sidebar-role="${tableRole}"]::-webkit-scrollbar-track {
+    #openfront-strategic-sidebar [data-sidebar-role="${role}"]::-webkit-scrollbar-track {
       background-color: transparent;
-    }
-  `;
+    }`,
+    )
+    .join("\n");
 
-  document.head.appendChild(style);
+  targetDocument.head.appendChild(style);
 }
 
 const OVERLAY_SELECTORS = ["game-left-sidebar", "control-panel"] as const;
@@ -97,6 +108,10 @@ interface OverlayRegistration {
 }
 
 export class SidebarApp {
+  private readonly hostDocument = document;
+  private readonly hostWindow = window;
+  private uiDocument: Document = document;
+  private uiWindow: Window = window;
   private readonly sidebar: HTMLElement;
   private readonly layoutContainer: HTMLElement;
   private readonly store: DataStore;
@@ -108,22 +123,57 @@ export class SidebarApp {
   >();
   private overlayObserver?: MutationObserver;
   private overlayResizeObserver?: ResizeObserver;
-  private readonly handleOverlayRealign = () => this.repositionGameOverlay();
+  private readonly handleOverlayRealign = () =>
+    this.runWithUiContext(() => this.repositionGameOverlay());
   private readonly handleGlobalKeyDown = (event: KeyboardEvent) =>
     this.onGlobalKeyDown(event);
   private readonly viewActions: ViewActionHandlers;
   private searchInput?: HTMLInputElement;
   private searchFilter = "";
   private isSidebarHidden = false;
+  private sidebarResizer: HTMLElement | null = null;
+  private sidebarDefaultWidth = "420px";
+  private hostSidebarWidth = "420px";
+  private quickActionsButton?: HTMLButtonElement;
+  private quickActionsMenu?: HTMLDivElement;
+  private isQuickActionsMenuOpen = false;
+  private readonly handleQuickActionsPointerDown = (event: PointerEvent) =>
+    this.runWithUiContext(() => this.onQuickActionsPointerDown(event));
+  private readonly handleQuickActionsKeyDown = (event: KeyboardEvent) =>
+    this.runWithUiContext(() => this.onQuickActionsKeyDown(event));
+  private readonly enableOverlayAlignment: boolean;
+  private readonly enableGlobalHotkeys: boolean;
+  private readonly onRequestNewWindow?: () => void;
+  private readonly onPlayerDetailsSelected?: (playerId: string) => void;
+  private readonly onSearchFilterChanged?: (query: string) => void;
+  private readonly windowMode: SidebarAppOptions["windowMode"];
 
-  constructor(store: DataStore) {
+  constructor(
+    store: DataStore,
+    options?: SidebarAppOptions,
+    uiDocument: Document = document,
+    uiWindow: Window = window,
+  ) {
+    this.enableOverlayAlignment = options?.enableOverlayAlignment ?? true;
+    this.onRequestNewWindow = options?.onRequestNewWindow;
+    this.onPlayerDetailsSelected = options?.onPlayerDetailsSelected;
+    this.onSearchFilterChanged = options?.onSearchFilterChanged;
+    this.windowMode = options?.windowMode ?? "embedded";
+    this.enableGlobalHotkeys = this.windowMode === "embedded";
+    this.setUiEnvironment(uiDocument, uiWindow);
     this.store = store;
     this.snapshot = store.getSnapshot();
-    ensureSidebarStyles();
+    this.runWithUiContext(() => {
+      ensureSidebarStyles(this.uiDocument);
+    });
     this.sidebar = this.createSidebarShell();
     this.layoutContainer = this.sidebar.querySelector(
       "[data-sidebar-layout]",
     ) as HTMLElement;
+    this.sidebarDefaultWidth =
+      this.sidebar.style.width || this.sidebarDefaultWidth;
+    this.hostSidebarWidth = this.sidebarDefaultWidth;
+    this.applySidebarLayoutMode();
     this.rootNode = createDefaultRootNode();
     this.viewActions = {
       toggleTrading: (playerIds, stopped) =>
@@ -171,28 +221,101 @@ export class SidebarApp {
     };
     this.renderLayout();
     this.store.subscribe((snapshot) => {
-      const previousSnapshot = this.snapshot;
-      const previousSelf = this.getSelfPlayer(previousSnapshot);
-      const nextSelf = this.getSelfPlayer(snapshot);
-      const joinedNewGame =
-        (previousSnapshot.players.length === 0 &&
-          snapshot.players.length > 0) ||
-        (previousSelf && nextSelf && previousSelf.id !== nextSelf.id);
-      this.snapshot = snapshot;
-      if (joinedNewGame) {
-        this.expandSelfClanmates(snapshot);
-      }
-      this.refreshAllLeaves();
+      this.runWithUiContext(() => {
+        const previousSnapshot = this.snapshot;
+        const previousSelf = this.getSelfPlayer(previousSnapshot);
+        const nextSelf = this.getSelfPlayer(snapshot);
+        const joinedNewGame =
+          (previousSnapshot.players.length === 0 &&
+            snapshot.players.length > 0) ||
+          (previousSelf && nextSelf && previousSelf.id !== nextSelf.id);
+        this.snapshot = snapshot;
+        if (joinedNewGame) {
+          this.expandSelfClanmates(snapshot);
+        }
+        this.refreshAllLeaves();
+      });
     });
-    this.observeGameOverlays();
-    this.overlayResizeObserver = new ResizeObserver(this.handleOverlayRealign);
-    this.overlayResizeObserver.observe(this.sidebar);
-    window.addEventListener("resize", this.handleOverlayRealign);
-    window.addEventListener("keydown", this.handleGlobalKeyDown);
+    if (this.enableOverlayAlignment) {
+      this.observeGameOverlays();
+      this.overlayResizeObserver = new ResizeObserver(
+        this.handleOverlayRealign,
+      );
+      this.overlayResizeObserver.observe(this.sidebar);
+      this.hostWindow.addEventListener("resize", this.handleOverlayRealign);
+    }
+    if (this.enableGlobalHotkeys) {
+      this.hostWindow.addEventListener("keydown", this.handleGlobalKeyDown);
+    }
     this.repositionGameOverlay();
   }
 
+  syncPlayerDetails(playerId: string): void {
+    this.syncPlayerSelection(playerId);
+  }
+
+  syncPlayerSelection(playerId: string): void {
+    const trimmed = playerId.trim();
+    if (!trimmed) {
+      return;
+    }
+    this.applyPlayerDetailsSelection(trimmed);
+    const player = this.snapshot.players.find((entry) => entry.id === trimmed);
+    if (player) {
+      this.highlightPlayerAcrossViews(player);
+    }
+  }
+
+  syncSearchFilter(query: string): void {
+    const trimmed = query.trim();
+    const next = trimmed.length >= 2 ? trimmed : "";
+    if (this.searchInput) {
+      this.searchInput.value = next;
+    }
+    this.updateSearchFilter(next, { notify: false });
+  }
+
+  destroy(): void {
+    this.runWithUiContext(() => {
+      if (this.overlayObserver) {
+        this.overlayObserver.disconnect();
+      }
+      if (this.overlayResizeObserver) {
+        this.overlayResizeObserver.disconnect();
+      }
+      this.hostWindow.removeEventListener("resize", this.handleOverlayRealign);
+      if (this.enableGlobalHotkeys) {
+        this.hostWindow.removeEventListener(
+          "keydown",
+          this.handleGlobalKeyDown,
+        );
+      }
+      this.closeQuickActionsMenu();
+    });
+  }
+
+  private setUiEnvironment(doc: Document, win: Window): void {
+    this.uiDocument = doc;
+    this.uiWindow = win;
+  }
+
+  private runWithUiContext<T>(fn: () => T): T {
+    return fn();
+  }
+
+  private createUiElement<K extends keyof HTMLElementTagNameMap>(
+    tag: K,
+    className?: string,
+    textContent?: string,
+  ): HTMLElementTagNameMap[K] {
+    return createElement(tag, className, textContent, this.uiDocument);
+  }
+
   private onGlobalKeyDown(event: KeyboardEvent): void {
+    this.runWithUiContext(() => this.handleKeyDownInternal(event));
+  }
+
+  private handleKeyDownInternal(event: KeyboardEvent): void {
     if (event.defaultPrevented || event.repeat) {
       return;
     }
@@ -226,69 +349,106 @@ export class SidebarApp {
   }
 
   private createSidebarShell(): HTMLElement {
-    const existing = document.getElementById("openfront-strategic-sidebar");
+    const existing = this.uiDocument.getElementById(
+      "openfront-strategic-sidebar",
+    );
     if (existing) {
       existing.remove();
     }
 
-    const sidebar = createElement(
+    const sidebar = this.createUiElement(
       "aside",
       "fixed top-0 left-0 z-[2147483646] flex h-full max-w-[90vw] flex-col border-r border-slate-800/80 bg-slate-950/95 text-slate-100 shadow-2xl backdrop-blur",
     );
     sidebar.id = "openfront-strategic-sidebar";
-    sidebar.style.width = "420px";
+    sidebar.style.width = this.windowMode === "standalone" ? "100%" : "420px";
+    sidebar.style.maxWidth = this.windowMode === "standalone" ? "100%" : "90vw";
     sidebar.style.fontFamily = `'Inter', 'Segoe UI', system-ui, sans-serif`;
 
-    const resizer = createElement(
+    const resizer = this.createUiElement(
       "div",
       "group absolute right-0 top-0 flex h-full w-3 translate-x-full cursor-col-resize items-center justify-center rounded-r-full bg-transparent transition-colors duration-150 hover:bg-sky-500/10",
     );
+    resizer.dataset.sidebarResizer = "true";
+    this.sidebarResizer = resizer;
     resizer.appendChild(
-      createElement(
+      this.createUiElement(
         "span",
         "h-12 w-px rounded-full bg-slate-600/60 transition-colors duration-150 group-hover:bg-sky-400/60",
       ),
     );
     resizer.addEventListener("pointerdown", (event) =>
-      this.startSidebarResize(event),
+      this.runWithUiContext(() => this.startSidebarResize(event)),
     );
     sidebar.appendChild(resizer);
 
-    const layout = createElement(
+    const layout = this.createUiElement(
       "div",
       "flex h-full flex-1 flex-col gap-3 overflow-hidden p-3",
     );
     layout.dataset.sidebarLayout = "true";
     sidebar.appendChild(layout);
 
-    document.body.appendChild(sidebar);
+    this.uiDocument.body.appendChild(sidebar);
     return sidebar;
   }
 
   private startSidebarResize(event: PointerEvent): void {
-    event.preventDefault();
-    const startWidth = this.sidebar.getBoundingClientRect().width;
-    const startX = event.clientX;
-    const originalUserSelect = document.body.style.userSelect;
-    document.body.style.userSelect = "none";
-    const onMove = (moveEvent: PointerEvent) => {
-      const delta = moveEvent.clientX - startX;
-      const nextWidth = clamp(startWidth + delta, 280, window.innerWidth * 0.9);
-      this.sidebar.style.width = `${nextWidth}px`;
-      this.repositionGameOverlay();
-    };
-    const onUp = () => {
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
-      window.removeEventListener("pointercancel", onUp);
-      document.body.style.userSelect = originalUserSelect;
-    };
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp);
-    window.addEventListener("pointercancel", onUp);
+    this.runWithUiContext(() => {
+      event.preventDefault();
+      const startWidth = this.sidebar.getBoundingClientRect().width;
+      const startX = event.clientX;
+      const originalUserSelect = this.uiDocument.body.style.userSelect;
+      this.uiDocument.body.style.userSelect = "none";
+      const onMove = (moveEvent: PointerEvent) => {
+        const delta = moveEvent.clientX - startX;
+        const nextWidth = clamp(
+          startWidth + delta,
+          280,
+          (this.uiWindow.innerWidth ?? window.innerWidth) * 0.9,
+        );
+        this.sidebar.style.width = `${nextWidth}px`;
+        this.repositionGameOverlay();
+      };
+      const onUp = () => {
+        this.uiWindow.removeEventListener("pointermove", onMove);
+        this.uiWindow.removeEventListener("pointerup", onUp);
+        this.uiWindow.removeEventListener("pointercancel", onUp);
+        this.uiDocument.body.style.userSelect = originalUserSelect;
+      };
+      this.uiWindow.addEventListener("pointermove", onMove);
+      this.uiWindow.addEventListener("pointerup", onUp);
+      this.uiWindow.addEventListener("pointercancel", onUp);
+    });
+  }
+
+  private applySidebarLayoutMode(): void {
+    const resizer =
+      this.sidebarResizer ??
+      (this.sidebar.querySelector(
+        "[data-sidebar-resizer]",
+      ) as HTMLElement | null);
+    const isStandalone = this.windowMode === "standalone";
+    const targetWidth = isStandalone
+      ? "100%"
+      : this.hostSidebarWidth || this.sidebarDefaultWidth;
+    this.sidebar.style.width = targetWidth;
+    this.sidebar.style.maxWidth = isStandalone ? "100%" : "90vw";
+    if (resizer) {
+      if (isStandalone) {
+        resizer.style.display = "none";
+        resizer.setAttribute("aria-hidden", "true");
+      } else {
+        resizer.style.display = "";
+        resizer.removeAttribute("aria-hidden");
+      }
+    }
   }
 
   private observeGameOverlays(): void {
+    if (!this.enableOverlayAlignment) {
+      return;
+    }
     let discovered = false;
     for (const selector of OVERLAY_SELECTORS) {
       const registration = this.overlayElements.get(selector);
@@ -374,8 +534,12 @@ export class SidebarApp {
   }
 
   private repositionGameOverlay(): void {
+    if (!this.enableOverlayAlignment) {
+      return;
+    }
     let missingElement = false;
-    const sidebarWidth = this.isSidebarHidden
+    const treatHidden = this.isSidebarHidden;
+    const sidebarWidth = treatHidden
       ? 0
       : this.sidebar.getBoundingClientRect().width;
     const offset = Math.round(sidebarWidth) + 16;
@@ -387,7 +551,7 @@ export class SidebarApp {
       }
 
       const target = registration.target;
-      if (this.isSidebarHidden) {
+      if (treatHidden) {
         target.style.left = registration.originalLeft;
         target.style.right = registration.originalRight;
         target.style.maxWidth = registration.originalMaxWidth;
@@ -532,7 +696,10 @@ export class SidebarApp {
   }
 
   private findPositionedChild(root: HTMLElement): HTMLElement | null {
-    const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
+    const walker = (root.ownerDocument ?? document).createTreeWalker(
+      root,
+      NodeFilter.SHOW_ELEMENT,
+    );
     const current = walker.currentNode as HTMLElement;
     if (current !== root) {
       const position = window.getComputedStyle(current).position;
@@ -554,7 +721,14 @@ export class SidebarApp {
   }
 
   private renderLayout(): void {
+    this.runWithUiContext(() => {
+      this.doRenderLayout();
+    });
+  }
+
+  private doRenderLayout(): void {
     this.searchInput = undefined;
+    this.closeQuickActionsMenu();
     this.layoutContainer.innerHTML = "";
     this.layoutContainer.appendChild(this.buildSidebarTopBars());
     const rootElement = this.buildNodeElement(this.rootNode);
@@ -565,42 +739,50 @@ export class SidebarApp {
   }
 
   private buildSidebarTopBars(): HTMLElement {
-    const container = createElement("div", "flex gap-3");
-    const radarTile = createElement(
-      "div",
-      "flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-slate-800/70 bg-slate-900/70 shadow-inner",
+    const container = this.createUiElement("div", "flex gap-3");
+    const quickActionsWrapper = this.createUiElement("div", "relative");
+    const quickActionsButton = this.createUiElement(
+      "button",
+      "flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-slate-800/70 bg-slate-900/70 text-slate-200 shadow-inner transition hover:border-sky-500/70 focus:outline-none focus:ring-2 focus:ring-sky-500/50",
     );
-    radarTile.appendChild(renderIcon("radar", "h-5 w-5 text-slate-200"));
-    container.appendChild(radarTile);
+    quickActionsButton.type = "button";
+    quickActionsButton.setAttribute("aria-haspopup", "menu");
+    quickActionsButton.setAttribute("aria-expanded", "false");
+    quickActionsButton.setAttribute("aria-label", "Open menu");
+    quickActionsButton.appendChild(renderIcon("radar", "h-5 w-5"));
+    quickActionsButton.addEventListener("click", () =>
+      this.runWithUiContext(() => this.toggleQuickActionsMenu()),
+    );
+    quickActionsWrapper.appendChild(quickActionsButton);
+    this.quickActionsButton = quickActionsButton;
+    container.appendChild(quickActionsWrapper);
 
-    const searchWrapper = createElement(
+    const searchWrapper = this.createUiElement(
       "div",
       "relative flex-1 min-w-0 space-y-1",
     );
-    const searchBar = createElement(
+    const searchBar = this.createUiElement(
       "label",
       "flex h-10 items-center rounded-lg border border-slate-800/70 bg-slate-900/70 px-2 shadow-inner",
     );
-    const searchInput = createElement(
+    const searchInput = this.createUiElement(
       "input",
       "flex-1 min-w-0 bg-transparent text-sm text-slate-100 placeholder:text-slate-500 appearance-none border-none ring-0 focus:outline-none focus:ring-0 focus:border-transparent",
     );
-    if (searchInput instanceof HTMLInputElement) {
-      searchInput.type = "search";
-      searchInput.autocomplete = "off";
-      searchInput.placeholder = "Search players, clans, teams, or coordinates…";
-      this.searchInput = searchInput;
-      searchInput.value = this.searchFilter;
-      searchInput.addEventListener("input", () =>
-        this.handleSearchInput(searchInput.value),
-      );
-      searchInput.addEventListener("keydown", (event) => {
-        if (event.key === "Enter") {
-          event.preventDefault();
-          this.handleSearchSubmit();
-        }
-      });
-    }
+    searchInput.type = "search";
+    searchInput.autocomplete = "off";
+    searchInput.placeholder = "Search players, clans, teams, or coordinates…";
+    this.searchInput = searchInput;
+    searchInput.value = this.searchFilter;
+    searchInput.addEventListener("input", () =>
+      this.handleSearchInput(searchInput.value),
+    );
+    searchInput.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        this.handleSearchSubmit();
+      }
+    });
     searchBar.appendChild(searchInput);
 
     searchWrapper.appendChild(searchBar);
@@ -609,22 +791,141 @@ export class SidebarApp {
     return container;
   }
 
+  private toggleQuickActionsMenu(): void {
+    if (this.isQuickActionsMenuOpen) {
+      this.closeQuickActionsMenu();
+      return;
+    }
+    this.openQuickActionsMenu();
+  }
+
+  private openQuickActionsMenu(): void {
+    if (!this.quickActionsButton || this.isQuickActionsMenuOpen) {
+      return;
+    }
+    const parent = this.quickActionsButton.parentElement;
+    if (!parent) {
+      return;
+    }
+    const menu = this.buildQuickActionsMenu();
+    parent.appendChild(menu);
+    this.quickActionsMenu = menu;
+    this.isQuickActionsMenuOpen = true;
+    this.quickActionsButton.setAttribute("aria-expanded", "true");
+    this.uiDocument.addEventListener(
+      "pointerdown",
+      this.handleQuickActionsPointerDown,
+      true,
+    );
+    this.uiDocument.addEventListener(
+      "keydown",
+      this.handleQuickActionsKeyDown,
+      true,
+    );
+  }
+
+  private closeQuickActionsMenu(): void {
+    if (!this.isQuickActionsMenuOpen) {
+      return;
+    }
+    this.isQuickActionsMenuOpen = false;
+    this.quickActionsButton?.setAttribute("aria-expanded", "false");
+    if (this.quickActionsMenu?.parentElement) {
+      this.quickActionsMenu.parentElement.removeChild(this.quickActionsMenu);
+    }
+    this.quickActionsMenu = undefined;
+    this.uiDocument.removeEventListener(
+      "pointerdown",
+      this.handleQuickActionsPointerDown,
+      true,
+    );
+    this.uiDocument.removeEventListener(
+      "keydown",
+      this.handleQuickActionsKeyDown,
+      true,
+    );
+  }
+
+  private buildQuickActionsMenu(): HTMLDivElement {
+    const menu = this.createUiElement(
+      "div",
+      "absolute left-0 z-[2147483646] mt-2 w-44 overflow-hidden rounded-lg border border-slate-800/80 bg-slate-950/95 text-sm shadow-xl backdrop-blur",
+    );
+    menu.role = "menu";
+    menu.tabIndex = -1;
+
+    const list = this.createUiElement("div", "py-1");
+    list.appendChild(
+      this.createQuickActionItem("New window", "external-link", () =>
+        this.onRequestNewWindow?.(),
+      ),
+    );
+    menu.appendChild(list);
+    return menu;
+  }
+
+  private createQuickActionItem(
+    label: string,
+    icon: Parameters<typeof renderIcon>[0],
+    onSelect?: () => void,
+  ): HTMLButtonElement {
+    const button = this.createUiElement(
+      "button",
+      "flex w-full items-center gap-2 px-3 py-2 text-left text-slate-100 transition-colors hover:bg-slate-800/80 hover:text-sky-200",
+      label,
+    );
+    button.type = "button";
+    button.prepend(renderIcon(icon, "h-4 w-4 text-slate-300"));
+    button.addEventListener("click", () => {
+      this.closeQuickActionsMenu();
+      this.runWithUiContext(() => onSelect?.());
+    });
+    return button;
+  }
+
+  private onQuickActionsPointerDown(event: PointerEvent): void {
+    if (!this.isQuickActionsMenuOpen) {
+      return;
+    }
+    const target = event.target as Node | null;
+    if (
+      (target && this.quickActionsMenu?.contains(target)) ||
+      (target && this.quickActionsButton?.contains(target))
+    ) {
+      return;
+    }
+    this.closeQuickActionsMenu();
+  }
+
+  private onQuickActionsKeyDown(event: KeyboardEvent): void {
+    if (!this.isQuickActionsMenuOpen) {
+      return;
+    }
+    if (event.key === "Escape") {
+      this.closeQuickActionsMenu();
+    }
+  }
+
   private handleSearchInput(raw: string): void {
-    const trimmed = raw.trim();
-    this.updateSearchFilter(trimmed.length >= 2 ? trimmed : "");
+    this.runWithUiContext(() => {
+      const trimmed = raw.trim();
+      this.updateSearchFilter(trimmed.length >= 2 ? trimmed : "");
+    });
   }
 
   private handleSearchSubmit(): void {
-    const query = this.searchInput?.value ?? "";
-    const trimmed = query.trim();
-    if (!trimmed) {
-      return;
-    }
-    this.updateSearchFilter(trimmed.length >= 2 ? trimmed : "");
-    const coordinates = this.parseCoordinates(trimmed);
-    if (coordinates) {
-      focusTile(coordinates);
-    }
+    this.runWithUiContext(() => {
+      const query = this.searchInput?.value ?? "";
+      const trimmed = query.trim();
+      if (!trimmed) {
+        return;
+      }
+      this.updateSearchFilter(trimmed.length >= 2 ? trimmed : "");
+      const coordinates = this.parseCoordinates(trimmed);
+      if (coordinates) {
+        focusTile(coordinates);
+      }
+    });
   }
 
   private parseCoordinates(query: string): { x: number; y: number } | null {
@@ -648,13 +949,19 @@ export class SidebarApp {
     return this.buildGroupElement(node);
   }
 
-  private updateSearchFilter(next: string): void {
+  private updateSearchFilter(
+    next: string,
+    options?: { notify?: boolean },
+  ): void {
     const normalized = next.trim().toLowerCase();
     if (this.searchFilter === normalized) {
       return;
     }
     this.searchFilter = normalized;
     this.refreshAllLeaves();
+    if (options?.notify !== false) {
+      this.onSearchFilterChanged?.(next);
+    }
   }
 
   private getFilteredSnapshot(view: ViewType): GameSnapshot {
@@ -771,25 +1078,28 @@ export class SidebarApp {
   }
 
   private buildLeafElement(leaf: PanelLeafNode): HTMLElement {
-    const wrapper = createElement(
+    const wrapper = this.createUiElement(
       "div",
       "flex min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-slate-800/70 bg-slate-900/70 shadow-inner",
     );
     wrapper.dataset.nodeId = leaf.id;
 
-    const header = createElement(
+    const header = this.createUiElement(
       "div",
       "flex items-center justify-between gap-2 border-b border-slate-800/70 bg-slate-900/80 px-3 py-2",
     );
 
-    const headerControls = createElement("div", "flex items-center gap-2");
+    const headerControls = this.createUiElement(
+      "div",
+      "flex items-center gap-2",
+    );
 
-    const select = createElement(
+    const select = this.createUiElement(
       "select",
       "h-7 min-w-[8rem] max-w-full shrink-0 rounded-md border border-slate-700 bg-slate-900/80 px-2 py-1 text-xs text-slate-100 focus:outline-none focus:ring-2 focus:ring-sky-500/70",
     );
     for (const option of VIEW_OPTIONS) {
-      const opt = document.createElement("option");
+      const opt = this.uiDocument.createElement("option");
       opt.value = option.value;
       opt.textContent = option.label;
       select.appendChild(opt);
@@ -797,7 +1107,7 @@ export class SidebarApp {
     select.value = leaf.view;
     headerControls.appendChild(select);
 
-    const columnVisibilityButton = createElement(
+    const columnVisibilityButton = this.createUiElement(
       "button",
       getPanelActionButtonClass(),
     );
@@ -805,23 +1115,25 @@ export class SidebarApp {
     columnVisibilityButton.setAttribute("aria-label", "Choose visible columns");
     columnVisibilityButton.appendChild(renderIcon("columns", "h-4 w-4"));
     columnVisibilityButton.addEventListener("click", (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      if (!isColumnVisibilitySupported(leaf.view)) {
-        return;
-      }
-      showColumnVisibilityMenu({
-        leaf,
-        anchor: columnVisibilityButton,
-        onChange: () => {
-          this.refreshLeafContent(leaf);
-        },
+      this.runWithUiContext(() => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!isColumnVisibilitySupported(leaf.view)) {
+          return;
+        }
+        showColumnVisibilityMenu({
+          leaf,
+          anchor: columnVisibilityButton,
+          onChange: () => {
+            this.refreshLeafContent(leaf);
+          },
+        });
       });
     });
 
     headerControls.appendChild(columnVisibilityButton);
 
-    const newActionButton = createElement(
+    const newActionButton = this.createUiElement(
       "button",
       getPanelActionButtonClass(),
     );
@@ -829,12 +1141,14 @@ export class SidebarApp {
     newActionButton.setAttribute("aria-label", "New action");
     newActionButton.appendChild(renderIcon("plus", "h-4 w-4"));
     newActionButton.addEventListener("click", () => {
-      this.store.createAction();
+      this.runWithUiContext(() => {
+        this.store.createAction();
+      });
     });
 
     headerControls.appendChild(newActionButton);
 
-    const clearLogsButton = createElement(
+    const clearLogsButton = this.createUiElement(
       "button",
       getPanelActionButtonClass(
         "hover:!border-rose-500/70 hover:!text-rose-200",
@@ -844,12 +1158,14 @@ export class SidebarApp {
     clearLogsButton.setAttribute("aria-label", "Clear logs");
     clearLogsButton.appendChild(renderIcon("trash", "h-4 w-4"));
     clearLogsButton.addEventListener("click", () => {
-      this.store.clearLogs();
+      this.runWithUiContext(() => {
+        this.store.clearLogs();
+      });
     });
 
     headerControls.appendChild(clearLogsButton);
 
-    const followLogsButton = createElement(
+    const followLogsButton = this.createUiElement(
       "button",
       getPanelActionButtonClass(),
     );
@@ -857,32 +1173,39 @@ export class SidebarApp {
     followLogsButton.setAttribute("aria-label", "Toggle log auto-scroll");
     followLogsButton.appendChild(renderIcon("arrow-down", "h-4 w-4"));
     followLogsButton.addEventListener("click", () => {
-      leaf.logFollowEnabled = !leaf.logFollowEnabled;
-      if (leaf.logFollowEnabled) {
-        this.scrollLogViewToBottom(leaf);
-      }
-      const container = leaf.contentContainer;
-      if (container && container.dataset.sidebarRole === SidebarRole.LogView) {
-        container.dataset.logFollowState = leaf.logFollowEnabled
-          ? "following"
-          : "paused";
-        container.dataset.logStickToBottom = leaf.logFollowEnabled
-          ? "true"
-          : "false";
-      }
-      this.updateLeafHeaderControls(leaf);
+      this.runWithUiContext(() => {
+        leaf.logFollowEnabled = !leaf.logFollowEnabled;
+        if (leaf.logFollowEnabled) {
+          this.scrollLogViewToBottom(leaf);
+        }
+        const container = leaf.contentContainer;
+        if (
+          container &&
+          container.dataset.sidebarRole === SidebarRole.LogView
+        ) {
+          container.dataset.logFollowState = leaf.logFollowEnabled
+            ? "following"
+            : "paused";
+          container.dataset.logStickToBottom = leaf.logFollowEnabled
+            ? "true"
+            : "false";
+        }
+        this.updateLeafHeaderControls(leaf);
+      });
     });
 
     headerControls.appendChild(followLogsButton);
 
-    select.addEventListener("change", () => {
-      leaf.view = select.value as ViewType;
-      this.updateLeafHeaderControls(leaf);
-      this.refreshLeafContent(leaf);
-    });
+    select.addEventListener("change", () =>
+      this.runWithUiContext(() => {
+        leaf.view = select.value as ViewType;
+        this.updateLeafHeaderControls(leaf);
+        this.refreshLeafContent(leaf);
+      }),
+    );
     header.appendChild(headerControls);
 
-    const actions = createElement("div", "flex items-center gap-2");
+    const actions = this.createUiElement("div", "flex items-center gap-2");
     actions.appendChild(
       this.createActionButton("Split horizontally", "split-horizontal", () =>
         this.splitLeaf(leaf, "horizontal"),
@@ -900,7 +1223,7 @@ export class SidebarApp {
     );
     header.appendChild(actions);
 
-    const body = createElement(
+    const body = this.createUiElement(
       "div",
       "flex flex-1 min-h-0 flex-col overflow-hidden",
     );
@@ -927,20 +1250,22 @@ export class SidebarApp {
     icon: "split-horizontal" | "split-vertical" | "close",
     handler: () => void,
   ) {
-    const button = createElement("button", getPanelActionButtonClass());
+    const button = this.createUiElement("button", getPanelActionButtonClass());
     button.type = "button";
     button.title = label;
     button.appendChild(renderIcon(icon, "h-4 w-4"));
     button.addEventListener("click", (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      handler();
+      this.runWithUiContext(() => {
+        event.preventDefault();
+        event.stopPropagation();
+        handler();
+      });
     });
     return button;
   }
 
   private buildGroupElement(group: PanelGroupNode): HTMLElement {
-    const wrapper = createElement(
+    const wrapper = this.createUiElement(
       "div",
       group.orientation === "horizontal"
         ? "flex min-h-0 min-w-0 flex-1 flex-col"
@@ -956,21 +1281,24 @@ export class SidebarApp {
 
     for (let i = 0; i < count; i++) {
       const child = group.children[i];
-      const childWrapper = createElement("div", "flex min-h-0 min-w-0 flex-1");
+      const childWrapper = this.createUiElement(
+        "div",
+        "flex min-h-0 min-w-0 flex-1",
+      );
       childWrapper.dataset.panelChild = String(i);
       childWrapper.style.flex = `${group.sizes[i] ?? 1} 1 0%`;
       childWrapper.appendChild(this.buildNodeElement(child));
       wrapper.appendChild(childWrapper);
 
       if (i < count - 1) {
-        const handle = createElement(
+        const handle = this.createUiElement(
           "div",
           group.orientation === "horizontal"
             ? "group relative -my-px flex h-3 w-full cursor-row-resize items-center justify-center rounded-md bg-transparent transition-colors duration-150 hover:bg-sky-500/10"
             : "group relative -mx-px flex w-3 h-full cursor-col-resize items-center justify-center rounded-md bg-transparent transition-colors duration-150 hover:bg-sky-500/10",
         );
         handle.appendChild(
-          createElement(
+          this.createUiElement(
             "span",
             group.orientation === "horizontal"
               ? "h-px w-10 rounded-full bg-slate-600/60 transition-colors duration-150 group-hover:bg-sky-400/60"
@@ -979,7 +1307,7 @@ export class SidebarApp {
         );
         handle.dataset.handleIndex = String(i);
         handle.addEventListener("pointerdown", (event) =>
-          startPanelResize(group, i, event),
+          this.runWithUiContext(() => startPanelResize(group, i, event)),
         );
         wrapper.appendChild(handle);
       }
@@ -1083,7 +1411,7 @@ export class SidebarApp {
     } else {
       columnVisibilityButton.setAttribute("aria-hidden", "true");
       columnVisibilityButton.tabIndex = -1;
-      hideColumnVisibilityMenu();
+      hideColumnVisibilityMenu(this.uiDocument);
     }
 
     const shouldShowNewAction =
@@ -1147,6 +1475,10 @@ export class SidebarApp {
   }
 
   private refreshLeafContent(leaf: PanelLeafNode): void {
+    this.runWithUiContext(() => this.doRefreshLeafContent(leaf));
+  }
+
+  private doRefreshLeafContent(leaf: PanelLeafNode): void {
     const element = leaf.element;
     if (!element) {
       return;
@@ -1165,6 +1497,7 @@ export class SidebarApp {
       leaf,
       this.getFilteredSnapshot(leaf.view),
       () => this.refreshLeafContent(leaf),
+      { document: this.uiDocument, window: this.uiWindow },
       previousContainer ?? undefined,
       lifecycle.callbacks,
       this.viewActions,
@@ -1326,7 +1659,7 @@ export class SidebarApp {
     leaf.hoveredRowKey = undefined;
   }
 
-  private showPlayerDetails(playerId: string): void {
+  private applyPlayerDetailsSelection(playerId: string): void {
     for (const leaf of this.getLeaves()) {
       if (leaf.view !== "player") {
         continue;
@@ -1334,6 +1667,19 @@ export class SidebarApp {
       leaf.selectedPlayerId = playerId;
       this.refreshLeafContent(leaf);
     }
+  }
+
+  private showPlayerDetails(playerId: string): void {
+    const trimmed = playerId.trim();
+    if (!trimmed) {
+      return;
+    }
+    this.applyPlayerDetailsSelection(trimmed);
+    const player = this.snapshot.players.find((entry) => entry.id === trimmed);
+    if (player) {
+      this.highlightPlayerAcrossViews(player);
+    }
+    this.onPlayerDetailsSelected?.(trimmed);
   }
 
   private focusPlayerInSidebar(playerId: string): void {

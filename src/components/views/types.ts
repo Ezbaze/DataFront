@@ -44,6 +44,11 @@ export type {
 
 export type RequestRender = () => void;
 
+export interface ViewUiContext {
+  document: Document;
+  window: Window;
+}
+
 export interface ViewLifecycleCallbacks {
   registerCleanup?: (cleanup: () => void) => void;
 }
@@ -79,6 +84,7 @@ export interface ViewRenderOptions {
   leaf: PanelLeafNode;
   snapshot: GameSnapshot;
   requestRender: RequestRender;
+  ui: ViewUiContext;
   sortState: SortState;
   onSort: (key: SortKey) => void;
   existingContainer?: HTMLElement;
@@ -90,6 +96,7 @@ export interface ViewRenderOptions {
 export interface LogViewRenderOptions {
   leaf: PanelLeafNode;
   snapshot: GameSnapshot;
+  ui: ViewUiContext;
   sortState: SortState;
   onSort: (key: SortKey) => void;
   existingContainer?: HTMLElement;
