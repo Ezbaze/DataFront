@@ -672,6 +672,36 @@
           });
       }, 0);
   }
+  async function copyTextToClipboard(text, doc = document) {
+      const win = doc.defaultView ?? window;
+      try {
+          const clipboard = win.navigator?.clipboard;
+          if (clipboard?.writeText) {
+              await clipboard.writeText(text);
+              return true;
+          }
+      }
+      catch (error) {
+          console.warn("Failed to write to clipboard", error);
+      }
+      try {
+          const textarea = doc.createElement("textarea");
+          textarea.value = text;
+          textarea.style.position = "fixed";
+          textarea.style.left = "-9999px";
+          textarea.style.top = "-9999px";
+          textarea.setAttribute("readonly", "true");
+          doc.body.appendChild(textarea);
+          textarea.select();
+          const ok = doc.execCommand?.("copy") ?? false;
+          doc.body.removeChild(textarea);
+          return ok;
+      }
+      catch (error) {
+          console.warn("Failed to copy via fallback", error);
+          return false;
+      }
+  }
 
   function startPanelResize(group, index, event) {
       // Use the event's ownerDocument without relying on instanceof checks that
@@ -1328,6 +1358,1134 @@
       return direction === "asc" ? fallback : -fallback;
   }
 
+  function normalizeTroopCountForSearch(rawTroops) {
+      if (!Number.isFinite(rawTroops)) {
+          return 0;
+      }
+      return Math.floor(Math.max(rawTroops, 0) / 10);
+  }
+  function isPrimaryStart(token) {
+      return (token.type === "not" ||
+          token.type === "lparen" ||
+          token.type === "word" ||
+          token.type === "quoted");
+  }
+  function tokenize(input) {
+      const tokens = [];
+      let i = 0;
+      const error = (message, index) => ({
+          ok: false,
+          error: { message, index },
+      });
+      while (i < input.length) {
+          const ch = input[i];
+          if (ch === " " || ch === "\t" || ch === "\n" || ch === "\r") {
+              i += 1;
+              continue;
+          }
+          if (ch === "(") {
+              tokens.push({ type: "lparen", index: i });
+              i += 1;
+              continue;
+          }
+          if (ch === ")") {
+              tokens.push({ type: "rparen", index: i });
+              i += 1;
+              continue;
+          }
+          if (ch === ":") {
+              tokens.push({ type: "colon", index: i });
+              i += 1;
+              continue;
+          }
+          if (ch === "-") {
+              const prev = i === 0 ? " " : input[i - 1];
+              const next = input[i + 1];
+              const precededByBoundary = i === 0 ||
+                  prev === " " ||
+                  prev === "\t" ||
+                  prev === "\n" ||
+                  prev === "\r" ||
+                  prev === "(";
+              const looksLikeNegation = next === "(" ||
+                  next === '"' ||
+                  (typeof next === "string" && /[a-zA-Z_]/.test(next));
+              if (precededByBoundary && looksLikeNegation) {
+                  tokens.push({ type: "not", index: i });
+                  i += 1;
+                  continue;
+              }
+          }
+          if (ch === '"') {
+              const start = i;
+              i += 1;
+              let value = "";
+              let closed = false;
+              while (i < input.length) {
+                  const qch = input[i];
+                  if (qch === '"') {
+                      i += 1;
+                      tokens.push({ type: "quoted", index: start, value });
+                      value = "";
+                      closed = true;
+                      break;
+                  }
+                  if (qch === "\\") {
+                      const next = input[i + 1];
+                      if (next === undefined) {
+                          return error("Unterminated escape sequence", i);
+                      }
+                      if (next === '"' || next === "\\" || next === "n" || next === "t") {
+                          value +=
+                              next === "n" ? "\n" : next === "t" ? "\t" : next === '"' ? '"' : "\\";
+                          i += 2;
+                          continue;
+                      }
+                      value += next;
+                      i += 2;
+                      continue;
+                  }
+                  value += qch;
+                  i += 1;
+              }
+              if (!closed) {
+                  return error("Unterminated quoted string", start);
+              }
+              continue;
+          }
+          const start = i;
+          while (i < input.length) {
+              const c = input[i];
+              if (c === " " ||
+                  c === "\t" ||
+                  c === "\n" ||
+                  c === "\r" ||
+                  c === "(" ||
+                  c === ")" ||
+                  c === ":") {
+                  break;
+              }
+              i += 1;
+          }
+          const word = input.slice(start, i);
+          if (!word) {
+              return error("Unexpected character", start);
+          }
+          tokens.push({ type: "word", index: start, value: word });
+      }
+      tokens.push({ type: "eof", index: input.length });
+      return { ok: true, tokens };
+  }
+  class Parser {
+      constructor(tokens) {
+          this.index = 0;
+          this.tokens = tokens;
+      }
+      peek() {
+          return this.tokens[this.index] ?? { type: "eof", index: this.tokens.length };
+      }
+      consume() {
+          const token = this.peek();
+          this.index = Math.min(this.index + 1, this.tokens.length);
+          return token;
+      }
+      expect(type, message) {
+          const token = this.peek();
+          if (token.type !== type) {
+              return { ok: false, error: { message, index: token.index } };
+          }
+          return { ok: true, token: this.consume() };
+      }
+      matchOperator(op) {
+          const token = this.peek();
+          return token.type === "word" && token.value.toLowerCase() === op;
+      }
+      parse() {
+          const expr = this.parseOr();
+          if (!expr.ok) {
+              return expr;
+          }
+          const extra = this.peek();
+          if (extra.type !== "eof") {
+              return {
+                  ok: false,
+                  error: { message: "Unexpected token", index: extra.index },
+              };
+          }
+          return { ok: true, ast: expr.ast };
+      }
+      parseOr() {
+          let left = this.parseAnd();
+          if (!left.ok) {
+              return left;
+          }
+          while (this.matchOperator("or")) {
+              this.consume();
+              const right = this.parseAnd();
+              if (!right.ok) {
+                  return right;
+              }
+              left = { ok: true, ast: { type: "or", left: left.ast, right: right.ast } };
+          }
+          return left;
+      }
+      parseAnd() {
+          let left = this.parseNot();
+          if (!left.ok) {
+              return left;
+          }
+          while (true) {
+              if (this.matchOperator("and")) {
+                  this.consume();
+                  const right = this.parseNot();
+                  if (!right.ok) {
+                      return right;
+                  }
+                  left = { ok: true, ast: { type: "and", left: left.ast, right: right.ast } };
+                  continue;
+              }
+              const next = this.peek();
+              if (next.type === "eof" || next.type === "rparen" || this.matchOperator("or")) {
+                  break;
+              }
+              if (isPrimaryStart(next)) {
+                  const right = this.parseNot();
+                  if (!right.ok) {
+                      return right;
+                  }
+                  left = { ok: true, ast: { type: "and", left: left.ast, right: right.ast } };
+                  continue;
+              }
+              break;
+          }
+          return left;
+      }
+      parseNot() {
+          const token = this.peek();
+          if (token.type === "not" ||
+              (token.type === "word" && token.value.toLowerCase() === "not")) {
+              this.consume();
+              const expr = this.parseNot();
+              if (!expr.ok) {
+                  return expr;
+              }
+              return { ok: true, ast: { type: "not", expr: expr.ast } };
+          }
+          return this.parsePrimary();
+      }
+      parsePrimary() {
+          const token = this.peek();
+          if (token.type === "lparen") {
+              this.consume();
+              const expr = this.parseOr();
+              if (!expr.ok) {
+                  return expr;
+              }
+              const rparen = this.expect("rparen", "Expected ')'");
+              if (!rparen.ok) {
+                  return rparen;
+              }
+              return expr;
+          }
+          return this.parseTerm();
+      }
+      parseTerm() {
+          const token = this.peek();
+          if (token.type !== "word" && token.type !== "quoted") {
+              return {
+                  ok: false,
+                  error: { message: "Expected search term", index: token.index },
+              };
+          }
+          if (token.type === "word") {
+              const next = this.tokens[this.index + 1];
+              if (next?.type === "colon") {
+                  const keyToken = this.consume();
+                  this.consume(); // colon
+                  const valueToken = this.peek();
+                  if (valueToken.type !== "word" && valueToken.type !== "quoted") {
+                      return {
+                          ok: false,
+                          error: { message: "Expected value after ':'", index: valueToken.index },
+                      };
+                  }
+                  this.consume();
+                  const key = keyToken.value.toLowerCase();
+                  const compareOps = new Set([">", ">=", "<", "<=", "=", "!="]);
+                  let rawValue = valueToken.value;
+                  if (valueToken.type === "word" && compareOps.has(rawValue)) {
+                      const possibleNumberToken = this.peek();
+                      if ((possibleNumberToken.type === "word" ||
+                          possibleNumberToken.type === "quoted") &&
+                          Number.isFinite(Number(possibleNumberToken.value))) {
+                          rawValue = `${rawValue} ${possibleNumberToken.value}`;
+                          this.consume();
+                      }
+                  }
+                  rawValue = this.maybeJoinRangeTokens(rawValue);
+                  const value = rawValue.toLowerCase();
+                  if (!value.trim()) {
+                      return {
+                          ok: false,
+                          error: { message: "Empty value is not allowed", index: valueToken.index },
+                      };
+                  }
+                  const compare = parseCompareValue(value);
+                  if (compare.ok) {
+                      return {
+                          ok: true,
+                          ast: {
+                              type: "term",
+                              term: { type: "compare", key, op: compare.op, value: compare.value },
+                          },
+                      };
+                  }
+                  if (compare.isCompareSyntax) {
+                      return {
+                          ok: false,
+                          error: { message: compare.errorMessage, index: valueToken.index },
+                      };
+                  }
+                  const range = parseRangeValue(value);
+                  if (range.ok) {
+                      return {
+                          ok: true,
+                          ast: {
+                              type: "term",
+                              term: { type: "range", key, min: range.min, max: range.max },
+                          },
+                      };
+                  }
+                  if (range.isRangeSyntax) {
+                      return {
+                          ok: false,
+                          error: { message: range.errorMessage, index: valueToken.index },
+                      };
+                  }
+                  return {
+                      ok: true,
+                      ast: { type: "term", term: { type: "keyValue", key, value } },
+                  };
+              }
+          }
+          const consumed = this.consume();
+          const value = consumed.value.toLowerCase();
+          if (!value.trim()) {
+              return {
+                  ok: false,
+                  error: { message: "Empty term is not allowed", index: consumed.index },
+              };
+          }
+          return { ok: true, ast: { type: "term", term: { type: "freeText", value } } };
+      }
+      maybeJoinRangeTokens(rawValue) {
+          const looksNumeric = Number.isFinite(Number(rawValue));
+          const next = this.peek();
+          if (rawValue === "..") {
+              if ((next.type === "word" && Number.isFinite(Number(next.value))) ||
+                  (next.type === "quoted" && Number.isFinite(Number(next.value)))) {
+                  rawValue = `..${next.value}`;
+                  this.consume();
+              }
+              return rawValue;
+          }
+          if (rawValue.endsWith("..")) {
+              if ((next.type === "word" && Number.isFinite(Number(next.value))) ||
+                  (next.type === "quoted" && Number.isFinite(Number(next.value)))) {
+                  rawValue = `${rawValue}${next.value}`;
+                  this.consume();
+              }
+              return rawValue;
+          }
+          if (looksNumeric) {
+              if (next.type === "word" && next.value === "..") {
+                  this.consume(); // consume the ".."
+                  const after = this.peek();
+                  if ((after.type === "word" && Number.isFinite(Number(after.value))) ||
+                      (after.type === "quoted" && Number.isFinite(Number(after.value)))) {
+                      rawValue = `${rawValue}..${after.value}`;
+                      this.consume();
+                      return rawValue;
+                  }
+                  rawValue = `${rawValue}..`;
+                  return rawValue;
+              }
+              if (next.type === "word" && next.value.startsWith("..")) {
+                  rawValue = `${rawValue}${next.value}`;
+                  this.consume();
+                  return rawValue;
+              }
+          }
+          return rawValue;
+      }
+  }
+  function compileSearchQuery(input) {
+      const trimmed = input.trim();
+      if (!trimmed) {
+          return { ok: true, ast: { type: "term", term: { type: "freeText", value: "" } } };
+      }
+      const tokenized = tokenize(trimmed);
+      if (!tokenized.ok) {
+          return { ok: false, error: tokenized.error };
+      }
+      const parser = new Parser(tokenized.tokens);
+      return parser.parse();
+  }
+  function matchesSearchQuery(ast, target) {
+      switch (ast.type) {
+          case "and":
+              return (matchesSearchQuery(ast.left, target) &&
+                  matchesSearchQuery(ast.right, target));
+          case "or":
+              return matchesSearchQuery(ast.left, target) || matchesSearchQuery(ast.right, target);
+          case "not":
+              return !matchesSearchQuery(ast.expr, target);
+          case "term":
+              return matchesTerm(ast.term, target);
+          default:
+              return false;
+      }
+  }
+  function includes(haystack, needle) {
+      if (!needle) {
+          return true;
+      }
+      return haystack.includes(needle);
+  }
+  function parseBoolean(value) {
+      switch (value.trim().toLowerCase()) {
+          case "true":
+          case "1":
+          case "yes":
+          case "y":
+          case "on":
+              return true;
+          case "false":
+          case "0":
+          case "no":
+          case "n":
+          case "off":
+              return false;
+          default:
+              return null;
+      }
+  }
+  function logTokenText(tokens) {
+      if (!tokens || tokens.length === 0) {
+          return "";
+      }
+      return tokens
+          .map((token) => (token.type === "text" ? token.text : token.label ?? ""))
+          .join(" ")
+          .toLowerCase();
+  }
+  function logTokenMatchesType(tokens, type, value) {
+      if (!tokens || tokens.length === 0) {
+          return false;
+      }
+      const needle = value.toLowerCase();
+      for (const token of tokens) {
+          if (token.type !== type) {
+              continue;
+          }
+          const label = (token.label ?? "").toLowerCase();
+          const id = (token.id ?? "").toLowerCase();
+          if (includes(label, needle) || includes(id, needle)) {
+              return true;
+          }
+      }
+      return false;
+  }
+  function logTokenMatchesFacet(tokens, key, value) {
+      if (!tokens || tokens.length === 0) {
+          return false;
+      }
+      const needle = value.toLowerCase();
+      const facetKey = key.toLowerCase();
+      for (const token of tokens) {
+          if (token.type === "text") {
+              continue;
+          }
+          const facets = token.facets;
+          if (!facets) {
+              continue;
+          }
+          const facetValues = facets[facetKey];
+          if (!facetValues || facetValues.length === 0) {
+              continue;
+          }
+          for (const facetValue of facetValues) {
+              if (includes(String(facetValue ?? "").toLowerCase(), needle)) {
+                  return true;
+              }
+          }
+      }
+      return false;
+  }
+  function formatTileSummaryForSearch(summary) {
+      if (!summary) {
+          return "";
+      }
+      const coords = `${summary.x}, ${summary.y}`;
+      return summary.ownerName
+          ? `${coords} (${summary.ownerName})`.toLowerCase()
+          : coords.toLowerCase();
+  }
+  function deriveShipStatusForSearch(ship) {
+      if (ship.retreating) {
+          return "retreating";
+      }
+      if (ship.reachedTarget) {
+          return "arrived";
+      }
+      if (ship.type === "Transport") {
+          return "en route";
+      }
+      if (!ship.destination) {
+          return ship.current ? "idle" : "unknown";
+      }
+      if (ship.current && ship.destination && ship.current.ref === ship.destination.ref) {
+          return "stationed";
+      }
+      return "en route";
+  }
+  function defaultTextForTarget(target) {
+      switch (target.kind) {
+          case "player": {
+              const p = target.player;
+              const derivedClanTag = extractClanTag(p.name);
+              const clan = p.clan ?? derivedClanTag ?? "";
+              const clanTag = clan ? `[${clan}]` : "";
+              const fields = [p.name, p.id, p.team ?? "", clan, clanTag];
+              return fields.join(" ").toLowerCase();
+          }
+          case "ship": {
+              const s = target.ship;
+              const label = `${s.type} #${s.id}`;
+              const fields = [
+                  label,
+                  s.id,
+                  s.type,
+                  s.ownerName,
+                  s.ownerId,
+                  deriveShipStatusForSearch(s),
+                  formatTileSummaryForSearch(s.origin),
+                  formatTileSummaryForSearch(s.current),
+                  formatTileSummaryForSearch(s.destination),
+              ];
+              return fields.join(" ").toLowerCase();
+          }
+          case "log": {
+              const e = target.entry;
+              const fields = [
+                  e.id,
+                  e.level,
+                  e.source ?? "",
+                  e.message ?? "",
+                  logTokenText(e.tokens),
+              ];
+              return fields.join(" ").toLowerCase();
+          }
+          case "action": {
+              const a = target.action;
+              const fields = [
+                  a.id,
+                  a.name,
+                  a.description ?? "",
+                  a.runMode,
+                  a.enabled ? "enabled" : "disabled",
+              ];
+              return fields.join(" ").toLowerCase();
+          }
+          case "runningAction": {
+              const r = target.run;
+              const fields = [
+                  r.id,
+                  r.actionId,
+                  r.name,
+                  r.description ?? "",
+                  r.runMode,
+                  r.status,
+              ];
+              return fields.join(" ").toLowerCase();
+          }
+          default:
+              return "";
+      }
+  }
+  function matchesTerm(term, target) {
+      if (term.type === "freeText") {
+          return includes(defaultTextForTarget(target), term.value);
+      }
+      if (term.type === "compare") {
+          return matchesComparison(term, target);
+      }
+      if (term.type === "range") {
+          return matchesRange(term, target);
+      }
+      const key = term.key;
+      const value = term.value;
+      if (key === "text" || key === "message") {
+          return includes(defaultTextForTarget(target), value);
+      }
+      if (key === "id") {
+          switch (target.kind) {
+              case "player":
+                  return includes(target.player.id.toLowerCase(), value);
+              case "ship":
+                  return includes(target.ship.id.toLowerCase(), value);
+              case "log":
+                  return includes(target.entry.id.toLowerCase(), value);
+              case "action":
+                  return includes(target.action.id.toLowerCase(), value);
+              case "runningAction":
+                  return includes(`${target.run.id} ${target.run.actionId}`.toLowerCase(), value);
+              default:
+                  return false;
+          }
+      }
+      if (key === "publicid") {
+          switch (target.kind) {
+              case "player":
+                  return includes((target.player.publicId ?? "").toLowerCase(), value);
+              case "log":
+                  return logTokenMatchesFacet(target.entry.tokens, "publicid", value);
+              default:
+                  return false;
+          }
+      }
+      switch (target.kind) {
+          case "player": {
+              const p = target.player;
+              switch (key) {
+                  case "user":
+                  case "player":
+                      return includes(`${p.name} ${p.id}`.toLowerCase(), value);
+                  case "clan": {
+                      const derivedClanTag = extractClanTag(p.name);
+                      const clan = p.clan ?? derivedClanTag ?? "";
+                      const clanTag = clan ? `[${clan}]` : "";
+                      return includes(`${clan} ${clanTag}`.toLowerCase(), value);
+                  }
+                  case "team":
+                      return includes((p.team ?? "").toLowerCase(), value);
+                  default:
+                      return false;
+              }
+          }
+          case "ship": {
+              const s = target.ship;
+              switch (key) {
+                  case "owner":
+                  case "user":
+                      return includes(`${s.ownerName} ${s.ownerId}`.toLowerCase(), value);
+                  case "type":
+                      return includes(s.type.toLowerCase(), value);
+                  case "status":
+                      return includes(deriveShipStatusForSearch(s), value);
+                  case "origin":
+                      return includes(formatTileSummaryForSearch(s.origin), value);
+                  case "current":
+                      return includes(formatTileSummaryForSearch(s.current), value);
+                  case "destination":
+                      return includes(formatTileSummaryForSearch(s.destination), value);
+                  default:
+                      return false;
+              }
+          }
+          case "log": {
+              const e = target.entry;
+              switch (key) {
+                  case "user":
+                  case "player":
+                      return (logTokenMatchesType(e.tokens, "player", value) ||
+                          logTokenMatchesFacet(e.tokens, "user", value) ||
+                          logTokenMatchesFacet(e.tokens, "player", value));
+                  case "clan":
+                      return (logTokenMatchesType(e.tokens, "clan", value) ||
+                          logTokenMatchesFacet(e.tokens, "clan", value));
+                  case "team":
+                      return (logTokenMatchesType(e.tokens, "team", value) ||
+                          logTokenMatchesFacet(e.tokens, "team", value));
+                  case "level":
+                      return includes((e.level ?? "").toLowerCase(), value);
+                  case "source":
+                      return includes((e.source ?? "").toLowerCase(), value);
+                  default:
+                      return logTokenMatchesFacet(e.tokens, key, value);
+              }
+          }
+          case "action": {
+              const a = target.action;
+              switch (key) {
+                  case "name":
+                  case "action":
+                      return includes(a.name.toLowerCase(), value);
+                  case "desc":
+                  case "description":
+                      return includes((a.description ?? "").toLowerCase(), value);
+                  case "mode":
+                  case "runmode":
+                      return includes(a.runMode.toLowerCase(), value);
+                  case "enabled": {
+                      const parsed = parseBoolean(value);
+                      if (parsed === null) {
+                          return false;
+                      }
+                      return a.enabled === parsed;
+                  }
+                  default:
+                      return false;
+              }
+          }
+          case "runningAction": {
+              const r = target.run;
+              switch (key) {
+                  case "name":
+                  case "action":
+                      return includes(r.name.toLowerCase(), value);
+                  case "desc":
+                  case "description":
+                      return includes((r.description ?? "").toLowerCase(), value);
+                  case "mode":
+                  case "runmode":
+                      return includes(r.runMode.toLowerCase(), value);
+                  case "status":
+                      return includes(r.status.toLowerCase(), value);
+                  default:
+                      return false;
+              }
+          }
+          default:
+              return false;
+      }
+  }
+  function parseCompareValue(value) {
+      const match = /^(>=|<=|!=|=|>|<)\s*(.+)$/.exec(value.trim());
+      if (!match) {
+          return { ok: false, isCompareSyntax: false, errorMessage: "" };
+      }
+      const [, opRaw, numberRaw] = match;
+      const op = opRaw;
+      const num = Number(numberRaw);
+      if (!Number.isFinite(num)) {
+          return {
+              ok: false,
+              isCompareSyntax: true,
+              errorMessage: `Expected a number after '${op}'`,
+          };
+      }
+      return { ok: true, op, value: num };
+  }
+  function parseRangeValue(value) {
+      const trimmed = value.trim();
+      const match = /^\s*(-?\d+(?:\.\d+)?)?\s*\.\.\s*(-?\d+(?:\.\d+)?)?\s*$/.exec(trimmed);
+      if (!match) {
+          return { ok: false, isRangeSyntax: false, errorMessage: "" };
+      }
+      const [, leftTextRaw, rightTextRaw] = match;
+      const hasLeft = typeof leftTextRaw === "string" && leftTextRaw.trim() !== "";
+      const hasRight = typeof rightTextRaw === "string" && rightTextRaw.trim() !== "";
+      if (!hasLeft && !hasRight) {
+          return {
+              ok: false,
+              isRangeSyntax: true,
+              errorMessage: "Range must specify at least one bound",
+          };
+      }
+      const min = hasLeft ? Number(leftTextRaw) : undefined;
+      const max = hasRight ? Number(rightTextRaw) : undefined;
+      if (hasLeft && !Number.isFinite(min)) {
+          return {
+              ok: false,
+              isRangeSyntax: true,
+              errorMessage: "Range lower bound must be a number",
+          };
+      }
+      if (hasRight && !Number.isFinite(max)) {
+          return {
+              ok: false,
+              isRangeSyntax: true,
+              errorMessage: "Range upper bound must be a number",
+          };
+      }
+      return { ok: true, min, max };
+  }
+  function compareNumber(op, left, right) {
+      switch (op) {
+          case ">":
+              return left > right;
+          case ">=":
+              return left >= right;
+          case "<":
+              return left < right;
+          case "<=":
+              return left <= right;
+          case "=":
+              return left === right;
+          case "!=":
+              return left !== right;
+          default:
+              return false;
+      }
+  }
+  function matchesComparison(term, target) {
+      const key = term.key;
+      const right = term.value;
+      const tryLogFacetNumber = () => {
+          if (target.kind !== "log") {
+              return false;
+          }
+          const tokens = target.entry.tokens;
+          if (!tokens) {
+              return false;
+          }
+          for (const token of tokens) {
+              if (token.type === "text") {
+                  continue;
+              }
+              const values = token.facets?.[key];
+              if (!values) {
+                  continue;
+              }
+              for (const raw of values) {
+                  const left = typeof raw === "number"
+                      ? raw
+                      : typeof raw === "string"
+                          ? Number(raw)
+                          : NaN;
+                  if (!Number.isFinite(left)) {
+                      continue;
+                  }
+                  if (compareNumber(term.op, left, right)) {
+                      return true;
+                  }
+              }
+          }
+          return false;
+      };
+      switch (target.kind) {
+          case "player": {
+              const p = target.player;
+              let left = null;
+              switch (key) {
+                  case "id": {
+                      const num = Number(p.id);
+                      left = Number.isFinite(num) ? num : null;
+                      break;
+                  }
+                  case "tiles":
+                      left = p.tiles;
+                      break;
+                  case "gold":
+                      left = p.gold;
+                      break;
+                  case "troops":
+                      left = normalizeTroopCountForSearch(p.troops);
+                      break;
+                  case "expansions":
+                      left = p.expansions;
+                      break;
+                  case "incoming":
+                      left = p.incomingAttacks.length;
+                      break;
+                  case "outgoing":
+                      left = p.outgoingAttacks.length;
+                      break;
+                  case "supports":
+                  case "defensive":
+                      left = p.defensiveSupports.length;
+                      break;
+                  case "alliances":
+                      left = p.alliances.length;
+                      break;
+                  case "updated":
+                  case "lastupdated":
+                      left = p.lastUpdatedMs;
+                      break;
+                  case "lobbypos":
+                  case "lobbyposition":
+                      left = typeof p.lobbyPosition === "number" ? p.lobbyPosition : null;
+                      break;
+                  default:
+                      left = null;
+                      break;
+              }
+              return left === null ? false : compareNumber(term.op, left, right);
+          }
+          case "ship": {
+              const s = target.ship;
+              let left = null;
+              switch (key) {
+                  case "troops":
+                      left = normalizeTroopCountForSearch(s.troops);
+                      break;
+                  case "id": {
+                      const num = Number(s.id);
+                      left = Number.isFinite(num) ? num : null;
+                      break;
+                  }
+                  default:
+                      left = null;
+                      break;
+              }
+              return left === null ? false : compareNumber(term.op, left, right);
+          }
+          case "log": {
+              const e = target.entry;
+              let left = null;
+              switch (key) {
+                  case "timestamp":
+                  case "time":
+                      left = e.timestampMs;
+                      break;
+                  default:
+                      left = null;
+                      break;
+              }
+              if (left !== null) {
+                  return compareNumber(term.op, left, right);
+              }
+              return tryLogFacetNumber();
+          }
+          case "action": {
+              const a = target.action;
+              let left = null;
+              switch (key) {
+                  case "interval":
+                  case "runinterval":
+                  case "runintervalticks":
+                      left = a.runIntervalTicks;
+                      break;
+                  case "created":
+                  case "createdat":
+                  case "createdatms":
+                      left = a.createdAtMs;
+                      break;
+                  case "updated":
+                  case "updatedat":
+                  case "updatedatms":
+                      left = a.updatedAtMs;
+                      break;
+                  default:
+                      left = null;
+                      break;
+              }
+              return left === null ? false : compareNumber(term.op, left, right);
+          }
+          case "runningAction": {
+              const r = target.run;
+              let left = null;
+              switch (key) {
+                  case "interval":
+                  case "runinterval":
+                  case "runintervalticks":
+                      left = r.runIntervalTicks;
+                      break;
+                  case "started":
+                  case "startedat":
+                  case "startedatms":
+                      left = r.startedAtMs;
+                      break;
+                  case "updated":
+                  case "lastupdated":
+                  case "lastupdatedms":
+                      left = r.lastUpdatedMs;
+                      break;
+                  default:
+                      left = null;
+                      break;
+              }
+              return left === null ? false : compareNumber(term.op, left, right);
+          }
+          default:
+              return false;
+      }
+  }
+  function matchesRange(term, target) {
+      const key = term.key;
+      const min = term.min;
+      const max = term.max;
+      const matchesNumber = (left) => {
+          if (min !== undefined && left < min) {
+              return false;
+          }
+          if (max !== undefined && left > max) {
+              return false;
+          }
+          return true;
+      };
+      const tryLogFacetNumber = () => {
+          if (target.kind !== "log") {
+              return false;
+          }
+          const tokens = target.entry.tokens;
+          if (!tokens) {
+              return false;
+          }
+          for (const token of tokens) {
+              if (token.type === "text") {
+                  continue;
+              }
+              const values = token.facets?.[key];
+              if (!values) {
+                  continue;
+              }
+              for (const raw of values) {
+                  const left = typeof raw === "number"
+                      ? raw
+                      : typeof raw === "string"
+                          ? Number(raw)
+                          : NaN;
+                  if (!Number.isFinite(left)) {
+                      continue;
+                  }
+                  if (matchesNumber(left)) {
+                      return true;
+                  }
+              }
+          }
+          return false;
+      };
+      switch (target.kind) {
+          case "player": {
+              const p = target.player;
+              let left = null;
+              switch (key) {
+                  case "id": {
+                      const num = Number(p.id);
+                      left = Number.isFinite(num) ? num : null;
+                      break;
+                  }
+                  case "tiles":
+                      left = p.tiles;
+                      break;
+                  case "gold":
+                      left = p.gold;
+                      break;
+                  case "troops":
+                      left = normalizeTroopCountForSearch(p.troops);
+                      break;
+                  case "expansions":
+                      left = p.expansions;
+                      break;
+                  case "incoming":
+                      left = p.incomingAttacks.length;
+                      break;
+                  case "outgoing":
+                      left = p.outgoingAttacks.length;
+                      break;
+                  case "supports":
+                  case "defensive":
+                      left = p.defensiveSupports.length;
+                      break;
+                  case "alliances":
+                      left = p.alliances.length;
+                      break;
+                  case "updated":
+                  case "lastupdated":
+                      left = p.lastUpdatedMs;
+                      break;
+                  case "lobbypos":
+                  case "lobbyposition":
+                      left = typeof p.lobbyPosition === "number" ? p.lobbyPosition : null;
+                      break;
+                  default:
+                      left = null;
+                      break;
+              }
+              return left === null ? false : matchesNumber(left);
+          }
+          case "ship": {
+              const s = target.ship;
+              let left = null;
+              switch (key) {
+                  case "troops":
+                      left = normalizeTroopCountForSearch(s.troops);
+                      break;
+                  case "id": {
+                      const num = Number(s.id);
+                      left = Number.isFinite(num) ? num : null;
+                      break;
+                  }
+                  default:
+                      left = null;
+                      break;
+              }
+              return left === null ? false : matchesNumber(left);
+          }
+          case "log": {
+              const e = target.entry;
+              let left = null;
+              switch (key) {
+                  case "timestamp":
+                  case "time":
+                      left = e.timestampMs;
+                      break;
+                  default:
+                      left = null;
+                      break;
+              }
+              if (left !== null) {
+                  return matchesNumber(left);
+              }
+              return tryLogFacetNumber();
+          }
+          case "action": {
+              const a = target.action;
+              let left = null;
+              switch (key) {
+                  case "interval":
+                  case "runinterval":
+                  case "runintervalticks":
+                      left = a.runIntervalTicks;
+                      break;
+                  case "created":
+                  case "createdat":
+                  case "createdatms":
+                      left = a.createdAtMs;
+                      break;
+                  case "updated":
+                  case "updatedat":
+                  case "updatedatms":
+                      left = a.updatedAtMs;
+                      break;
+                  default:
+                      left = null;
+                      break;
+              }
+              return left === null ? false : matchesNumber(left);
+          }
+          case "runningAction": {
+              const r = target.run;
+              let left = null;
+              switch (key) {
+                  case "interval":
+                  case "runinterval":
+                  case "runintervalticks":
+                      left = r.runIntervalTicks;
+                      break;
+                  case "started":
+                  case "startedat":
+                  case "startedatms":
+                      left = r.startedAtMs;
+                      break;
+                  case "updated":
+                  case "lastupdated":
+                  case "lastupdatedms":
+                      left = r.lastUpdatedMs;
+                      break;
+                  default:
+                      left = null;
+                      break;
+              }
+              return left === null ? false : matchesNumber(left);
+          }
+          default:
+              return false;
+      }
+  }
+
   function isTradeStoppedBySelf(carrier) {
       if (typeof carrier.tradeStoppedBySelf === "boolean") {
           return carrier.tradeStoppedBySelf;
@@ -1512,6 +2670,14 @@
                               ? undefined
                               : () => activeActions.toggleTrading([target.id], nextStopped),
                       },
+                      {
+                          label: "Copy username",
+                          onSelect: () => void copyTextToClipboard(target.name, viewDocument$6),
+                      },
+                      {
+                          label: "Copy player id",
+                          onSelect: () => void copyTextToClipboard(target.publicId ?? target.id, viewDocument$6),
+                      },
                   ],
               });
               return;
@@ -1543,6 +2709,16 @@
                   onSelect: () => activeActions.toggleTrading(ids, false),
               });
           }
+          items.push({
+              label: "Copy usernames",
+              onSelect: () => void copyTextToClipboard(target.players.map((player) => player.name).join("\n"), viewDocument$6),
+          });
+          items.push({
+              label: "Copy player ids",
+              onSelect: () => void copyTextToClipboard(target.players
+                  .map((player) => player.publicId ?? player.id)
+                  .join("\n"), viewDocument$6),
+          });
           if (!items.length) {
               items.push({
                   label: "Stop trading",
@@ -1574,6 +2750,7 @@
           tr.dataset.contextTarget = "player";
           playerContextTargets.set(tr, {
               id: player.id,
+              publicId: player.publicId,
               name: player.name,
               tradeStopped: player.tradeStopped ?? false,
               tradeStoppedBySelf: player.tradeStoppedBySelf,
@@ -1647,13 +2824,14 @@
       }
   }
   function appendGroupRows(options) {
-      const { group, leaf, snapshot, tbody, requestRender, groupType, metricsCache, actions, headers, } = options;
+      const { group, leaf, snapshot, tbody, requestRender, groupType, metricsCache, actions, headers, visiblePlayers, expandedOverride, disableToggle, } = options;
       const groupKey = `${groupType}:${group.key}`;
-      const expanded = leaf.expandedGroups.has(groupKey);
+      const expanded = expandedOverride ?? leaf.expandedGroups.has(groupKey);
+      const playersToRender = visiblePlayers ?? group.players;
       const row = createElement$6("tr", "bg-slate-900/70 hover:bg-slate-800/60 transition-colors font-semibold");
       row.dataset.groupKey = groupKey;
       applyPersistentHover(row, leaf, groupKey, "bg-slate-800/60");
-      const eligiblePlayers = group.players.filter((player) => !player.isSelf && !player.isLobbyPlayer);
+      const eligiblePlayers = playersToRender.filter((player) => !player.isSelf && !player.isLobbyPlayer);
       if (eligiblePlayers.length > 0) {
           row.dataset.contextTarget = "group";
           groupContextTargets.set(row, {
@@ -1666,22 +2844,27 @@
           const firstCell = createElement$6("td", cellClassForColumn(labelHeader, "align-top", {
               variant: "expandable",
           }));
+          const countLabel = playersToRender === group.players
+              ? `${group.players.length}`
+              : `${playersToRender.length}/${group.players.length}`;
+          const toggleAttribute = disableToggle ? undefined : "data-group-toggle";
           firstCell.appendChild(createLabelBlock({
-              label: `${group.label} (${group.players.length})`,
+              label: `${group.label} (${countLabel})`,
               subtitle: groupType === "clan" ? "Clan summary" : "Team summary",
               indent: 0,
               expanded,
-              toggleAttribute: "data-group-toggle",
+              toggleAttribute,
               rowKey: groupKey,
-              onToggle: (next) => {
-                  if (next) {
-                      leaf.expandedGroups.add(groupKey);
-                  }
-                  else {
-                      leaf.expandedGroups.delete(groupKey);
-                  }
-                  requestRender();
-              },
+              onToggle: toggleAttribute &&
+                  ((next) => {
+                      if (next) {
+                          leaf.expandedGroups.add(groupKey);
+                      }
+                      else {
+                          leaf.expandedGroups.delete(groupKey);
+                      }
+                      requestRender();
+                  }),
               persistHover: leaf.hoveredGroupToggleKey === groupKey,
               onToggleHoverChange: (hovered) => {
                   if (hovered) {
@@ -1703,7 +2886,7 @@
       });
       tbody.appendChild(row);
       if (expanded) {
-          for (const player of group.players) {
+          for (const player of playersToRender) {
               appendPlayerRows({
                   player,
                   indent: 1,
@@ -2084,7 +3267,7 @@
   }
   function renderClanView(options) {
       return withViewDocument$6(options.ui.document, () => {
-          const { leaf, snapshot, requestRender, sortState, onSort, existingContainer, actions, } = options;
+          const { leaf, snapshot, requestRender, sortState, onSort, existingContainer, actions, searchFilter, } = options;
           const metricsCache = new Map();
           const visibleHeaders = getVisibleHeaders(leaf, leaf.view, TABLE_HEADERS);
           const { container, tbody } = createTableShell({
@@ -2102,7 +3285,31 @@
               getKey: (player) => extractClanTag(player.name),
               sortState,
           });
+          const filter = (searchFilter ?? "").trim().toLowerCase();
+          const compiled = filter ? compileSearchQuery(filter) : null;
+          const hasStructuredQuery = !!compiled && compiled.ok;
+          const matchesPlayer = (player) => {
+              if (!filter) {
+                  return true;
+              }
+              if (hasStructuredQuery) {
+                  return matchesSearchQuery(compiled.ast, { kind: "player", player });
+              }
+              const clan = extractClanTag(player.name);
+              const fields = [player.name, player.id, player.team ?? "", clan ?? ""];
+              return fields.some((field) => String(field ?? "").toLowerCase().includes(filter));
+          };
           for (const group of groups) {
+              const groupLabelMatches = filter
+                  ? group.label.toLowerCase().includes(filter)
+                  : false;
+              const matchedPlayers = filter
+                  ? group.players.filter(matchesPlayer)
+                  : group.players;
+              const playersToRender = groupLabelMatches ? group.players : matchedPlayers;
+              if (filter && playersToRender.length === 0) {
+                  continue;
+              }
               appendGroupRows({
                   group,
                   leaf,
@@ -2113,6 +3320,9 @@
                   metricsCache,
                   actions,
                   headers: visibleHeaders,
+                  visiblePlayers: playersToRender,
+                  expandedOverride: filter ? true : undefined,
+                  disableToggle: Boolean(filter),
               });
           }
           registerContextMenuDelegation(container, actions);
@@ -2121,7 +3331,7 @@
   }
   function renderTeamView(options) {
       return withViewDocument$6(options.ui.document, () => {
-          const { leaf, snapshot, requestRender, sortState, onSort, existingContainer, actions, } = options;
+          const { leaf, snapshot, requestRender, sortState, onSort, existingContainer, actions, searchFilter, } = options;
           const metricsCache = new Map();
           const visibleHeaders = getVisibleHeaders(leaf, leaf.view, TABLE_HEADERS);
           const { container, tbody } = createTableShell({
@@ -2139,7 +3349,31 @@
               getKey: (player) => player.team ?? "Solo",
               sortState,
           });
+          const filter = (searchFilter ?? "").trim().toLowerCase();
+          const compiled = filter ? compileSearchQuery(filter) : null;
+          const hasStructuredQuery = !!compiled && compiled.ok;
+          const matchesPlayer = (player) => {
+              if (!filter) {
+                  return true;
+              }
+              if (hasStructuredQuery) {
+                  return matchesSearchQuery(compiled.ast, { kind: "player", player });
+              }
+              const clan = extractClanTag(player.name);
+              const fields = [player.name, player.id, player.team ?? "", clan ?? ""];
+              return fields.some((field) => String(field ?? "").toLowerCase().includes(filter));
+          };
           for (const group of groups) {
+              const groupLabelMatches = filter
+                  ? group.label.toLowerCase().includes(filter)
+                  : false;
+              const matchedPlayers = filter
+                  ? group.players.filter(matchesPlayer)
+                  : group.players;
+              const playersToRender = groupLabelMatches ? group.players : matchedPlayers;
+              if (filter && playersToRender.length === 0) {
+                  continue;
+              }
               appendGroupRows({
                   group,
                   leaf,
@@ -2150,6 +3384,9 @@
                   metricsCache,
                   actions,
                   headers: visibleHeaders,
+                  visiblePlayers: playersToRender,
+                  expandedOverride: filter ? true : undefined,
+                  disableToggle: Boolean(filter),
               });
           }
           registerContextMenuDelegation(container, actions);
@@ -3922,6 +5159,7 @@
                   existingContainer,
                   actions: viewActions,
                   lifecycle,
+                  searchFilter,
               });
           case "teams":
               return renderTeamView({
@@ -3934,6 +5172,7 @@
                   existingContainer,
                   actions: viewActions,
                   lifecycle,
+                  searchFilter,
               });
           case "ships":
               return renderShipView({
@@ -4205,7 +5444,7 @@
       }
       syncSearchFilter(query) {
           const trimmed = query.trim();
-          const next = trimmed.length >= 2 ? trimmed : "";
+          const next = trimmed.length >= 1 ? trimmed : "";
           if (this.searchInput) {
               this.searchInput.value = next;
           }
@@ -4587,7 +5826,7 @@
           const searchInput = this.createUiElement("input", "flex-1 min-w-0 bg-transparent text-sm text-slate-100 placeholder:text-slate-500 appearance-none border-none ring-0 focus:outline-none focus:ring-0 focus:border-transparent");
           searchInput.type = "search";
           searchInput.autocomplete = "off";
-          searchInput.placeholder = "Search players, clans, teams, or coordinates…";
+          searchInput.placeholder = "Search...";
           this.searchInput = searchInput;
           searchInput.value = this.searchFilter;
           searchInput.addEventListener("input", () => this.handleSearchInput(searchInput.value));
@@ -4680,7 +5919,7 @@
       handleSearchInput(raw) {
           this.runWithUiContext(() => {
               const trimmed = raw.trim();
-              this.updateSearchFilter(trimmed.length >= 2 ? trimmed : "");
+              this.updateSearchFilter(trimmed.length >= 1 ? trimmed : "");
           });
       }
       handleSearchSubmit() {
@@ -4690,7 +5929,7 @@
               if (!trimmed) {
                   return;
               }
-              this.updateSearchFilter(trimmed.length >= 2 ? trimmed : "");
+              this.updateSearchFilter(trimmed.length >= 1 ? trimmed : "");
               const coordinates = this.parseCoordinates(trimmed);
               if (coordinates) {
                   focusTile(coordinates);
@@ -4732,6 +5971,9 @@
           if (!filter) {
               return this.snapshot;
           }
+          const compiledQuery = compileSearchQuery(filter);
+          const useSimpleSearch = !compiledQuery.ok;
+          const ast = compiledQuery.ok ? compiledQuery.ast : null;
           const matchesPlayer = (player) => {
               const fields = [
                   player.name,
@@ -4741,33 +5983,43 @@
               ];
               return fields.some((field) => field.toString().toLowerCase().includes(filter));
           };
-          if (view === "players" || view === "clanmates" || view === "teams") {
-              const players = this.snapshot.players.filter(matchesPlayer);
+          if (view === "clanmates" || view === "teams") {
+              return this.snapshot;
+          }
+          if (view === "players") {
+              const players = useSimpleSearch
+                  ? this.snapshot.players.filter(matchesPlayer)
+                  : this.snapshot.players.filter((player) => matchesSearchQuery(ast, { kind: "player", player }));
               return { ...this.snapshot, players };
           }
           if (view === "ships") {
-              const ships = this.snapshot.ships.filter((ship) => {
-                  const computedStatus = ship.retreating
-                      ? "Retreating"
-                      : ship.reachedTarget
-                          ? "Arrived"
-                          : ship.destination
-                              ? "En route"
-                              : "Unknown";
-                  const fields = [
-                      `${ship.type} #${ship.id}`,
-                      ship.ownerName,
-                      ship.type,
-                      computedStatus,
-                      ship.origin ? `${ship.origin.x},${ship.origin.y}` : "",
-                      ship.destination ? `${ship.destination.x},${ship.destination.y}` : "",
-                  ];
-                  return fields.some((field) => `${field ?? ""}`.toLowerCase().includes(filter));
-              });
+              const ships = useSimpleSearch
+                  ? this.snapshot.ships.filter((ship) => {
+                      const computedStatus = ship.retreating
+                          ? "Retreating"
+                          : ship.reachedTarget
+                              ? "Arrived"
+                              : ship.destination
+                                  ? "En route"
+                                  : "Unknown";
+                      const fields = [
+                          `${ship.type} #${ship.id}`,
+                          ship.ownerName,
+                          ship.type,
+                          computedStatus,
+                          ship.origin ? `${ship.origin.x},${ship.origin.y}` : "",
+                          ship.destination ? `${ship.destination.x},${ship.destination.y}` : "",
+                      ];
+                      return fields.some((field) => `${field ?? ""}`.toLowerCase().includes(filter));
+                  })
+                  : this.snapshot.ships.filter((ship) => matchesSearchQuery(ast, { kind: "ship", ship }));
               return { ...this.snapshot, ships };
           }
           if (view === "logs") {
               const sidebarLogs = this.snapshot.sidebarLogs?.filter((entry) => {
+                  if (!useSimpleSearch) {
+                      return matchesSearchQuery(ast, { kind: "log", entry });
+                  }
                   const message = entry.message?.toLowerCase() ?? "";
                   const source = entry.source?.toLowerCase() ?? "";
                   const level = entry.level?.toLowerCase() ?? "";
@@ -4787,15 +6039,19 @@
               if (!state) {
                   return this.snapshot;
               }
-              const filteredActions = state.actions.filter((action) => {
-                  const description = action.description?.toLowerCase() ?? "";
-                  return (action.name.toLowerCase().includes(filter) ||
-                      description.includes(filter));
-              });
-              const filteredRunning = state.running.filter((run) => {
-                  const fields = [run.name, run.status, run.runMode];
-                  return fields.some((field) => `${field ?? ""}`.toLowerCase().includes(filter));
-              });
+              const filteredActions = useSimpleSearch
+                  ? state.actions.filter((action) => {
+                      const description = action.description?.toLowerCase() ?? "";
+                      return (action.name.toLowerCase().includes(filter) ||
+                          description.includes(filter));
+                  })
+                  : state.actions.filter((action) => matchesSearchQuery(ast, { kind: "action", action }));
+              const filteredRunning = useSimpleSearch
+                  ? state.running.filter((run) => {
+                      const fields = [run.name, run.status, run.runMode];
+                      return fields.some((field) => `${field ?? ""}`.toLowerCase().includes(filter));
+                  })
+                  : state.running.filter((run) => matchesSearchQuery(ast, { kind: "runningAction", run }));
               const sidebarActions = {
                   ...state,
                   actions: filteredActions,
@@ -4808,10 +6064,12 @@
               if (!state) {
                   return this.snapshot;
               }
-              const filteredRunning = state.running.filter((run) => {
-                  const fields = [run.name, run.status, run.runMode];
-                  return fields.some((field) => field.toString().toLowerCase().includes(filter));
-              });
+              const filteredRunning = useSimpleSearch
+                  ? state.running.filter((run) => {
+                      const fields = [run.name, run.status, run.runMode];
+                      return fields.some((field) => field.toString().toLowerCase().includes(filter));
+                  })
+                  : state.running.filter((run) => matchesSearchQuery(ast, { kind: "runningAction", run }));
               const sidebarActions = { ...state, running: filteredRunning };
               return { ...this.snapshot, sidebarActions };
           }
@@ -5503,6 +6761,41 @@
       }
       return false;
   }
+  function sanitizeTokenFacets(facets) {
+      if (!facets || typeof facets !== "object") {
+          return undefined;
+      }
+      const output = {};
+      for (const [rawKey, rawValue] of Object.entries(facets)) {
+          if (typeof rawKey !== "string") {
+              continue;
+          }
+          const key = rawKey.trim().toLowerCase();
+          if (!key) {
+              continue;
+          }
+          if (!Array.isArray(rawValue)) {
+              continue;
+          }
+          const values = rawValue
+              .flatMap((entry) => {
+              if (typeof entry === "string") {
+                  const trimmed = entry.trim();
+                  return trimmed ? [trimmed] : [];
+              }
+              if (typeof entry === "number" && Number.isFinite(entry)) {
+                  return [String(entry)];
+              }
+              return [];
+          })
+              .filter(Boolean);
+          if (values.length === 0) {
+              continue;
+          }
+          output[key] = values;
+      }
+      return Object.keys(output).length > 0 ? output : undefined;
+  }
   function isLogMetadata(value) {
       if (!value || typeof value !== "object") {
           return false;
@@ -5539,10 +6832,11 @@
           const label = typeof token.label === "string" ? token.label : "";
           const id = typeof token.id === "string" ? token.id : "";
           const color = typeof token.color === "string" ? token.color : undefined;
+          const facets = sanitizeTokenFacets(token.facets);
           if (!label || !id) {
               continue;
           }
-          sanitized.push({ type: token.type, id, label, color });
+          sanitized.push({ type: token.type, id, label, color, facets });
       }
       return sanitized.length > 0 ? sanitized : undefined;
   }
@@ -8431,7 +9725,20 @@
           this.lobbyWorkerInfoPromise = null;
           this.lastLobbyTeamLogKey = null;
           this.lastLiveGameTeamLogKey = null;
+          this.localPlayerPublicId = null;
           this.hostDocument = unsafeWindow?.document ?? document;
+          this.userMeHandler = (event) => {
+              const custom = event;
+              const detail = custom.detail;
+              const candidate = typeof detail === "object" && detail !== null
+                  ? detail.player?.publicId
+                  : undefined;
+              this.localPlayerPublicId =
+                  typeof candidate === "string" && candidate.trim().length > 0
+                      ? candidate.trim()
+                      : null;
+          };
+          this.hostDocument.addEventListener("userMeResponse", this.userMeHandler);
           this.actionsState = this.createInitialActionsState();
           this.sidebarOverlays = [
               {
@@ -8490,6 +9797,7 @@
           if (typeof window !== "undefined") {
               this.scheduleGameDiscovery(true);
               this.startLobbyQueueUpdates();
+              void this.refreshLocalPlayerPublicId();
           }
           this.restoreSidebarState();
           this.ensureAllEventActionsRunning();
@@ -9474,13 +10782,102 @@
           this.runningRemovalTimers.set(runId, timeout);
       }
       appendLogEntry(entry) {
-          this.sidebarLogs = [...this.sidebarLogs, entry];
+          this.sidebarLogs = [...this.sidebarLogs, this.enrichLogEntry(entry)];
           if (this.sidebarLogs.length > MAX_LOG_ENTRIES) {
               this.sidebarLogs = this.sidebarLogs.slice(-MAX_LOG_ENTRIES);
           }
           this.sidebarLogRevision += 1;
           this.snapshot = this.attachActionsState({ ...this.snapshot });
           this.notify();
+      }
+      async refreshLocalPlayerPublicId() {
+          if (this.localPlayerPublicId) {
+              return;
+          }
+          if (typeof fetch !== "function") {
+              return;
+          }
+          try {
+              const response = await fetch("/api/user_me", {
+                  method: "GET",
+                  cache: "no-store",
+              });
+              if (!response.ok) {
+                  return;
+              }
+              const payload = (await response.json());
+              const candidate = payload?.player
+                  ?.publicId;
+              if (typeof candidate === "string" && candidate.trim().length > 0) {
+                  this.localPlayerPublicId = candidate.trim();
+              }
+          }
+          catch {
+              return;
+          }
+      }
+      enrichLogEntry(entry, playerLookupOverride) {
+          const tokens = entry.tokens;
+          if (!tokens || tokens.length === 0) {
+              return entry;
+          }
+          const playerLookup = playerLookupOverride ??
+              new Map(this.snapshot.players.map((player) => [player.id, player]));
+          let changed = false;
+          const nextTokens = tokens.map((token) => {
+              if (token.type !== "player") {
+                  return token;
+              }
+              const record = playerLookup.get(token.id);
+              const clan = record?.clan ?? extractClanTag(record?.name ?? "");
+              const team = record?.team ?? "";
+              const facets = { ...(token.facets ?? {}) };
+              const mergeFacet = (key, values) => {
+                  const normalizedValues = values
+                      .map((value) => value.trim().toLowerCase())
+                      .filter(Boolean);
+                  if (normalizedValues.length === 0) {
+                      return;
+                  }
+                  const existing = facets[key] ?? [];
+                  const merged = new Set([
+                      ...existing.map((value) => value.trim().toLowerCase()).filter(Boolean),
+                      ...normalizedValues,
+                  ]);
+                  facets[key] = Array.from(merged);
+              };
+              mergeFacet("user", [token.label, token.id, record?.name ?? ""]);
+              mergeFacet("player", [token.label, token.id, record?.name ?? ""]);
+              if (record?.publicId) {
+                  mergeFacet("publicid", [record.publicId]);
+              }
+              if (clan) {
+                  mergeFacet("clan", [clan, `[${clan}]`, `clan ${clan}`]);
+              }
+              if (team) {
+                  mergeFacet("team", [team, `team ${team}`]);
+              }
+              if (Object.keys(facets).length === Object.keys(token.facets ?? {}).length) {
+                  const same = Object.entries(facets).every(([key, values]) => {
+                      const prev = token.facets?.[key] ?? [];
+                      if (prev.length !== values.length) {
+                          return false;
+                      }
+                      for (let i = 0; i < values.length; i += 1) {
+                          if (prev[i] !== values[i]) {
+                              return false;
+                          }
+                      }
+                      return true;
+                  });
+                  if (same) {
+                      return token;
+                  }
+              }
+              changed = true;
+              return { ...token, facets };
+          });
+          return changed ? { ...entry, tokens: nextTokens } : entry;
       }
       commitActionsState(updater) {
           this.actionsState = updater(this.actionsState);
@@ -9554,6 +10951,14 @@
           };
       }
       update(snapshot) {
+          const hadPlayers = this.snapshot.players.length > 0;
+          const nextPlayers = snapshot.players ?? [];
+          const shouldBackfillLogFacets = !hadPlayers && nextPlayers.length > 0;
+          if (shouldBackfillLogFacets && this.sidebarLogs.length > 0) {
+              const playerLookup = new Map(nextPlayers.map((player) => [player.id, player]));
+              this.sidebarLogs = this.sidebarLogs.map((entry) => this.enrichLogEntry(entry, playerLookup));
+              this.sidebarLogRevision += 1;
+          }
           this.snapshot = this.attachActionsState({
               ...snapshot,
               currentTimeMs: snapshot.currentTimeMs ?? Date.now(),
@@ -11522,6 +12927,7 @@
           const isSelf = this.isSamePlayer(localPlayer, playerId);
           return {
               id: playerId,
+              publicId: isSelf ? this.localPlayerPublicId ?? undefined : undefined,
               name,
               clan,
               team: player.team() ?? undefined,

@@ -52,6 +52,44 @@ function isLogToken(value: unknown): value is SidebarLogToken {
   return false;
 }
 
+function sanitizeTokenFacets(
+  facets: unknown,
+): Record<string, string[]> | undefined {
+  if (!facets || typeof facets !== "object") {
+    return undefined;
+  }
+  const output: Record<string, string[]> = {};
+  for (const [rawKey, rawValue] of Object.entries(facets)) {
+    if (typeof rawKey !== "string") {
+      continue;
+    }
+    const key = rawKey.trim().toLowerCase();
+    if (!key) {
+      continue;
+    }
+    if (!Array.isArray(rawValue)) {
+      continue;
+    }
+    const values = rawValue
+      .flatMap((entry): string[] => {
+        if (typeof entry === "string") {
+          const trimmed = entry.trim();
+          return trimmed ? [trimmed] : [];
+        }
+        if (typeof entry === "number" && Number.isFinite(entry)) {
+          return [String(entry)];
+        }
+        return [];
+      })
+      .filter(Boolean);
+    if (values.length === 0) {
+      continue;
+    }
+    output[key] = values;
+  }
+  return Object.keys(output).length > 0 ? output : undefined;
+}
+
 function isLogMetadata(value: unknown): value is SidebarLogMetadata {
   if (!value || typeof value !== "object") {
     return false;
@@ -95,10 +133,13 @@ function sanitizeTokens(
     const label = typeof token.label === "string" ? token.label : "";
     const id = typeof token.id === "string" ? token.id : "";
     const color = typeof token.color === "string" ? token.color : undefined;
+    const facets = sanitizeTokenFacets(
+      (token as SidebarLogToken & { facets?: unknown }).facets,
+    );
     if (!label || !id) {
       continue;
     }
-    sanitized.push({ type: token.type, id, label, color });
+    sanitized.push({ type: token.type, id, label, color, facets });
   }
   return sanitized.length > 0 ? sanitized : undefined;
 }

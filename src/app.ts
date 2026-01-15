@@ -23,6 +23,7 @@ import {
 } from "./components/views";
 import { SIDEBAR_ID, SIDEBAR_STYLE_ID } from "./constants";
 import { SidebarRole } from "./sidebarRoles";
+import { compileSearchQuery, matchesSearchQuery } from "./search/query";
 
 interface SidebarAppOptions {
   enableOverlayAlignment?: boolean;
@@ -268,7 +269,7 @@ export class SidebarApp {
 
   syncSearchFilter(query: string): void {
     const trimmed = query.trim();
-    const next = trimmed.length >= 2 ? trimmed : "";
+    const next = trimmed.length >= 1 ? trimmed : "";
     if (this.searchInput) {
       this.searchInput.value = next;
     }
@@ -766,7 +767,7 @@ export class SidebarApp {
     );
     searchInput.type = "search";
     searchInput.autocomplete = "off";
-    searchInput.placeholder = "Search players, clans, teams, or coordinates…";
+    searchInput.placeholder = "Search...";
     this.searchInput = searchInput;
     searchInput.value = this.searchFilter;
     searchInput.addEventListener("input", () =>
@@ -909,7 +910,7 @@ export class SidebarApp {
   private handleSearchInput(raw: string): void {
     this.runWithUiContext(() => {
       const trimmed = raw.trim();
-      this.updateSearchFilter(trimmed.length >= 2 ? trimmed : "");
+      this.updateSearchFilter(trimmed.length >= 1 ? trimmed : "");
     });
   }
 
@@ -920,7 +921,7 @@ export class SidebarApp {
       if (!trimmed) {
         return;
       }
-      this.updateSearchFilter(trimmed.length >= 2 ? trimmed : "");
+      this.updateSearchFilter(trimmed.length >= 1 ? trimmed : "");
       const coordinates = this.parseCoordinates(trimmed);
       if (coordinates) {
         focusTile(coordinates);
@@ -970,6 +971,10 @@ export class SidebarApp {
       return this.snapshot;
     }
 
+    const compiledQuery = compileSearchQuery(filter);
+    const useSimpleSearch = !compiledQuery.ok;
+    const ast = compiledQuery.ok ? compiledQuery.ast : null;
+
     const matchesPlayer = (player: PlayerRecord): boolean => {
       const fields = [
         player.name,
@@ -982,38 +987,55 @@ export class SidebarApp {
       );
     };
 
-    if (view === "players" || view === "clanmates" || view === "teams") {
-      const players = this.snapshot.players.filter(matchesPlayer);
+    if (view === "clanmates" || view === "teams") {
+      return this.snapshot;
+    }
+
+    if (view === "players") {
+      const players = useSimpleSearch
+        ? this.snapshot.players.filter(matchesPlayer)
+        : this.snapshot.players.filter((player) =>
+            matchesSearchQuery(ast!, { kind: "player", player }),
+          );
       return { ...this.snapshot, players };
     }
 
     if (view === "ships") {
-      const ships = this.snapshot.ships.filter((ship) => {
-        const computedStatus = ship.retreating
-          ? "Retreating"
-          : ship.reachedTarget
-            ? "Arrived"
-            : ship.destination
-              ? "En route"
-              : "Unknown";
-        const fields = [
-          `${ship.type} #${ship.id}`,
-          ship.ownerName,
-          ship.type,
-          computedStatus,
-          ship.origin ? `${ship.origin.x},${ship.origin.y}` : "",
-          ship.destination ? `${ship.destination.x},${ship.destination.y}` : "",
-        ];
-        return fields.some((field) =>
-          `${field ?? ""}`.toLowerCase().includes(filter),
-        );
-      });
+      const ships = useSimpleSearch
+        ? this.snapshot.ships.filter((ship) => {
+            const computedStatus = ship.retreating
+              ? "Retreating"
+              : ship.reachedTarget
+                ? "Arrived"
+                : ship.destination
+                  ? "En route"
+                  : "Unknown";
+            const fields = [
+              `${ship.type} #${ship.id}`,
+              ship.ownerName,
+              ship.type,
+              computedStatus,
+              ship.origin ? `${ship.origin.x},${ship.origin.y}` : "",
+              ship.destination
+                ? `${ship.destination.x},${ship.destination.y}`
+                : "",
+            ];
+            return fields.some((field) =>
+              `${field ?? ""}`.toLowerCase().includes(filter),
+            );
+          })
+        : this.snapshot.ships.filter((ship) =>
+            matchesSearchQuery(ast!, { kind: "ship", ship }),
+          );
       return { ...this.snapshot, ships };
     }
 
     if (view === "logs") {
       const sidebarLogs =
         this.snapshot.sidebarLogs?.filter((entry) => {
+          if (!useSimpleSearch) {
+            return matchesSearchQuery(ast!, { kind: "log", entry });
+          }
           const message = entry.message?.toLowerCase() ?? "";
           const source = entry.source?.toLowerCase() ?? "";
           const level = entry.level?.toLowerCase() ?? "";
@@ -1038,19 +1060,27 @@ export class SidebarApp {
       if (!state) {
         return this.snapshot;
       }
-      const filteredActions = state.actions.filter((action) => {
-        const description = action.description?.toLowerCase() ?? "";
-        return (
-          action.name.toLowerCase().includes(filter) ||
-          description.includes(filter)
-        );
-      });
-      const filteredRunning = state.running.filter((run) => {
-        const fields = [run.name, run.status, run.runMode];
-        return fields.some((field) =>
-          `${field ?? ""}`.toLowerCase().includes(filter),
-        );
-      });
+      const filteredActions = useSimpleSearch
+        ? state.actions.filter((action) => {
+            const description = action.description?.toLowerCase() ?? "";
+            return (
+              action.name.toLowerCase().includes(filter) ||
+              description.includes(filter)
+            );
+          })
+        : state.actions.filter((action) =>
+            matchesSearchQuery(ast!, { kind: "action", action }),
+          );
+      const filteredRunning = useSimpleSearch
+        ? state.running.filter((run) => {
+            const fields = [run.name, run.status, run.runMode];
+            return fields.some((field) =>
+              `${field ?? ""}`.toLowerCase().includes(filter),
+            );
+          })
+        : state.running.filter((run) =>
+            matchesSearchQuery(ast!, { kind: "runningAction", run }),
+          );
       const sidebarActions = {
         ...state,
         actions: filteredActions,
@@ -1064,12 +1094,16 @@ export class SidebarApp {
       if (!state) {
         return this.snapshot;
       }
-      const filteredRunning = state.running.filter((run) => {
-        const fields = [run.name, run.status, run.runMode];
-        return fields.some((field) =>
-          field.toString().toLowerCase().includes(filter),
-        );
-      });
+      const filteredRunning = useSimpleSearch
+        ? state.running.filter((run) => {
+            const fields = [run.name, run.status, run.runMode];
+            return fields.some((field) =>
+              field.toString().toLowerCase().includes(filter),
+            );
+          })
+        : state.running.filter((run) =>
+            matchesSearchQuery(ast!, { kind: "runningAction", run }),
+          );
       const sidebarActions = { ...state, running: filteredRunning };
       return { ...this.snapshot, sidebarActions };
     }

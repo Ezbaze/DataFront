@@ -27,7 +27,7 @@ const tsCompatEntries = compat.config({
       files: tsFiles,
       parser: "@typescript-eslint/parser",
       parserOptions: {
-        project: path.join(__dirname, "tsconfig.json"),
+        project: path.join(__dirname, "tsconfig.eslint.json"),
         tsconfigRootDir: __dirname,
         ecmaVersion: "latest",
         sourceType: "module",

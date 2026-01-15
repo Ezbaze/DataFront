@@ -104,6 +104,7 @@ export function buildViewContent(
         existingContainer,
         actions: viewActions,
         lifecycle,
+        searchFilter,
       });
     case "teams":
       return renderTeamView({
@@ -116,6 +117,7 @@ export function buildViewContent(
         existingContainer,
         actions: viewActions,
         lifecycle,
+        searchFilter,
       });
     case "ships":
       return renderShipView({

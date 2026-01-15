@@ -38,6 +38,7 @@ import {
   SidebarGoldDonationEvent,
   SidebarLobbyApi,
   SidebarLogEntry,
+  SidebarLogToken,
   SidebarLogger,
   SidebarOverlayDefinition,
   SidebarRunningAction,
@@ -572,9 +573,28 @@ export class DataStore {
   private lastLobbyTeamLogKey: string | null = null;
   private lastLiveGameTeamLogKey: string | null = null;
   private readonly hostDocument: Document;
+  private localPlayerPublicId: string | null = null;
+  private readonly userMeHandler: (event: Event) => void;
 
   constructor(initialSnapshot?: GameSnapshot) {
     this.hostDocument = unsafeWindow?.document ?? document;
+    this.userMeHandler = (event: Event) => {
+      const custom = event as CustomEvent<unknown>;
+      const detail = custom.detail as
+        | { player?: { publicId?: unknown } }
+        | false
+        | null
+        | undefined;
+      const candidate =
+        typeof detail === "object" && detail !== null
+          ? (detail as { player?: { publicId?: unknown } }).player?.publicId
+          : undefined;
+      this.localPlayerPublicId =
+        typeof candidate === "string" && candidate.trim().length > 0
+          ? candidate.trim()
+          : null;
+    };
+    this.hostDocument.addEventListener("userMeResponse", this.userMeHandler);
     this.actionsState = this.createInitialActionsState();
     this.sidebarOverlays = [
       {
@@ -644,6 +664,7 @@ export class DataStore {
     if (typeof window !== "undefined") {
       this.scheduleGameDiscovery(true);
       this.startLobbyQueueUpdates();
+      void this.refreshLocalPlayerPublicId();
     }
 
     this.restoreSidebarState();
@@ -1804,13 +1825,117 @@ export class DataStore {
   }
 
   private appendLogEntry(entry: SidebarLogEntry): void {
-    this.sidebarLogs = [...this.sidebarLogs, entry];
+    this.sidebarLogs = [...this.sidebarLogs, this.enrichLogEntry(entry)];
     if (this.sidebarLogs.length > MAX_LOG_ENTRIES) {
       this.sidebarLogs = this.sidebarLogs.slice(-MAX_LOG_ENTRIES);
     }
     this.sidebarLogRevision += 1;
     this.snapshot = this.attachActionsState({ ...this.snapshot });
     this.notify();
+  }
+
+  private async refreshLocalPlayerPublicId(): Promise<void> {
+    if (this.localPlayerPublicId) {
+      return;
+    }
+    if (typeof fetch !== "function") {
+      return;
+    }
+    try {
+      const response = await fetch("/api/user_me", {
+        method: "GET",
+        cache: "no-store",
+      });
+      if (!response.ok) {
+        return;
+      }
+      const payload = (await response.json()) as unknown;
+      const candidate = (payload as { player?: { publicId?: unknown } })?.player
+        ?.publicId;
+      if (typeof candidate === "string" && candidate.trim().length > 0) {
+        this.localPlayerPublicId = candidate.trim();
+      }
+    } catch {
+      return;
+    }
+  }
+
+  private enrichLogEntry(
+    entry: SidebarLogEntry,
+    playerLookupOverride?: Map<string, PlayerRecord>,
+  ): SidebarLogEntry {
+    const tokens = entry.tokens;
+    if (!tokens || tokens.length === 0) {
+      return entry;
+    }
+    const playerLookup =
+      playerLookupOverride ??
+      new Map(this.snapshot.players.map((player) => [player.id, player]));
+    let changed = false;
+    const nextTokens = tokens.map((token) => {
+      if (token.type !== "player") {
+        return token;
+      }
+      const record = playerLookup.get(token.id);
+      const clan = record?.clan ?? extractClanTag(record?.name ?? "");
+      const team = record?.team ?? "";
+
+      const facets: Record<string, string[]> = { ...(token.facets ?? {}) };
+      const mergeFacet = (key: string, values: string[]) => {
+        const normalizedValues = values
+          .map((value) => value.trim().toLowerCase())
+          .filter(Boolean);
+        if (normalizedValues.length === 0) {
+          return;
+        }
+        const existing = facets[key] ?? [];
+        const merged = new Set([
+          ...existing
+            .map((value) => value.trim().toLowerCase())
+            .filter(Boolean),
+          ...normalizedValues,
+        ]);
+        facets[key] = Array.from(merged);
+      };
+
+      mergeFacet("user", [token.label, token.id, record?.name ?? ""]);
+      mergeFacet("player", [token.label, token.id, record?.name ?? ""]);
+      if (record?.publicId) {
+        mergeFacet("publicid", [record.publicId]);
+      }
+
+      if (clan) {
+        mergeFacet("clan", [clan, `[${clan}]`, `clan ${clan}`]);
+      }
+      if (team) {
+        mergeFacet("team", [team, `team ${team}`]);
+      }
+
+      if (
+        Object.keys(facets).length === Object.keys(token.facets ?? {}).length
+      ) {
+        const same = Object.entries(facets).every(([key, values]) => {
+          const prev = token.facets?.[key] ?? [];
+          if (prev.length !== values.length) {
+            return false;
+          }
+          for (let i = 0; i < values.length; i += 1) {
+            if (prev[i] !== values[i]) {
+              return false;
+            }
+          }
+          return true;
+        });
+        if (same) {
+          return token;
+        }
+      }
+
+      changed = true;
+      return { ...token, facets };
+    });
+
+    return changed ? { ...entry, tokens: nextTokens } : entry;
   }
 
   private commitActionsState(
@@ -1905,6 +2030,18 @@ export class DataStore {
   }
 
   update(snapshot: GameSnapshot): void {
+    const hadPlayers = this.snapshot.players.length > 0;
+    const nextPlayers = snapshot.players ?? [];
+    const shouldBackfillLogFacets = !hadPlayers && nextPlayers.length > 0;
+    if (shouldBackfillLogFacets && this.sidebarLogs.length > 0) {
+      const playerLookup = new Map(
+        nextPlayers.map((player) => [player.id, player]),
+      );
+      this.sidebarLogs = this.sidebarLogs.map((entry) =>
+        this.enrichLogEntry(entry, playerLookup),
+      );
+      this.sidebarLogRevision += 1;
+    }
     this.snapshot = this.attachActionsState({
       ...snapshot,
       currentTimeMs: snapshot.currentTimeMs ?? Date.now(),
@@ -4276,6 +4413,7 @@ export class DataStore {
 
     return {
       id: playerId,
+      publicId: isSelf ? (this.localPlayerPublicId ?? undefined) : undefined,
       name,
       clan,
       team: player.team() ?? undefined,

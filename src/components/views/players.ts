@@ -6,8 +6,10 @@ import type {
   SortState,
   TileSummary,
 } from "../../types";
+import { compileSearchQuery, matchesSearchQuery } from "../../search/query";
 import {
   createElement as createElementBase,
+  copyTextToClipboard,
   extractClanTag,
   focusTile,
   formatNumber,
@@ -209,6 +211,7 @@ interface AggregatedRow {
 
 interface PlayerContextTarget extends TradeStatusCarrier {
   id: string;
+  publicId?: string;
   name: string;
   isSelf: boolean;
 }
@@ -309,6 +312,18 @@ function registerContextMenuDelegation(
               ? undefined
               : () => activeActions.toggleTrading([target.id], nextStopped),
           },
+          {
+            label: "Copy username",
+            onSelect: () => void copyTextToClipboard(target.name, viewDocument),
+          },
+          {
+            label: "Copy player id",
+            onSelect: () =>
+              void copyTextToClipboard(
+                target.publicId ?? target.id,
+                viewDocument,
+              ),
+          },
         ],
       });
       return;
@@ -356,6 +371,25 @@ function registerContextMenuDelegation(
       });
     }
 
+    items.push({
+      label: "Copy usernames",
+      onSelect: () =>
+        void copyTextToClipboard(
+          target.players.map((player) => player.name).join("\n"),
+          viewDocument,
+        ),
+    });
+    items.push({
+      label: "Copy player ids",
+      onSelect: () =>
+        void copyTextToClipboard(
+          target.players
+            .map((player) => player.publicId ?? player.id)
+            .join("\n"),
+          viewDocument,
+        ),
+    });
+
     if (!items.length) {
       items.push({
         label: "Stop trading",
@@ -402,6 +436,7 @@ function appendPlayerRows(options: {
     tr.dataset.contextTarget = "player";
     playerContextTargets.set(tr, {
       id: player.id,
+      publicId: player.publicId,
       name: player.name,
       tradeStopped: player.tradeStopped ?? false,
       tradeStoppedBySelf: player.tradeStoppedBySelf,
@@ -495,6 +530,9 @@ function appendGroupRows(options: {
   metricsCache: Map<string, Metrics>;
   actions: ViewActionHandlers;
   headers: ReadonlyArray<TableHeader>;
+  visiblePlayers?: PlayerRecord[];
+  expandedOverride?: boolean;
+  disableToggle?: boolean;
 }) {
   const {
     group,
@@ -506,9 +544,13 @@ function appendGroupRows(options: {
     metricsCache,
     actions,
     headers,
+    visiblePlayers,
+    expandedOverride,
+    disableToggle,
   } = options;
   const groupKey = `${groupType}:${group.key}`;
-  const expanded = leaf.expandedGroups.has(groupKey);
+  const expanded = expandedOverride ?? leaf.expandedGroups.has(groupKey);
+  const playersToRender = visiblePlayers ?? group.players;
 
   const row = createElement(
     "tr",
@@ -517,7 +559,7 @@ function appendGroupRows(options: {
   row.dataset.groupKey = groupKey;
   applyPersistentHover(row, leaf, groupKey, "bg-slate-800/60");
 
-  const eligiblePlayers = group.players.filter(
+  const eligiblePlayers = playersToRender.filter(
     (player) => !player.isSelf && !player.isLobbyPlayer,
   );
   if (eligiblePlayers.length > 0) {
@@ -536,22 +578,29 @@ function appendGroupRows(options: {
         variant: "expandable",
       }),
     );
+    const countLabel =
+      playersToRender === group.players
+        ? `${group.players.length}`
+        : `${playersToRender.length}/${group.players.length}`;
+    const toggleAttribute = disableToggle ? undefined : "data-group-toggle";
     firstCell.appendChild(
       createLabelBlock({
-        label: `${group.label} (${group.players.length})`,
+        label: `${group.label} (${countLabel})`,
         subtitle: groupType === "clan" ? "Clan summary" : "Team summary",
         indent: 0,
         expanded,
-        toggleAttribute: "data-group-toggle",
+        toggleAttribute,
         rowKey: groupKey,
-        onToggle: (next) => {
-          if (next) {
-            leaf.expandedGroups.add(groupKey);
-          } else {
-            leaf.expandedGroups.delete(groupKey);
-          }
-          requestRender();
-        },
+        onToggle:
+          toggleAttribute &&
+          ((next) => {
+            if (next) {
+              leaf.expandedGroups.add(groupKey);
+            } else {
+              leaf.expandedGroups.delete(groupKey);
+            }
+            requestRender();
+          }),
         persistHover: leaf.hoveredGroupToggleKey === groupKey,
         onToggleHoverChange: (hovered) => {
           if (hovered) {
@@ -575,7 +624,7 @@ function appendGroupRows(options: {
   tbody.appendChild(row);
 
   if (expanded) {
-    for (const player of group.players) {
+    for (const player of playersToRender) {
       appendPlayerRows({
         player,
         indent: 1,
@@ -1076,6 +1125,7 @@ export function renderClanView(options: ViewRenderOptions): HTMLElement {
       onSort,
       existingContainer,
       actions,
+      searchFilter,
     } = options;
     const metricsCache = new Map<string, Metrics>();
     const visibleHeaders = getVisibleHeaders(leaf, leaf.view, TABLE_HEADERS);
@@ -1095,7 +1145,38 @@ export function renderClanView(options: ViewRenderOptions): HTMLElement {
       sortState,
     });
 
+    const filter = (searchFilter ?? "").trim().toLowerCase();
+    const compiled = filter ? compileSearchQuery(filter) : null;
+    const hasStructuredQuery = !!compiled && compiled.ok;
+    const matchesPlayer = (player: PlayerRecord): boolean => {
+      if (!filter) {
+        return true;
+      }
+      if (hasStructuredQuery) {
+        return matchesSearchQuery(compiled!.ast, { kind: "player", player });
+      }
+      const clan = extractClanTag(player.name);
+      const fields = [player.name, player.id, player.team ?? "", clan ?? ""];
+      return fields.some((field) =>
+        String(field ?? "")
+          .toLowerCase()
+          .includes(filter),
+      );
+    };
+
     for (const group of groups) {
+      const groupLabelMatches = filter
+        ? group.label.toLowerCase().includes(filter)
+        : false;
+      const matchedPlayers = filter
+        ? group.players.filter(matchesPlayer)
+        : group.players;
+      const playersToRender = groupLabelMatches
+        ? group.players
+        : matchedPlayers;
+      if (filter && playersToRender.length === 0) {
+        continue;
+      }
       appendGroupRows({
         group,
         leaf,
@@ -1106,6 +1187,9 @@ export function renderClanView(options: ViewRenderOptions): HTMLElement {
         metricsCache,
         actions,
         headers: visibleHeaders,
+        visiblePlayers: playersToRender,
+        expandedOverride: filter ? true : undefined,
+        disableToggle: Boolean(filter),
       });
     }
 
@@ -1124,6 +1208,7 @@ export function renderTeamView(options: ViewRenderOptions): HTMLElement {
       onSort,
       existingContainer,
       actions,
+      searchFilter,
     } = options;
     const metricsCache = new Map<string, Metrics>();
     const visibleHeaders = getVisibleHeaders(leaf, leaf.view, TABLE_HEADERS);
@@ -1143,7 +1228,38 @@ export function renderTeamView(options: ViewRenderOptions): HTMLElement {
       sortState,
     });
 
+    const filter = (searchFilter ?? "").trim().toLowerCase();
+    const compiled = filter ? compileSearchQuery(filter) : null;
+    const hasStructuredQuery = !!compiled && compiled.ok;
+    const matchesPlayer = (player: PlayerRecord): boolean => {
+      if (!filter) {
+        return true;
+      }
+      if (hasStructuredQuery) {
+        return matchesSearchQuery(compiled!.ast, { kind: "player", player });
+      }
+      const clan = extractClanTag(player.name);
+      const fields = [player.name, player.id, player.team ?? "", clan ?? ""];
+      return fields.some((field) =>
+        String(field ?? "")
+          .toLowerCase()
+          .includes(filter),
+      );
+    };
+
     for (const group of groups) {
+      const groupLabelMatches = filter
+        ? group.label.toLowerCase().includes(filter)
+        : false;
+      const matchedPlayers = filter
+        ? group.players.filter(matchesPlayer)
+        : group.players;
+      const playersToRender = groupLabelMatches
+        ? group.players
+        : matchedPlayers;
+      if (filter && playersToRender.length === 0) {
+        continue;
+      }
       appendGroupRows({
         group,
         leaf,
@@ -1154,6 +1270,9 @@ export function renderTeamView(options: ViewRenderOptions): HTMLElement {
         metricsCache,
         actions,
         headers: visibleHeaders,
+        visiblePlayers: playersToRender,
+        expandedOverride: filter ? true : undefined,
+        disableToggle: Boolean(filter),
       });
     }
 

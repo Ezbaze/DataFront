@@ -359,3 +359,36 @@ export function showContextMenu(options: ShowContextMenuOptions): void {
     });
   }, 0);
 }
+
+export async function copyTextToClipboard(
+  text: string,
+  doc: Document = document,
+): Promise<boolean> {
+  const win = doc.defaultView ?? window;
+  try {
+    const clipboard = win.navigator?.clipboard;
+    if (clipboard?.writeText) {
+      await clipboard.writeText(text);
+      return true;
+    }
+  } catch (error) {
+    console.warn("Failed to write to clipboard", error);
+  }
+
+  try {
+    const textarea = doc.createElement("textarea");
+    textarea.value = text;
+    textarea.style.position = "fixed";
+    textarea.style.left = "-9999px";
+    textarea.style.top = "-9999px";
+    textarea.setAttribute("readonly", "true");
+    doc.body.appendChild(textarea);
+    textarea.select();
+    const ok = doc.execCommand?.("copy") ?? false;
+    doc.body.removeChild(textarea);
+    return ok;
+  } catch (error) {
+    console.warn("Failed to copy via fallback", error);
+    return false;
+  }
+}

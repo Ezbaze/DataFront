@@ -15,9 +15,27 @@ export type SidebarLogLevel = "debug" | "info" | "warn" | "error";
 
 export type SidebarLogToken =
   | { type: "text"; text: string }
-  | { type: "player"; id: string; label: string; color?: string }
-  | { type: "team"; id: string; label: string; color?: string }
-  | { type: "clan"; id: string; label: string; color?: string };
+  | {
+      type: "player";
+      id: string;
+      label: string;
+      color?: string;
+      facets?: Record<string, string[]>;
+    }
+  | {
+      type: "team";
+      id: string;
+      label: string;
+      color?: string;
+      facets?: Record<string, string[]>;
+    }
+  | {
+      type: "clan";
+      id: string;
+      label: string;
+      color?: string;
+      facets?: Record<string, string[]>;
+    };
 
 export interface SidebarLogMetadata {
   tokens?: SidebarLogToken[];
@@ -92,6 +110,10 @@ export interface AlliancePact {
 
 export interface PlayerRecord {
   id: string;
+  /**
+   * The public player id used for sharing / viewing stats (as exposed by the site via `userMeResponse`).
+   */
+  publicId?: string;
   name: string;
   clan?: string;
   team?: string;
