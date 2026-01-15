@@ -25,6 +25,7 @@ import type {
 import { createElement, formatTimestamp } from "../../utils";
 import { ensureSortState, getDefaultDirection } from "./helpers";
 import { renderClanView, renderPlayersView, renderTeamView } from "./players";
+import { renderAttacksView } from "./attacks";
 import { renderShipView } from "./ships";
 import { renderPlayerPanelView } from "./player-panel";
 import { renderActionsDirectoryView, renderActionEditorView } from "./actions";
@@ -118,6 +119,18 @@ export function buildViewContent(
         actions: viewActions,
         lifecycle,
         searchFilter,
+      });
+    case "attacks":
+      return renderAttacksView({
+        leaf,
+        snapshot,
+        requestRender,
+        ui,
+        sortState,
+        onSort: handleSort,
+        existingContainer,
+        actions: viewActions,
+        lifecycle,
       });
     case "ships":
       return renderShipView({

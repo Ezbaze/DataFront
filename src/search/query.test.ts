@@ -323,6 +323,64 @@ describe("compileSearchQuery", () => {
   });
 });
 
+describe("matchesSearchQuery (attack)", () => {
+  it("matches free text against attacker and target", () => {
+    const ast = mustCompile("bob");
+    expect(
+      matchesSearchQuery(ast, {
+        kind: "attack",
+        attack: { id: "a1", attacker: "Bob", target: "Alice", troops: 120 },
+      }),
+    ).toBe(true);
+    expect(
+      matchesSearchQuery(ast, {
+        kind: "attack",
+        attack: { id: "a1", attacker: "Mallory", target: "Alice", troops: 120 },
+      }),
+    ).toBe(false);
+  });
+
+  it("supports attacker/target keys and troop comparisons", () => {
+    const byAttacker = mustCompile("attacker:bob target:alice");
+    expect(
+      matchesSearchQuery(byAttacker, {
+        kind: "attack",
+        attack: { id: "a1", attacker: "Bob", target: "Alice", troops: 120 },
+      }),
+    ).toBe(true);
+
+    const byTroops = mustCompile("troops:>=10");
+    expect(
+      matchesSearchQuery(byTroops, {
+        kind: "attack",
+        attack: { id: "a1", attacker: "Bob", target: "Alice", troops: 120 },
+      }),
+    ).toBe(true);
+    expect(
+      matchesSearchQuery(byTroops, {
+        kind: "attack",
+        attack: { id: "a1", attacker: "Bob", target: "Alice", troops: 50 },
+      }),
+    ).toBe(false);
+  });
+
+  it("treats user: as attacker/target match", () => {
+    const ast = mustCompile("user:ezbaze");
+    expect(
+      matchesSearchQuery(ast, {
+        kind: "attack",
+        attack: { id: "a1", attacker: "ezbaze", target: "Alice", troops: 120 },
+      }),
+    ).toBe(true);
+    expect(
+      matchesSearchQuery(ast, {
+        kind: "attack",
+        attack: { id: "a1", attacker: "Bob", target: "ezbaze", troops: 120 },
+      }),
+    ).toBe(true);
+  });
+});
+
 describe("matchesSearchQuery per view", () => {
   it("matches players by user/clan/team", () => {
     const ast = mustCompile("user:ali clan:nu team:2");

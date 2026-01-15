@@ -2,6 +2,7 @@ export type ViewType =
   | "players"
   | "clanmates"
   | "teams"
+  | "attacks"
   | "ships"
   | "player"
   | "actions"

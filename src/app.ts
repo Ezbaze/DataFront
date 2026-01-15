@@ -37,6 +37,7 @@ const VIEW_OPTIONS: { value: ViewType; label: string }[] = [
   { value: "players", label: "Players" },
   { value: "clanmates", label: "Clanmates" },
   { value: "teams", label: "Teams" },
+  { value: "attacks", label: "Attacks" },
   { value: "ships", label: "Ships" },
   { value: "player", label: "Player panel" },
   { value: "actions", label: "Actions" },
@@ -989,6 +990,36 @@ export class SidebarApp {
 
     if (view === "clanmates" || view === "teams") {
       return this.snapshot;
+    }
+
+    if (view === "attacks") {
+      const players = this.snapshot.players.map((player) => {
+        const outgoingAttacks = player.outgoingAttacks.filter((attack) => {
+          if (useSimpleSearch) {
+            const fields = [
+              attack.id,
+              player.name,
+              attack.target,
+              attack.troops.toString(),
+            ];
+            return fields.some((field) =>
+              `${field ?? ""}`.toLowerCase().includes(filter),
+            );
+          }
+          return matchesSearchQuery(ast!, {
+            kind: "attack",
+            attack: {
+              id: attack.id,
+              attacker: player.name,
+              target: attack.target,
+              troops: attack.troops,
+            },
+          });
+        });
+        return { ...player, outgoingAttacks };
+      });
+
+      return { ...this.snapshot, players };
     }
 
     if (view === "players") {

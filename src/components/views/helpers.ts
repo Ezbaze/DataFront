@@ -209,6 +209,12 @@ export const SHIP_HEADERS: ReadonlyArray<TableHeader> = [
   { key: "status", label: "Status", align: "left" },
 ];
 
+export const ATTACK_HEADERS: ReadonlyArray<TableHeader> = [
+  { key: "label", label: "Attacker", align: "left", hideable: false },
+  { key: "owner", label: "Target", align: "left" },
+  { key: "troops", label: "Troops", align: "right" },
+];
+
 export const DEFAULT_SORT_STATE: SortState = {
   key: "tiles",
   direction: "desc",
@@ -310,6 +316,8 @@ export function getTableHeadersForView(
       return TABLE_HEADERS;
     case "ships":
       return SHIP_HEADERS;
+    case "attacks":
+      return ATTACK_HEADERS;
     case "actions":
       return ACTIONS_TABLE_HEADERS;
     case "runningActions":

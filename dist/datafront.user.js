@@ -59,7 +59,7 @@
     }
     return element;
   };
-  const createElement$8 = (iconNode, customAttrs = {}) => {
+  const createElement$9 = (iconNode, customAttrs = {}) => {
     const tag = "svg";
     const attrs = {
       ...defaultAttributes,
@@ -285,7 +285,7 @@
   };
   function renderIcon(kind, className) {
       const iconNode = ICONS[kind];
-      const svg = createElement$8(iconNode);
+      const svg = createElement$9(iconNode);
       if (className) {
           svg.setAttribute("class", className);
       }
@@ -297,6 +297,7 @@
       players: { key: "tiles", direction: "desc" },
       clanmates: { key: "label", direction: "asc" },
       teams: { key: "tiles", direction: "desc" },
+      attacks: { key: "troops", direction: "desc" },
       ships: { key: "owner", direction: "asc" },
       player: { key: "tiles", direction: "desc" },
       actions: { key: "label", direction: "asc" },
@@ -319,6 +320,7 @@
               players: { ...DEFAULT_SORT_STATES.players },
               clanmates: { ...DEFAULT_SORT_STATES.clanmates },
               teams: { ...DEFAULT_SORT_STATES.teams },
+              attacks: { ...DEFAULT_SORT_STATES.attacks },
               ships: { ...DEFAULT_SORT_STATES.ships },
               player: { ...DEFAULT_SORT_STATES.player },
               actions: { ...DEFAULT_SORT_STATES.actions },
@@ -463,7 +465,7 @@
   function clamp(value, min, max) {
       return Math.max(min, Math.min(max, value));
   }
-  function createElement$7(tag, className, textContent, doc = document) {
+  function createElement$8(tag, className, textContent, doc = document) {
       const el = doc.createElement(tag);
       if (className) {
           el.className = className;
@@ -542,7 +544,7 @@
   function ensureContextMenuElement(doc) {
       const state = ensureContextMenuState(doc);
       if (!state.element) {
-          state.element = createElement$7("div", "fixed z-[2147483647] min-w-[160px] overflow-hidden rounded-md border " +
+          state.element = createElement$8("div", "fixed z-[2147483647] min-w-[160px] overflow-hidden rounded-md border " +
               "border-slate-700/80 bg-slate-950/95 text-sm text-slate-100 shadow-2xl " +
               "backdrop-blur", undefined, doc);
           state.element.dataset.sidebarRole = SidebarRole.ContextMenu;
@@ -579,15 +581,15 @@
       menu.style.visibility = "hidden";
       menu.style.left = "0px";
       menu.style.top = "0px";
-      const wrapper = createElement$7("div", "flex flex-col", undefined, doc);
+      const wrapper = createElement$8("div", "flex flex-col", undefined, doc);
       if (title) {
-          const header = createElement$7("div", "border-b border-slate-800/80 px-3 py-2 text-xs font-semibold uppercase " +
+          const header = createElement$8("div", "border-b border-slate-800/80 px-3 py-2 text-xs font-semibold uppercase " +
               "tracking-wide text-slate-300", title, doc);
           wrapper.appendChild(header);
       }
-      const list = createElement$7("div", "py-1", undefined, doc);
+      const list = createElement$8("div", "py-1", undefined, doc);
       for (const item of items) {
-          const button = createElement$7("button", `${item.disabled
+          const button = createElement$8("button", `${item.disabled
             ? "cursor-not-allowed text-slate-500"
             : "hover:bg-slate-800/80 hover:text-sky-200"} flex w-full items-center gap-2 px-3 py-2 text-left transition-colors`, item.label, doc);
           button.type = "button";
@@ -844,9 +846,9 @@
       const className = classNames.filter(Boolean).join(" ").trim();
       if (!position) {
           const tag = options?.asBlock ? "div" : "span";
-          return createElement$7(tag, className, label, doc);
+          return createElement$8(tag, className, label, doc);
       }
-      const button = createElement$7("button", className, label, doc);
+      const button = createElement$8("button", className, label, doc);
       button.type = "button";
       button.title = `Focus on ${label}`;
       attachImmediateTileFocus(button, () => {
@@ -941,6 +943,11 @@
       { key: "destination", label: "Destination", align: "left" },
       { key: "status", label: "Status", align: "left" },
   ];
+  const ATTACK_HEADERS = [
+      { key: "label", label: "Attacker", align: "left", hideable: false },
+      { key: "owner", label: "Target", align: "left" },
+      { key: "troops", label: "Troops", align: "right" },
+  ];
   const DEFAULT_SORT_STATE = {
       key: "tiles",
       direction: "desc",
@@ -1029,6 +1036,8 @@
               return TABLE_HEADERS;
           case "ships":
               return SHIP_HEADERS;
+          case "attacks":
+              return ATTACK_HEADERS;
           case "actions":
               return ACTIONS_TABLE_HEADERS;
           case "runningActions":
@@ -1084,29 +1093,29 @@
           existingContainer.dataset.sidebarView === view;
       const container = canReuse
           ? existingContainer
-          : createElement$7("div", containerClass, undefined, doc);
+          : createElement$8("div", containerClass, undefined, doc);
       container.className = containerClass;
       container.dataset.sidebarRole = targetRole;
       container.dataset.sidebarView = view;
       let table = container.querySelector("table");
       if (!table || !canReuse) {
-          table = createElement$7("table", tableClass, undefined, doc);
+          table = createElement$8("table", tableClass, undefined, doc);
       }
       else {
           table.className = tableClass;
       }
-      const thead = table.tHead ?? createElement$7("thead", "sticky top-0 z-10", undefined, doc);
+      const thead = table.tHead ?? createElement$8("thead", "sticky top-0 z-10", undefined, doc);
       thead.className = "sticky top-0 z-10";
       thead.replaceChildren();
-      const headerRow = createElement$7("tr", "bg-slate-900/95", undefined, doc);
+      const headerRow = createElement$8("tr", "bg-slate-900/95", undefined, doc);
       for (const column of headers) {
-          const th = createElement$7("th", `border-b border-r border-slate-800 px-3 py-2 text-[0.65rem] font-semibold uppercase tracking-wide text-slate-300 last:border-r-0 ${column.align === "left"
+          const th = createElement$8("th", `border-b border-r border-slate-800 px-3 py-2 text-[0.65rem] font-semibold uppercase tracking-wide text-slate-300 last:border-r-0 ${column.align === "left"
             ? "text-left"
             : column.align === "right"
                 ? "text-right"
                 : "text-center"}`, undefined, doc);
           th.classList.add("bg-slate-900/90");
-          const labelWrapper = createElement$7("span", `flex w-full items-center gap-1 text-inherit ${column.align === "left"
+          const labelWrapper = createElement$8("span", `flex w-full items-center gap-1 text-inherit ${column.align === "left"
             ? "justify-start"
             : column.align === "right"
                 ? "justify-end"
@@ -1121,7 +1130,7 @@
           if (isSortable) {
               const sortKey = column.sortKey ?? column.key;
               const isActive = sortState.key === sortKey;
-              const indicator = createElement$7("span", `text-[0.6rem] ${isActive ? "text-sky-300" : "text-slate-500"}`, isActive ? (sortState.direction === "asc" ? "▲" : "▼") : "↕", doc);
+              const indicator = createElement$8("span", `text-[0.6rem] ${isActive ? "text-sky-300" : "text-slate-500"}`, isActive ? (sortState.direction === "asc" ? "▲" : "▼") : "↕", doc);
               if (column.align === "right") {
                   labelWrapper.appendChild(indicator);
               }
@@ -1140,7 +1149,7 @@
       }
       thead.appendChild(headerRow);
       const tbody = table.tBodies[0] ??
-          createElement$7("tbody", "text-[0.75rem]", undefined, doc);
+          createElement$8("tbody", "text-[0.75rem]", undefined, doc);
       tbody.className = "text-[0.75rem]";
       tbody.replaceChildren();
       if (!table.contains(thead)) {
@@ -1167,7 +1176,7 @@
   function ensureColumnMenuElement(doc) {
       const state = ensureColumnMenuState(doc);
       if (!state.element) {
-          state.element = createElement$7("div", undefined, undefined, doc);
+          state.element = createElement$8("div", undefined, undefined, doc);
           state.element.dataset.sidebarRole = SidebarRole.ColumnVisibilityMenu;
           state.element.style.pointerEvents = "auto";
           state.element.style.zIndex = "2147483647";
@@ -1210,13 +1219,13 @@
       menu.style.visibility = "hidden";
       menu.style.left = "0px";
       menu.style.top = "0px";
-      const wrapper = createElement$7("div", "flex flex-col", undefined, doc);
-      wrapper.appendChild(createElement$7("div", "border-b border-slate-800/80 px-3 py-2 text-xs font-semibold uppercase " +
+      const wrapper = createElement$8("div", "flex flex-col", undefined, doc);
+      wrapper.appendChild(createElement$8("div", "border-b border-slate-800/80 px-3 py-2 text-xs font-semibold uppercase " +
           "tracking-wide text-slate-300", "Columns", doc));
-      const list = createElement$7("div", "py-1", undefined, doc);
+      const list = createElement$8("div", "py-1", undefined, doc);
       for (const header of baseHeaders) {
           const key = header.key;
-          const item = createElement$7("label", `${header.hideable === false
+          const item = createElement$8("label", `${header.hideable === false
             ? "cursor-default text-slate-300"
             : "cursor-pointer text-slate-200 hover:bg-slate-800/70"} flex items-center gap-3 px-3 py-2 text-xs transition-colors`, undefined, doc);
           const checkbox = doc.createElement("input");
@@ -1227,11 +1236,11 @@
           checkbox.checked = visibility[key] !== false;
           checkbox.disabled = header.hideable === false;
           item.appendChild(checkbox);
-          const label = createElement$7("span", "flex-1 truncate", header.label, doc);
+          const label = createElement$8("span", "flex-1 truncate", header.label, doc);
           item.appendChild(label);
           if (header.hideable === false) {
               item.title = "This column is always visible.";
-              item.appendChild(createElement$7("span", "rounded-full border border-slate-700/70 px-2 py-0.5 text-[0.6rem] font-semibold uppercase tracking-wide text-slate-400", "Pinned", doc));
+              item.appendChild(createElement$8("span", "rounded-full border border-slate-700/70 px-2 py-0.5 text-[0.6rem] font-semibold uppercase tracking-wide text-slate-400", "Pinned", doc));
           }
           checkbox.addEventListener("change", () => {
               if (header.hideable === false) {
@@ -1916,6 +1925,11 @@
               ];
               return fields.join(" ").toLowerCase();
           }
+          case "attack": {
+              const a = target.attack;
+              const fields = [a.id, a.attacker, a.target, a.troops.toString()];
+              return fields.join(" ").toLowerCase();
+          }
           case "log": {
               const e = target.entry;
               const fields = [
@@ -1975,6 +1989,8 @@
                   return includes(target.player.id.toLowerCase(), value);
               case "ship":
                   return includes(target.ship.id.toLowerCase(), value);
+              case "attack":
+                  return includes(target.attack.id.toLowerCase(), value);
               case "log":
                   return includes(target.entry.id.toLowerCase(), value);
               case "action":
@@ -2030,6 +2046,22 @@
                       return includes(formatTileSummaryForSearch(s.current), value);
                   case "destination":
                       return includes(formatTileSummaryForSearch(s.destination), value);
+                  default:
+                      return false;
+              }
+          }
+          case "attack": {
+              const a = target.attack;
+              switch (key) {
+                  case "user":
+                  case "player":
+                      return includes(`${a.attacker} ${a.target}`.toLowerCase(), value);
+                  case "attacker":
+                  case "from":
+                      return includes(a.attacker.toLowerCase(), value);
+                  case "target":
+                  case "to":
+                      return includes(a.target.toLowerCase(), value);
                   default:
                       return false;
               }
@@ -2272,6 +2304,24 @@
               }
               return left === null ? false : compareNumber(term.op, left, right);
           }
+          case "attack": {
+              const a = target.attack;
+              let left = null;
+              switch (key) {
+                  case "troops":
+                      left = normalizeTroopCountForSearch(a.troops);
+                      break;
+                  case "id": {
+                      const num = Number(a.id);
+                      left = Number.isFinite(num) ? num : null;
+                      break;
+                  }
+                  default:
+                      left = null;
+                      break;
+              }
+              return left === null ? false : compareNumber(term.op, left, right);
+          }
           case "log": {
               const e = target.entry;
               let left = null;
@@ -2455,6 +2505,24 @@
               }
               return left === null ? false : matchesNumber(left);
           }
+          case "attack": {
+              const a = target.attack;
+              let left = null;
+              switch (key) {
+                  case "troops":
+                      left = normalizeTroopCountForSearch(a.troops);
+                      break;
+                  case "id": {
+                      const num = Number(a.id);
+                      left = Number.isFinite(num) ? num : null;
+                      break;
+                  }
+                  default:
+                      left = null;
+                      break;
+              }
+              return left === null ? false : matchesNumber(left);
+          }
           case "log": {
               const e = target.entry;
               let left = null;
@@ -2552,19 +2620,19 @@
       return true;
   }
 
-  let viewDocument$6 = document;
-  function withViewDocument$6(doc, fn) {
-      const previous = viewDocument$6;
-      viewDocument$6 = doc;
+  let viewDocument$7 = document;
+  function withViewDocument$7(doc, fn) {
+      const previous = viewDocument$7;
+      viewDocument$7 = doc;
       try {
           return fn();
       }
       finally {
-          viewDocument$6 = previous;
+          viewDocument$7 = previous;
       }
   }
-  function createElement$6(tag, className, textContent) {
-      return createElement$7(tag, className, textContent, viewDocument$6);
+  function createElement$7(tag, className, textContent) {
+      return createElement$8(tag, className, textContent, viewDocument$7);
   }
   const PLAYER_ALERT_CLASS = "bg-red-500 text-white";
   const PLAYER_COUNT_CLASS = "font-semibold";
@@ -2635,7 +2703,7 @@
       return undefined;
   }
   const tableContextActions = new WeakMap();
-  const playerContextTargets = new WeakMap();
+  const playerContextTargets$1 = new WeakMap();
   const groupContextTargets = new WeakMap();
   function findContextMenuTarget(event, container) {
       if (event.target instanceof HTMLElement && container.contains(event.target)) {
@@ -2663,7 +2731,7 @@
       }
       return null;
   }
-  function registerContextMenuDelegation(container, actions) {
+  function registerContextMenuDelegation$1(container, actions) {
       tableContextActions.set(container, actions);
       if (container.dataset.contextMenuDelegated === "true") {
           return;
@@ -2679,7 +2747,7 @@
               return;
           }
           if (targetInfo.type === "player") {
-              const target = playerContextTargets.get(targetInfo.element);
+              const target = playerContextTargets$1.get(targetInfo.element);
               if (!target) {
                   return;
               }
@@ -2701,7 +2769,7 @@
                   x: event.clientX,
                   y: event.clientY,
                   title: target.name,
-                  document: viewDocument$6,
+                  document: viewDocument$7,
                   items: [
                       {
                           label: actionLabel,
@@ -2713,11 +2781,11 @@
                       },
                       {
                           label: "Copy username",
-                          onSelect: () => void copyTextToClipboard(target.name, viewDocument$6),
+                          onSelect: () => void copyTextToClipboard(target.name, viewDocument$7),
                       },
                       {
                           label: "Copy player id",
-                          onSelect: () => void copyTextToClipboard(target.publicId ?? target.id, viewDocument$6),
+                          onSelect: () => void copyTextToClipboard(target.publicId ?? target.id, viewDocument$7),
                       },
                   ],
               });
@@ -2752,13 +2820,13 @@
           }
           items.push({
               label: "Copy usernames",
-              onSelect: () => void copyTextToClipboard(target.players.map((player) => player.name).join("\n"), viewDocument$6),
+              onSelect: () => void copyTextToClipboard(target.players.map((player) => player.name).join("\n"), viewDocument$7),
           });
           items.push({
               label: "Copy player ids",
               onSelect: () => void copyTextToClipboard(target.players
                   .map((player) => player.publicId ?? player.id)
-                  .join("\n"), viewDocument$6),
+                  .join("\n"), viewDocument$7),
           });
           if (!items.length) {
               items.push({
@@ -2771,7 +2839,7 @@
               x: event.clientX,
               y: event.clientY,
               title: target.label,
-              document: viewDocument$6,
+              document: viewDocument$7,
               items,
           });
       };
@@ -2784,12 +2852,12 @@
       const metrics = getMetrics(player, snapshot, metricsCache);
       const rowKey = player.id;
       const isLobbyPlayer = Boolean(player.isLobbyPlayer);
-      const tr = createElement$6("tr", "hover:bg-slate-800/50 transition-colors");
+      const tr = createElement$7("tr", "hover:bg-slate-800/50 transition-colors");
       tr.dataset.rowKey = rowKey;
       applyPersistentHover(tr, leaf, rowKey, "bg-slate-800/50");
       if (!isLobbyPlayer) {
           tr.dataset.contextTarget = "player";
-          playerContextTargets.set(tr, {
+          playerContextTargets$1.set(tr, {
               id: player.id,
               publicId: player.publicId,
               name: player.name,
@@ -2801,7 +2869,7 @@
       }
       const labelHeader = headers.find((header) => header.key === "label");
       if (labelHeader) {
-          const firstCell = createElement$6("td", cellClassForColumn(labelHeader, "align-top"));
+          const firstCell = createElement$7("td", cellClassForColumn(labelHeader, "align-top"));
           let subtitleClassName;
           const subtitle = (() => {
               if (isLobbyPlayer) {
@@ -2869,7 +2937,7 @@
       const groupKey = `${groupType}:${group.key}`;
       const expanded = expandedOverride ?? leaf.expandedGroups.has(groupKey);
       const playersToRender = visiblePlayers ?? group.players;
-      const row = createElement$6("tr", "bg-slate-900/70 hover:bg-slate-800/60 transition-colors font-semibold");
+      const row = createElement$7("tr", "bg-slate-900/70 hover:bg-slate-800/60 transition-colors font-semibold");
       row.dataset.groupKey = groupKey;
       applyPersistentHover(row, leaf, groupKey, "bg-slate-800/60");
       const eligiblePlayers = playersToRender.filter((player) => !player.isSelf && !player.isLobbyPlayer);
@@ -2882,7 +2950,7 @@
       }
       const labelHeader = headers.find((header) => header.key === "label");
       if (labelHeader) {
-          const firstCell = createElement$6("td", cellClassForColumn(labelHeader, "align-top", {
+          const firstCell = createElement$7("td", cellClassForColumn(labelHeader, "align-top", {
               variant: "expandable",
           }));
           const countLabel = playersToRender === group.players
@@ -2952,7 +3020,7 @@
           const className = [config?.cellClass, config?.getValueClass?.(context)]
               .filter(Boolean)
               .join(" ");
-          const td = createElement$6("td", cellClassForColumn(column, className));
+          const td = createElement$7("td", cellClassForColumn(column, className));
           td.textContent = config?.getValue?.(context) ?? "";
           row.appendChild(td);
       }
@@ -2977,28 +3045,28 @@
           ]
               .filter(Boolean)
               .join(" ");
-          const td = createElement$6("td", cellClassForColumn(column, className, { variant }));
+          const td = createElement$7("td", cellClassForColumn(column, className, { variant }));
           td.textContent = config?.getAggregateValue?.(context) ?? "";
           row.appendChild(td);
       }
   }
   function createLabelBlock(options) {
       const { label, subtitle, subtitleClassName, indent, expanded, toggleAttribute, rowKey, onToggle, focus, persistHover, onToggleHoverChange, } = options;
-      const container = createElement$6("div", "flex items-start gap-3");
+      const container = createElement$7("div", "flex items-start gap-3");
       container.style.marginLeft = `${indent * 1.5}rem`;
-      const labelBlock = createElement$6("div", "space-y-1");
+      const labelBlock = createElement$7("div", "space-y-1");
       const labelEl = createPlayerNameElement(label, focus, {
           asBlock: true,
           className: "block font-semibold text-slate-100 transition-colors hover:text-sky-200",
-          document: viewDocument$6,
+          document: viewDocument$7,
       });
       labelBlock.appendChild(labelEl);
       if (subtitle) {
           const defaultSubtitleClass = "text-[0.65rem] uppercase tracking-wide text-slate-400";
-          labelBlock.appendChild(createElement$6("div", subtitleClassName ?? defaultSubtitleClass, subtitle));
+          labelBlock.appendChild(createElement$7("div", subtitleClassName ?? defaultSubtitleClass, subtitle));
       }
       if (toggleAttribute && rowKey && typeof expanded === "boolean" && onToggle) {
-          const button = createElement$6("button", "flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-slate-700 bg-slate-800 text-slate-300 hover:text-slate-50 focus:outline-none focus:ring-2 focus:ring-sky-500/60 transition-colors");
+          const button = createElement$7("button", "flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-slate-700 bg-slate-800 text-slate-300 hover:text-slate-50 focus:outline-none focus:ring-2 focus:ring-sky-500/60 transition-colors");
           button.setAttribute(toggleAttribute, rowKey);
           button.type = "button";
           let currentExpanded = expanded;
@@ -3277,7 +3345,7 @@
       });
   }
   function renderPlayersView(options) {
-      return withViewDocument$6(options.ui.document, () => {
+      return withViewDocument$7(options.ui.document, () => {
           const { leaf, snapshot, sortState, onSort, existingContainer, actions } = options;
           const metricsCache = new Map();
           const visibleHeaders = getVisibleHeaders(leaf, leaf.view, TABLE_HEADERS);
@@ -3287,7 +3355,7 @@
               existingContainer,
               view: leaf.view,
               headers: visibleHeaders,
-              document: viewDocument$6,
+              document: viewDocument$7,
           });
           const players = [...snapshot.players].sort((a, b) => comparePlayers({ a, b, sortState, snapshot, metricsCache }));
           for (const player of players) {
@@ -3302,12 +3370,12 @@
                   headers: visibleHeaders,
               });
           }
-          registerContextMenuDelegation(container, actions);
+          registerContextMenuDelegation$1(container, actions);
           return container;
       });
   }
   function renderClanView(options) {
-      return withViewDocument$6(options.ui.document, () => {
+      return withViewDocument$7(options.ui.document, () => {
           const { leaf, snapshot, requestRender, sortState, onSort, existingContainer, actions, searchFilter, } = options;
           const metricsCache = new Map();
           const visibleHeaders = getVisibleHeaders(leaf, leaf.view, TABLE_HEADERS);
@@ -3317,7 +3385,7 @@
               existingContainer,
               view: leaf.view,
               headers: visibleHeaders,
-              document: viewDocument$6,
+              document: viewDocument$7,
           });
           const groups = groupPlayers({
               players: snapshot.players,
@@ -3370,12 +3438,12 @@
                   disableToggle: Boolean(filter),
               });
           }
-          registerContextMenuDelegation(container, actions);
+          registerContextMenuDelegation$1(container, actions);
           return container;
       });
   }
   function renderTeamView(options) {
-      return withViewDocument$6(options.ui.document, () => {
+      return withViewDocument$7(options.ui.document, () => {
           const { leaf, snapshot, requestRender, sortState, onSort, existingContainer, actions, searchFilter, } = options;
           const metricsCache = new Map();
           const visibleHeaders = getVisibleHeaders(leaf, leaf.view, TABLE_HEADERS);
@@ -3385,7 +3453,7 @@
               existingContainer,
               view: leaf.view,
               headers: visibleHeaders,
-              document: viewDocument$6,
+              document: viewDocument$7,
           });
           const groups = groupPlayers({
               players: snapshot.players,
@@ -3438,9 +3506,264 @@
                   disableToggle: Boolean(filter),
               });
           }
-          registerContextMenuDelegation(container, actions);
+          registerContextMenuDelegation$1(container, actions);
           return container;
       });
+  }
+
+  let viewDocument$6 = document;
+  function withViewDocument$6(doc, fn) {
+      const previous = viewDocument$6;
+      viewDocument$6 = doc;
+      try {
+          return fn();
+      }
+      finally {
+          viewDocument$6 = previous;
+      }
+  }
+  function createElement$6(tag, className, textContent) {
+      return createElement$8(tag, className, textContent, viewDocument$6);
+  }
+  const playerContextTargets = new WeakMap();
+  function normalizePlayerLabel(label) {
+      return (label
+          .trim()
+          // Strip leading clan tags like "[NU] Alice"
+          .replace(/^\[[^\]]+\]\s*/g, "")
+          .replace(/\s+/g, " ")
+          .toLowerCase());
+  }
+  function registerContextMenuDelegation(container, actions) {
+      if (container.dataset.contextMenuDelegated === "true") {
+          return;
+      }
+      const handleContextMenu = (event) => {
+          const targetElement = event.target instanceof HTMLElement ? event.target : null;
+          if (!targetElement) {
+              return;
+          }
+          const menuTarget = targetElement.closest("[data-context-target=\"player\"]");
+          if (!menuTarget) {
+              return;
+          }
+          const target = playerContextTargets.get(menuTarget);
+          if (!target) {
+              return;
+          }
+          event.preventDefault();
+          event.stopPropagation();
+          if (!target.id) {
+              showContextMenu({
+                  x: event.clientX,
+                  y: event.clientY,
+                  title: target.name,
+                  document: viewDocument$6,
+                  items: [
+                      {
+                          label: "Copy username",
+                          onSelect: () => void copyTextToClipboard(target.name, viewDocument$6),
+                      },
+                  ],
+              });
+              return;
+          }
+          const disabled = target.isSelf;
+          const stoppedBySelf = isTradeStoppedBySelf(target);
+          const stoppedByOther = isTradeStoppedByOther(target);
+          const nextStopped = !stoppedBySelf;
+          const actionLabel = nextStopped ? "Stop trading" : "Start trading";
+          const tooltip = disabled
+              ? "You cannot toggle trading with yourself."
+              : !nextStopped && stoppedByOther
+                  ? "The other player is also stopping trade with you."
+                  : nextStopped && stoppedByOther
+                      ? "This player has already stopped trading with you."
+                      : undefined;
+          showContextMenu({
+              x: event.clientX,
+              y: event.clientY,
+              title: target.name,
+              document: viewDocument$6,
+              items: [
+                  {
+                      label: actionLabel,
+                      disabled,
+                      tooltip,
+                      onSelect: disabled
+                          ? undefined
+                          : () => actions.toggleTrading([target.id], nextStopped),
+                  },
+                  {
+                      label: "Copy username",
+                      onSelect: () => void copyTextToClipboard(target.name, viewDocument$6),
+                  },
+                  {
+                      label: "Copy player id",
+                      onSelect: () => void copyTextToClipboard(target.publicId ?? target.id, viewDocument$6),
+                  },
+              ],
+          });
+      };
+      container.addEventListener("contextmenu", handleContextMenu);
+      container.dataset.contextMenuDelegated = "true";
+  }
+  function renderAttacksView(options) {
+      return withViewDocument$6(options.ui.document, () => {
+          const { leaf, snapshot, sortState, onSort, existingContainer, actions } = options;
+          const visibleHeaders = getVisibleHeaders(leaf, leaf.view, ATTACK_HEADERS);
+          const { container, tbody } = createTableShell({
+              sortState,
+              onSort,
+              existingContainer,
+              view: leaf.view,
+              headers: visibleHeaders,
+              document: viewDocument$6,
+          });
+          registerContextMenuDelegation(container, actions);
+          const playerByName = buildPlayerNameIndex(snapshot.players);
+          const attacks = collectAttacks(snapshot.players).sort((a, b) => compareAttacks({ a, b, sortState }));
+          for (const attack of attacks) {
+              const rowKey = `attack:${attack.id}`;
+              const row = createElement$6("tr", "hover:bg-slate-800/50 transition-colors");
+              applyPersistentHover(row, leaf, rowKey, "bg-slate-800/50");
+              row.dataset.rowKey = rowKey;
+              for (const column of visibleHeaders) {
+                  const td = createElement$6("td", cellClassForColumn(column, getAttackExtraCellClass(column.key)));
+                  if (column.key === "label" || column.key === "owner") {
+                      const name = column.key === "label" ? attack.attacker : attack.target;
+                      const player = playerByName.get(normalizePlayerLabel(name)) ??
+                          playerByName.get(name.toLowerCase());
+                      const button = createPlayerNameElement(name, player?.position, {
+                          className: "inline-flex max-w-full items-center gap-1 text-left text-slate-200 hover:text-sky-200",
+                          document: viewDocument$6,
+                      });
+                      button.dataset.contextTarget = "player";
+                      td.dataset.contextTarget = "player";
+                      if (player) {
+                          const contextTarget = {
+                              id: player.id,
+                              publicId: player.publicId,
+                              name: player.name,
+                              tradeStopped: player.tradeStopped ?? false,
+                              tradeStoppedBySelf: player.tradeStoppedBySelf,
+                              tradeStoppedByOther: player.tradeStoppedByOther,
+                              isSelf: player.isSelf ?? false,
+                          };
+                          playerContextTargets.set(button, contextTarget);
+                          playerContextTargets.set(td, contextTarget);
+                      }
+                      else {
+                          const contextTarget = {
+                              id: "",
+                              name,
+                              tradeStopped: false,
+                              isSelf: false,
+                          };
+                          playerContextTargets.set(button, contextTarget);
+                          playerContextTargets.set(td, contextTarget);
+                      }
+                      td.appendChild(button);
+                  }
+                  else {
+                      td.textContent = getAttackCellValue(column.key, attack);
+                  }
+                  row.appendChild(td);
+              }
+              tbody.appendChild(row);
+          }
+          if (attacks.length === 0) {
+              const row = createElement$6("tr", "text-slate-400");
+              const td = createElement$6("td", "border-b border-slate-900/80 px-3 py-4 text-center", "No active attacks.");
+              td.colSpan = visibleHeaders.length;
+              row.appendChild(td);
+              tbody.appendChild(row);
+          }
+          return container;
+      });
+  }
+  function collectAttacks(players) {
+      const byId = new Map();
+      for (const player of players) {
+          for (const attack of player.outgoingAttacks) {
+              if (byId.has(attack.id)) {
+                  continue;
+              }
+              byId.set(attack.id, {
+                  id: attack.id,
+                  attacker: player.name,
+                  target: attack.target,
+                  troops: attack.troops,
+              });
+          }
+      }
+      return Array.from(byId.values());
+  }
+  function buildPlayerNameIndex(players) {
+      const map = new Map();
+      for (const player of players) {
+          const key = normalizePlayerLabel(player.name);
+          if (!map.has(key)) {
+              map.set(key, player);
+          }
+          const raw = player.name.toLowerCase();
+          if (!map.has(raw)) {
+              map.set(raw, player);
+          }
+      }
+      return map;
+  }
+  function getAttackExtraCellClass(key) {
+      switch (key) {
+          case "label":
+              return "font-semibold text-slate-100";
+          case "owner":
+              return "text-slate-200";
+          case "troops":
+              return "font-mono text-[0.75rem] text-slate-200";
+          default:
+              return "text-slate-300";
+      }
+  }
+  function getAttackCellValue(key, attack) {
+      switch (key) {
+          case "label":
+              return attack.attacker;
+          case "owner":
+              return attack.target;
+          case "troops":
+              return formatTroopCount(attack.troops);
+          default:
+              return "";
+      }
+  }
+  function compareAttacks(options) {
+      const { a, b, sortState } = options;
+      const valueA = getAttackSortValue(a, sortState.key);
+      const valueB = getAttackSortValue(b, sortState.key);
+      const result = compareSortValues(valueA, valueB, sortState.direction);
+      if (result !== 0) {
+          return result;
+      }
+      const attackerCompare = a.attacker.localeCompare(b.attacker, undefined, {
+          sensitivity: "base",
+      });
+      if (attackerCompare !== 0) {
+          return attackerCompare;
+      }
+      return a.id.localeCompare(b.id, undefined, { sensitivity: "base" });
+  }
+  function getAttackSortValue(entry, key) {
+      switch (key) {
+          case "label":
+              return entry.attacker.toLowerCase();
+          case "owner":
+              return entry.target.toLowerCase();
+          case "troops":
+              return entry.troops;
+          default:
+              return 0;
+      }
   }
 
   let viewDocument$5 = document;
@@ -3455,7 +3778,7 @@
       }
   }
   function createElement$5(tag, className, textContent) {
-      return createElement$7(tag, className, textContent, viewDocument$5);
+      return createElement$8(tag, className, textContent, viewDocument$5);
   }
   function renderShipView(options) {
       return withViewDocument$5(options.ui.document, () => {
@@ -3649,7 +3972,7 @@
       }
   }
   function createElement$4(tag, className, textContent) {
-      return createElement$7(tag, className, textContent, viewDocument$4);
+      return createElement$8(tag, className, textContent, viewDocument$4);
   }
   function renderPlayerPanelView(options) {
       return withViewDocument$4(options.ui.document, () => {
@@ -3807,7 +4130,7 @@
       }
   }
   function createElement$3(tag, className, textContent) {
-      return createElement$7(tag, className, textContent, viewDocument$3);
+      return createElement$8(tag, className, textContent, viewDocument$3);
   }
   let editorSettingIdCounter = 0;
   function nextEditorSettingId() {
@@ -4487,7 +4810,7 @@
       }
   }
   function createElement$2(tag, className, textContent) {
-      return createElement$7(tag, className, textContent, viewDocument$2);
+      return createElement$8(tag, className, textContent, viewDocument$2);
   }
   function renderRunningActionsView(options) {
       return withViewDocument$2(options.ui.document, () => {
@@ -4787,7 +5110,7 @@
       }
   }
   function createElement$1(tag, className, textContent) {
-      return createElement$7(tag, className, textContent, viewDocument$1);
+      return createElement$8(tag, className, textContent, viewDocument$1);
   }
   function renderLogView(options) {
       return withViewDocument$1(options.ui.document, () => {
@@ -5046,7 +5369,7 @@
       }
   }
   function createElement(tag, className, textContent) {
-      return createElement$7(tag, className, textContent, viewDocument);
+      return createElement$8(tag, className, textContent, viewDocument);
   }
   function renderOverlayView(options) {
       return withViewDocument(options.ui.document, () => {
@@ -5223,6 +5546,18 @@
                   lifecycle,
                   searchFilter,
               });
+          case "attacks":
+              return renderAttacksView({
+                  leaf,
+                  snapshot,
+                  requestRender,
+                  ui,
+                  sortState,
+                  onSort: handleSort,
+                  existingContainer,
+                  actions: viewActions,
+                  lifecycle,
+              });
           case "ships":
               return renderShipView({
                   leaf,
@@ -5307,7 +5642,7 @@
                   actions: viewActions,
               });
           default:
-              return createElement$7("div", "text-slate-200 text-sm", "Unsupported view", ui.document);
+              return createElement$8("div", "text-slate-200 text-sm", "Unsupported view", ui.document);
       }
   }
 
@@ -5318,6 +5653,7 @@
       { value: "players", label: "Players" },
       { value: "clanmates", label: "Clanmates" },
       { value: "teams", label: "Teams" },
+      { value: "attacks", label: "Attacks" },
       { value: "ships", label: "Ships" },
       { value: "player", label: "Player panel" },
       { value: "actions", label: "Actions" },
@@ -5522,7 +5858,7 @@
           return fn();
       }
       createUiElement(tag, className, textContent) {
-          return createElement$7(tag, className, textContent, this.uiDocument);
+          return createElement$8(tag, className, textContent, this.uiDocument);
       }
       onGlobalKeyDown(event) {
           this.runWithUiContext(() => this.handleKeyDownInternal(event));
@@ -6034,6 +6370,32 @@
           };
           if (view === "clanmates" || view === "teams") {
               return this.snapshot;
+          }
+          if (view === "attacks") {
+              const players = this.snapshot.players.map((player) => {
+                  const outgoingAttacks = player.outgoingAttacks.filter((attack) => {
+                      if (useSimpleSearch) {
+                          const fields = [
+                              attack.id,
+                              player.name,
+                              attack.target,
+                              attack.troops.toString(),
+                          ];
+                          return fields.some((field) => `${field ?? ""}`.toLowerCase().includes(filter));
+                      }
+                      return matchesSearchQuery(ast, {
+                          kind: "attack",
+                          attack: {
+                              id: attack.id,
+                              attacker: player.name,
+                              target: attack.target,
+                              troops: attack.troops,
+                          },
+                      });
+                  });
+                  return { ...player, outgoingAttacks };
+              });
+              return { ...this.snapshot, players };
           }
           if (view === "players") {
               const players = useSimpleSearch
@@ -8566,7 +8928,7 @@
           container.style.display = "none";
           container.style.alignItems = "center";
           container.style.gap = "6px";
-          const shipIcon = createElement$8(Ship);
+          const shipIcon = createElement$9(Ship);
           shipIcon.setAttribute("aria-hidden", "true");
           shipIcon.style.width = "14px";
           shipIcon.style.height = "14px";
@@ -8577,7 +8939,7 @@
           const distanceSeparator = document.createElement("span");
           distanceSeparator.textContent = "•";
           distanceSeparator.setAttribute("aria-hidden", "true");
-          const goldIcon = createElement$8(CirclePoundSterling);
+          const goldIcon = createElement$9(CirclePoundSterling);
           goldIcon.setAttribute("aria-hidden", "true");
           goldIcon.style.width = "14px";
           goldIcon.style.height = "14px";
@@ -9050,7 +9412,7 @@
           if (!this.labelIcon) {
               return null;
           }
-          const svg = createElement$8(this.labelIcon);
+          const svg = createElement$9(this.labelIcon);
           svg.setAttribute("aria-hidden", "true");
           svg.style.width = "14px";
           svg.style.height = "14px";

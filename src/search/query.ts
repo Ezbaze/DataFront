@@ -507,6 +507,10 @@ export function compileSearchQuery(input: string): SearchQueryCompileResult {
 export type SearchTarget =
   | { kind: "player"; player: PlayerRecord }
   | { kind: "ship"; ship: ShipRecord }
+  | {
+      kind: "attack";
+      attack: { id: string; attacker: string; target: string; troops: number };
+    }
   | { kind: "log"; entry: SidebarLogEntry }
   | { kind: "action"; action: SidebarActionDefinition }
   | { kind: "runningAction"; run: SidebarRunningAction };
@@ -687,6 +691,11 @@ function defaultTextForTarget(target: SearchTarget): string {
       ];
       return fields.join(" ").toLowerCase();
     }
+    case "attack": {
+      const a = target.attack;
+      const fields = [a.id, a.attacker, a.target, a.troops.toString()];
+      return fields.join(" ").toLowerCase();
+    }
     case "log": {
       const e = target.entry;
       const fields = [
@@ -751,6 +760,8 @@ function matchesTerm(term: SearchQueryTerm, target: SearchTarget): boolean {
         return includes(target.player.id.toLowerCase(), value);
       case "ship":
         return includes(target.ship.id.toLowerCase(), value);
+      case "attack":
+        return includes(target.attack.id.toLowerCase(), value);
       case "log":
         return includes(target.entry.id.toLowerCase(), value);
       case "action":
@@ -810,6 +821,22 @@ function matchesTerm(term: SearchQueryTerm, target: SearchTarget): boolean {
           return includes(formatTileSummaryForSearch(s.current), value);
         case "destination":
           return includes(formatTileSummaryForSearch(s.destination), value);
+        default:
+          return false;
+      }
+    }
+    case "attack": {
+      const a = target.attack;
+      switch (key) {
+        case "user":
+        case "player":
+          return includes(`${a.attacker} ${a.target}`.toLowerCase(), value);
+        case "attacker":
+        case "from":
+          return includes(a.attacker.toLowerCase(), value);
+        case "target":
+        case "to":
+          return includes(a.target.toLowerCase(), value);
         default:
           return false;
       }
@@ -1079,6 +1106,24 @@ function matchesComparison(
       }
       return left === null ? false : compareNumber(term.op, left, right);
     }
+    case "attack": {
+      const a = target.attack;
+      let left: number | null = null;
+      switch (key) {
+        case "troops":
+          left = normalizeTroopCountForSearch(a.troops);
+          break;
+        case "id": {
+          const num = Number(a.id);
+          left = Number.isFinite(num) ? num : null;
+          break;
+        }
+        default:
+          left = null;
+          break;
+      }
+      return left === null ? false : compareNumber(term.op, left, right);
+    }
     case "log": {
       const e = target.entry;
       let left: number | null = null;
@@ -1261,6 +1306,24 @@ function matchesRange(
           break;
         case "id": {
           const num = Number(s.id);
+          left = Number.isFinite(num) ? num : null;
+          break;
+        }
+        default:
+          left = null;
+          break;
+      }
+      return left === null ? false : matchesNumber(left);
+    }
+    case "attack": {
+      const a = target.attack;
+      let left: number | null = null;
+      switch (key) {
+        case "troops":
+          left = normalizeTroopCountForSearch(a.troops);
+          break;
+        case "id": {
+          const num = Number(a.id);
           left = Number.isFinite(num) ? num : null;
           break;
         }
