@@ -1,7 +1,11 @@
 import type { TileSummary } from "./types";
 import { SidebarRole } from "./sidebarRoles";
 
-const CLAN_TAG_PATTERN = /^\[([a-zA-Z]{2,5})\]/;
+// Mirrors OpenFrontIO clan parsing:
+// - Matches the first `[TAG]` anywhere in the name
+// - Allows alphanumeric tags 2..5 chars
+// - Normalizes to uppercase for grouping/matching
+const CLAN_TAG_PATTERN = /\[([a-zA-Z0-9]{2,5})\]/;
 
 const numberFormatter = new Intl.NumberFormat("en-US");
 
@@ -46,12 +50,12 @@ export function formatTimestamp(ms: number): string {
 }
 
 export function extractClanTag(name: string): string | undefined {
-  if (!name.startsWith("[")) {
+  if (!name.includes("[") || !name.includes("]")) {
     return undefined;
   }
 
   const match = name.match(CLAN_TAG_PATTERN);
-  return match ? match[1] : undefined;
+  return match ? match[1].toUpperCase() : undefined;
 }
 
 export function clamp(value: number, min: number, max: number): number {

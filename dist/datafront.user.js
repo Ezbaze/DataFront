@@ -412,7 +412,11 @@
       PlayerPanel: "player-panel",
   };
 
-  const CLAN_TAG_PATTERN = /^\[([a-zA-Z]{2,5})\]/;
+  // Mirrors OpenFrontIO clan parsing:
+  // - Matches the first `[TAG]` anywhere in the name
+  // - Allows alphanumeric tags 2..5 chars
+  // - Normalizes to uppercase for grouping/matching
+  const CLAN_TAG_PATTERN = /\[([a-zA-Z0-9]{2,5})\]/;
   const numberFormatter = new Intl.NumberFormat("en-US");
   function normalizeTroopCount(value) {
       if (!Number.isFinite(value)) {
@@ -450,11 +454,11 @@
       });
   }
   function extractClanTag(name) {
-      if (!name.startsWith("[")) {
+      if (!name.includes("[") || !name.includes("]")) {
           return undefined;
       }
       const match = name.match(CLAN_TAG_PATTERN);
-      return match ? match[1] : undefined;
+      return match ? match[1].toUpperCase() : undefined;
   }
   function clamp(value, min, max) {
       return Math.max(min, Math.min(max, value));
@@ -1437,7 +1441,13 @@
                       }
                       if (next === '"' || next === "\\" || next === "n" || next === "t") {
                           value +=
-                              next === "n" ? "\n" : next === "t" ? "\t" : next === '"' ? '"' : "\\";
+                              next === "n"
+                                  ? "\n"
+                                  : next === "t"
+                                      ? "\t"
+                                      : next === '"'
+                                          ? '"'
+                                          : "\\";
                           i += 2;
                           continue;
                       }
@@ -1482,7 +1492,7 @@
           this.tokens = tokens;
       }
       peek() {
-          return this.tokens[this.index] ?? { type: "eof", index: this.tokens.length };
+          return (this.tokens[this.index] ?? { type: "eof", index: this.tokens.length });
       }
       consume() {
           const token = this.peek();
@@ -1525,7 +1535,10 @@
               if (!right.ok) {
                   return right;
               }
-              left = { ok: true, ast: { type: "or", left: left.ast, right: right.ast } };
+              left = {
+                  ok: true,
+                  ast: { type: "or", left: left.ast, right: right.ast },
+              };
           }
           return left;
       }
@@ -1541,11 +1554,16 @@
                   if (!right.ok) {
                       return right;
                   }
-                  left = { ok: true, ast: { type: "and", left: left.ast, right: right.ast } };
+                  left = {
+                      ok: true,
+                      ast: { type: "and", left: left.ast, right: right.ast },
+                  };
                   continue;
               }
               const next = this.peek();
-              if (next.type === "eof" || next.type === "rparen" || this.matchOperator("or")) {
+              if (next.type === "eof" ||
+                  next.type === "rparen" ||
+                  this.matchOperator("or")) {
                   break;
               }
               if (isPrimaryStart(next)) {
@@ -1553,7 +1571,10 @@
                   if (!right.ok) {
                       return right;
                   }
-                  left = { ok: true, ast: { type: "and", left: left.ast, right: right.ast } };
+                  left = {
+                      ok: true,
+                      ast: { type: "and", left: left.ast, right: right.ast },
+                  };
                   continue;
               }
               break;
@@ -1606,7 +1627,10 @@
                   if (valueToken.type !== "word" && valueToken.type !== "quoted") {
                       return {
                           ok: false,
-                          error: { message: "Expected value after ':'", index: valueToken.index },
+                          error: {
+                              message: "Expected value after ':'",
+                              index: valueToken.index,
+                          },
                       };
                   }
                   this.consume();
@@ -1627,7 +1651,10 @@
                   if (!value.trim()) {
                       return {
                           ok: false,
-                          error: { message: "Empty value is not allowed", index: valueToken.index },
+                          error: {
+                              message: "Empty value is not allowed",
+                              index: valueToken.index,
+                          },
                       };
                   }
                   const compare = parseCompareValue(value);
@@ -1636,7 +1663,12 @@
                           ok: true,
                           ast: {
                               type: "term",
-                              term: { type: "compare", key, op: compare.op, value: compare.value },
+                              term: {
+                                  type: "compare",
+                                  key,
+                                  op: compare.op,
+                                  value: compare.value,
+                              },
                           },
                       };
                   }
@@ -1676,7 +1708,10 @@
                   error: { message: "Empty term is not allowed", index: consumed.index },
               };
           }
-          return { ok: true, ast: { type: "term", term: { type: "freeText", value } } };
+          return {
+              ok: true,
+              ast: { type: "term", term: { type: "freeText", value } },
+          };
       }
       maybeJoinRangeTokens(rawValue) {
           const looksNumeric = Number.isFinite(Number(rawValue));
@@ -1722,7 +1757,10 @@
   function compileSearchQuery(input) {
       const trimmed = input.trim();
       if (!trimmed) {
-          return { ok: true, ast: { type: "term", term: { type: "freeText", value: "" } } };
+          return {
+              ok: true,
+              ast: { type: "term", term: { type: "freeText", value: "" } },
+          };
       }
       const tokenized = tokenize(trimmed);
       if (!tokenized.ok) {
@@ -1737,7 +1775,8 @@
               return (matchesSearchQuery(ast.left, target) &&
                   matchesSearchQuery(ast.right, target));
           case "or":
-              return matchesSearchQuery(ast.left, target) || matchesSearchQuery(ast.right, target);
+              return (matchesSearchQuery(ast.left, target) ||
+                  matchesSearchQuery(ast.right, target));
           case "not":
               return !matchesSearchQuery(ast.expr, target);
           case "term":
@@ -1775,7 +1814,7 @@
           return "";
       }
       return tokens
-          .map((token) => (token.type === "text" ? token.text : token.label ?? ""))
+          .map((token) => (token.type === "text" ? token.text : (token.label ?? "")))
           .join(" ")
           .toLowerCase();
   }
@@ -1844,7 +1883,9 @@
       if (!ship.destination) {
           return ship.current ? "idle" : "unknown";
       }
-      if (ship.current && ship.destination && ship.current.ref === ship.destination.ref) {
+      if (ship.current &&
+          ship.destination &&
+          ship.current.ref === ship.destination.ref) {
           return "stationed";
       }
       return "en route";
@@ -3297,7 +3338,9 @@
               }
               const clan = extractClanTag(player.name);
               const fields = [player.name, player.id, player.team ?? "", clan ?? ""];
-              return fields.some((field) => String(field ?? "").toLowerCase().includes(filter));
+              return fields.some((field) => String(field ?? "")
+                  .toLowerCase()
+                  .includes(filter));
           };
           for (const group of groups) {
               const groupLabelMatches = filter
@@ -3306,7 +3349,9 @@
               const matchedPlayers = filter
                   ? group.players.filter(matchesPlayer)
                   : group.players;
-              const playersToRender = groupLabelMatches ? group.players : matchedPlayers;
+              const playersToRender = groupLabelMatches
+                  ? group.players
+                  : matchedPlayers;
               if (filter && playersToRender.length === 0) {
                   continue;
               }
@@ -3361,7 +3406,9 @@
               }
               const clan = extractClanTag(player.name);
               const fields = [player.name, player.id, player.team ?? "", clan ?? ""];
-              return fields.some((field) => String(field ?? "").toLowerCase().includes(filter));
+              return fields.some((field) => String(field ?? "")
+                  .toLowerCase()
+                  .includes(filter));
           };
           for (const group of groups) {
               const groupLabelMatches = filter
@@ -3370,7 +3417,9 @@
               const matchedPlayers = filter
                   ? group.players.filter(matchesPlayer)
                   : group.players;
-              const playersToRender = groupLabelMatches ? group.players : matchedPlayers;
+              const playersToRender = groupLabelMatches
+                  ? group.players
+                  : matchedPlayers;
               if (filter && playersToRender.length === 0) {
                   continue;
               }
@@ -6008,7 +6057,9 @@
                           ship.type,
                           computedStatus,
                           ship.origin ? `${ship.origin.x},${ship.origin.y}` : "",
-                          ship.destination ? `${ship.destination.x},${ship.destination.y}` : "",
+                          ship.destination
+                              ? `${ship.destination.x},${ship.destination.y}`
+                              : "",
                       ];
                       return fields.some((field) => `${field ?? ""}`.toLowerCase().includes(filter));
                   })
@@ -10841,7 +10892,9 @@
                   }
                   const existing = facets[key] ?? [];
                   const merged = new Set([
-                      ...existing.map((value) => value.trim().toLowerCase()).filter(Boolean),
+                      ...existing
+                          .map((value) => value.trim().toLowerCase())
+                          .filter(Boolean),
                       ...normalizedValues,
                   ]);
                   facets[key] = Array.from(merged);
@@ -12927,7 +12980,7 @@
           const isSelf = this.isSamePlayer(localPlayer, playerId);
           return {
               id: playerId,
-              publicId: isSelf ? this.localPlayerPublicId ?? undefined : undefined,
+              publicId: isSelf ? (this.localPlayerPublicId ?? undefined) : undefined,
               name,
               clan,
               team: player.team() ?? undefined,
