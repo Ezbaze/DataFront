@@ -74,6 +74,8 @@ export interface ShipRecord {
   type: ShipType;
   ownerId: string;
   ownerName: string;
+  ownerClan?: string;
+  ownerTeam?: string;
   troops: number;
   origin?: TileSummary;
   current?: TileSummary;

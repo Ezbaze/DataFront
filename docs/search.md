@@ -39,6 +39,7 @@ The sidebar search supports an advanced query language across most views. It rep
 - `publicid:`: public player id (the one the site logs as “Your player ID is …”)
 - `clan:`: player clan (supports `[TAG]` parsed from the player name)
 - `team:`: player team
+- `alive:`: boolean flag based on whether the player is currently alive (`true`/`false`); `dead:true`/`dead:false` are accepted as the inverted variant.
 - Numeric keys (comparisons supported): `tiles`, `gold`, `troops`, `expansions`, `incoming`, `outgoing`, `alliances`, `supports`
 - `text:` / `message:`: same as free text
 - `id:`: player id
@@ -56,6 +57,8 @@ Note on grouped views (`Clanmates`, `Teams`):
 ### Ships
 
 - `owner:` / `user:`: ship owner name or owner id
+- `clan:`: matches the ship owner’s clan tag (derived from `[TAG]` in the owner name or the player record)
+- `team:`: matches the ship owner’s team
 - `type:`: ship type (`Transport`, `Trade Ship`, `Warship`)
 - `status:`: derived status text (e.g. `retreating`, `arrived`, `idle`, `en route`)
 - `origin:` / `current:` / `destination:`: coordinate text (e.g. `12, 34`)

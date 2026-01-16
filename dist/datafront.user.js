@@ -2026,6 +2026,20 @@
                   }
                   case "team":
                       return includes((p.team ?? "").toLowerCase(), value);
+                  case "alive": {
+                      const parsed = parseBoolean(value);
+                      if (parsed === null) {
+                          return false;
+                      }
+                      return (!p.eliminated) === parsed;
+                  }
+                  case "dead": {
+                      const parsed = parseBoolean(value);
+                      if (parsed === null) {
+                          return false;
+                      }
+                      return p.eliminated === parsed;
+                  }
                   default:
                       return false;
               }
@@ -2046,6 +2060,10 @@
                       return includes(formatTileSummaryForSearch(s.current), value);
                   case "destination":
                       return includes(formatTileSummaryForSearch(s.destination), value);
+                  case "clan":
+                      return includes((s.ownerClan ?? "").toLowerCase(), value);
+                  case "team":
+                      return includes((s.ownerTeam ?? "").toLowerCase(), value);
                   default:
                       return false;
               }
@@ -3543,7 +3561,7 @@
           if (!targetElement) {
               return;
           }
-          const menuTarget = targetElement.closest("[data-context-target=\"player\"]");
+          const menuTarget = targetElement.closest('[data-context-target="player"]');
           if (!menuTarget) {
               return;
           }
@@ -12387,12 +12405,12 @@
               const currentTimeMs = currentTick * TICK_MILLISECONDS;
               const allianceDurationMs = this.game.config().allianceDuration() * TICK_MILLISECONDS;
               const localPlayer = this.resolveLocalPlayer();
-              const ships = this.createShipRecords();
               const records = players.map((player) => this.createPlayerRecord(player, currentTimeMs, localPlayer));
               const recordLookup = new Map();
               for (const record of records) {
                   recordLookup.set(record.id, record);
               }
+              const ships = this.createShipRecords(recordLookup);
               const hadLivePlayers = this.snapshot.players.some((player) => !player.isLobbyPlayer);
               const livePlayers = records.filter((player) => !player.isLobbyPlayer);
               if (livePlayers.length === 0) {
@@ -12438,7 +12456,7 @@
               this.scheduleGameDiscovery();
           }
       }
-      createShipRecords() {
+      createShipRecords(playerRecords) {
           if (!this.game) {
               return [];
           }
@@ -12449,13 +12467,13 @@
               if (!type) {
                   continue;
               }
-              ships.push(this.createShipRecord(unit, type));
+              ships.push(this.createShipRecord(unit, type, playerRecords));
           }
           ships.sort((a, b) => a.ownerName.localeCompare(b.ownerName));
           this.pruneStaleShipMemory(new Set(ships.map((ship) => ship.id)));
           return ships;
       }
-      createShipRecord(unit, type) {
+      createShipRecord(unit, type, playerRecords) {
           const owner = unit.owner();
           const ownerId = String(owner.id());
           const ownerName = owner.displayName();
@@ -12465,11 +12483,27 @@
           const current = this.describeTile(unit.tile());
           const retreating = this.resolveShipRetreating(unit);
           const destination = this.resolveShipDestination(shipId, unit, type, retreating);
+          const record = ownerId ? playerRecords.get(ownerId) : undefined;
+          let ownerTeam = record?.team;
+          if (!ownerTeam) {
+              try {
+                  const resolved = owner.team?.();
+                  if (resolved) {
+                      ownerTeam = resolved;
+                  }
+              }
+              catch (error) {
+                  console.warn("Failed to resolve ship owner team", error);
+              }
+          }
+          const ownerClan = record?.clan ?? extractClanTag(ownerName);
           return {
               id: String(unit.id()),
               type,
               ownerId,
               ownerName,
+              ownerClan,
+              ownerTeam: ownerTeam ?? undefined,
               troops,
               origin,
               current,

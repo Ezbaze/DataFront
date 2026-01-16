@@ -3263,7 +3263,6 @@ export class DataStore {
         this.game.config().allianceDuration() * TICK_MILLISECONDS;
 
       const localPlayer = this.resolveLocalPlayer();
-      const ships = this.createShipRecords();
       const records = players.map((player) =>
         this.createPlayerRecord(player, currentTimeMs, localPlayer),
       );
@@ -3271,6 +3270,7 @@ export class DataStore {
       for (const record of records) {
         recordLookup.set(record.id, record);
       }
+      const ships = this.createShipRecords(recordLookup);
 
       const hadLivePlayers = this.snapshot.players.some(
         (player) => !player.isLobbyPlayer,
@@ -3321,7 +3321,9 @@ export class DataStore {
     }
   }
 
-  private createShipRecords(): ShipRecord[] {
+  private createShipRecords(
+    playerRecords: Map<string, PlayerRecord>,
+  ): ShipRecord[] {
     if (!this.game) {
       return [];
     }
@@ -3333,14 +3335,18 @@ export class DataStore {
       if (!type) {
         continue;
       }
-      ships.push(this.createShipRecord(unit, type));
+      ships.push(this.createShipRecord(unit, type, playerRecords));
     }
     ships.sort((a, b) => a.ownerName.localeCompare(b.ownerName));
     this.pruneStaleShipMemory(new Set(ships.map((ship) => ship.id)));
     return ships;
   }
 
-  private createShipRecord(unit: UnitViewLike, type: ShipType): ShipRecord {
+  private createShipRecord(
+    unit: UnitViewLike,
+    type: ShipType,
+    playerRecords: Map<string, PlayerRecord>,
+  ): ShipRecord {
     const owner = unit.owner();
     const ownerId = String(owner.id());
     const ownerName = owner.displayName();
@@ -3355,11 +3361,26 @@ export class DataStore {
       type,
       retreating,
     );
+    const record = ownerId ? playerRecords.get(ownerId) : undefined;
+    let ownerTeam = record?.team;
+    if (!ownerTeam) {
+      try {
+        const resolved = owner.team?.();
+        if (resolved) {
+          ownerTeam = resolved;
+        }
+      } catch (error) {
+        console.warn("Failed to resolve ship owner team", error);
+      }
+    }
+    const ownerClan = record?.clan ?? extractClanTag(ownerName);
     return {
       id: String(unit.id()),
       type,
       ownerId,
       ownerName,
+      ownerClan,
+      ownerTeam: ownerTeam ?? undefined,
       troops,
       origin,
       current,

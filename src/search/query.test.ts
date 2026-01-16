@@ -392,11 +392,51 @@ describe("matchesSearchQuery per view", () => {
     expect(matchesSearchQuery(ast, { kind: "player", player })).toBe(true);
   });
 
+  it("matches players by alive/dead filters", () => {
+    const aliveMatch = mustCompile("alive:true");
+    const alivePlayer = makePlayer({ eliminated: false });
+    const deadPlayer = makePlayer({ eliminated: true });
+    expect(
+      matchesSearchQuery(aliveMatch, { kind: "player", player: alivePlayer }),
+    ).toBe(true);
+    expect(
+      matchesSearchQuery(aliveMatch, { kind: "player", player: deadPlayer }),
+    ).toBe(false);
+
+    const deadMatch = mustCompile("dead:true");
+    expect(
+      matchesSearchQuery(deadMatch, { kind: "player", player: deadPlayer }),
+    ).toBe(true);
+    expect(
+      matchesSearchQuery(deadMatch, { kind: "player", player: alivePlayer }),
+    ).toBe(false);
+
+    const aliveFalse = mustCompile("alive:false");
+    expect(
+      matchesSearchQuery(aliveFalse, { kind: "player", player: deadPlayer }),
+    ).toBe(true);
+
+    const deadFalse = mustCompile("dead:false");
+    expect(
+      matchesSearchQuery(deadFalse, { kind: "player", player: alivePlayer }),
+    ).toBe(true);
+  });
+
   it("matches ships by owner/status/destination", () => {
     const ast = mustCompile("owner:alice status:en destination:12");
     const ship = makeShip({
       ownerName: "Alice",
       destination: { x: 12, y: 34 },
+    });
+    expect(matchesSearchQuery(ast, { kind: "ship", ship })).toBe(true);
+  });
+
+  it("matches ships by owner clan/team", () => {
+    const ast = mustCompile("clan:nu team:2");
+    const ship = makeShip({
+      ownerName: "Alice",
+      ownerClan: "NU",
+      ownerTeam: "2",
     });
     expect(matchesSearchQuery(ast, { kind: "ship", ship })).toBe(true);
   });

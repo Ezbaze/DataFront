@@ -801,6 +801,20 @@ function matchesTerm(term: SearchQueryTerm, target: SearchTarget): boolean {
         }
         case "team":
           return includes((p.team ?? "").toLowerCase(), value);
+        case "alive": {
+          const parsed = parseBoolean(value);
+          if (parsed === null) {
+            return false;
+          }
+          return !p.eliminated === parsed;
+        }
+        case "dead": {
+          const parsed = parseBoolean(value);
+          if (parsed === null) {
+            return false;
+          }
+          return p.eliminated === parsed;
+        }
         default:
           return false;
       }
@@ -821,6 +835,10 @@ function matchesTerm(term: SearchQueryTerm, target: SearchTarget): boolean {
           return includes(formatTileSummaryForSearch(s.current), value);
         case "destination":
           return includes(formatTileSummaryForSearch(s.destination), value);
+        case "clan":
+          return includes((s.ownerClan ?? "").toLowerCase(), value);
+        case "team":
+          return includes((s.ownerTeam ?? "").toLowerCase(), value);
         default:
           return false;
       }
