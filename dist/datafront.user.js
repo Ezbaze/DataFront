@@ -12855,10 +12855,30 @@
       }
       parseTroopDonationMessage(update) {
           const message = update.message?.trim();
-          if (!message) {
+          const params = update.params;
+          const paramValue = (key) => {
+              if (!params || typeof params !== "object") {
+                  return null;
+              }
+              const value = params[key];
+              if (typeof value === "string") {
+                  const trimmed = value.trim();
+                  return trimmed === "" ? null : trimmed;
+              }
+              if (typeof value === "number") {
+                  return Number.isFinite(value) ? String(value) : null;
+              }
               return null;
-          }
+          };
           if (update.messageType === MESSAGE_TYPE_SENT_TROOPS_TO_PLAYER) {
+              const troops = paramValue("troops");
+              const name = paramValue("name");
+              if (troops && name) {
+                  return { direction: "sent", amountDisplay: troops, otherName: name };
+              }
+              if (!message) {
+                  return null;
+              }
               const match = /^Sent\s+([^\s].*?)\s+troops\s+to\s+(.+)$/.exec(message);
               if (!match) {
                   return null;
@@ -12870,6 +12890,14 @@
               };
           }
           if (update.messageType === MESSAGE_TYPE_RECEIVED_TROOPS_FROM_PLAYER) {
+              const troops = paramValue("troops");
+              const name = paramValue("name");
+              if (troops && name) {
+                  return { direction: "received", amountDisplay: troops, otherName: name };
+              }
+              if (!message) {
+                  return null;
+              }
               const match = /^Received\s+([^\s].*?)\s+troops\s+from\s+(.+)$/.exec(message);
               if (!match) {
                   return null;
@@ -12884,10 +12912,33 @@
       }
       parseGoldDonationMessage(update) {
           const message = update.message?.trim();
-          if (!message) {
+          const params = update.params;
+          const paramValue = (key) => {
+              if (!params || typeof params !== "object") {
+                  return null;
+              }
+              const value = params[key];
+              if (typeof value === "string") {
+                  const trimmed = value.trim();
+                  return trimmed === "" ? null : trimmed;
+              }
+              if (typeof value === "number") {
+                  return Number.isFinite(value) ? String(value) : null;
+              }
+              if (typeof value === "bigint") {
+                  return value.toString();
+              }
               return null;
-          }
+          };
           if (update.messageType === MESSAGE_TYPE_SENT_GOLD_TO_PLAYER) {
+              const gold = paramValue("gold");
+              const name = paramValue("name");
+              if (gold && name) {
+                  return { direction: "sent", amountDisplay: gold, otherName: name };
+              }
+              if (!message) {
+                  return null;
+              }
               const match = /^Sent\s+([^\s].*?)\s+gold\s+to\s+(.+)$/.exec(message);
               if (!match) {
                   return null;
@@ -12899,6 +12950,14 @@
               };
           }
           if (update.messageType === MESSAGE_TYPE_RECEIVED_GOLD_FROM_PLAYER) {
+              const gold = paramValue("gold");
+              const name = paramValue("name");
+              if (gold && name) {
+                  return { direction: "received", amountDisplay: gold, otherName: name };
+              }
+              if (!message) {
+                  return null;
+              }
               const match = /^Received\s+([^\s].*?)\s+gold\s+from\s+(.+)$/.exec(message);
               if (!match) {
                   return null;
