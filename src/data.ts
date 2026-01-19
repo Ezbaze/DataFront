@@ -721,7 +721,7 @@ export class DataStore {
     if (saved) {
       sidebarLogger.info("Saved sidebar state.");
     } else {
-      sidebarLogger.warn("Failed to save sidebar state.");
+      console.warn("Failed to save sidebar state.");
     }
   }
 
@@ -2482,7 +2482,7 @@ export class DataStore {
     run: SidebarRunningAction,
   ): void {
     if (typeof window === "undefined") {
-      sidebarLogger.warn(
+      console.warn(
         "Continuous sidebar actions are unavailable outside the browser.",
       );
       this.finalizeRunningAction(run.id, "failed");
@@ -2810,7 +2810,9 @@ export class DataStore {
       }
       settings[key] = setting.value;
     }
-    const logger = createSidebarLogger(`Action ${run.name} [${run.id}]`);
+    const logger = createSidebarLogger(`Action ${run.name} [${run.id}]`, {
+      emitToConsole: false,
+    });
     return {
       game: this.buildActionGameApi(),
       lobby: this.buildActionLobbyApi(),
@@ -2902,7 +2904,7 @@ export class DataStore {
       return false;
     }
     if (this.game) {
-      sidebarLogger.warn(
+      console.warn(
         "Cannot join a lobby while already attached to a live game.",
       );
       return false;
@@ -2957,10 +2959,7 @@ export class DataStore {
       );
       return true;
     } catch (error) {
-      sidebarLogger.warn(
-        "Failed to trigger lobby join via lobby component",
-        error,
-      );
+      console.warn("Failed to trigger lobby join via lobby component", error);
       return false;
     }
   }
@@ -3089,7 +3088,7 @@ export class DataStore {
           sidebarLogger.info(`${label} stopped.`);
           break;
         case "failed":
-          sidebarLogger.warn(`${label} failed.`);
+          console.warn(`${label} failed.`);
           break;
       }
     }

@@ -11,6 +11,10 @@ export type SidebarLogListener = (entry: SidebarLogEntry) => void;
 const listeners = new Set<SidebarLogListener>();
 let logEntryCounter = 0;
 
+export interface SidebarLoggerOptions {
+  emitToConsole?: boolean;
+}
+
 function formatLogArg(arg: unknown): string {
   if (typeof arg === "string") {
     return arg;
@@ -28,7 +32,7 @@ function formatLogArg(arg: unknown): string {
   }
   try {
     return JSON.stringify(arg);
-  } catch (error) {
+  } catch {
     return String(arg);
   }
 }
@@ -179,20 +183,29 @@ function logWithConsole(
   level: SidebarLogLevel,
   source: string | undefined,
   args: readonly unknown[],
+  options?: SidebarLoggerOptions,
 ): void {
-  callConsole(method, args);
+  if (options?.emitToConsole !== false) {
+    callConsole(method, args);
+  }
   emitLogEntry(level, args, source);
 }
 
-export function createSidebarLogger(source?: string): SidebarLogger {
+export function createSidebarLogger(
+  source?: string,
+  options?: SidebarLoggerOptions,
+): SidebarLogger {
   return {
-    log: (...args: unknown[]) => logWithConsole("log", "info", source, args),
-    info: (...args: unknown[]) => logWithConsole("info", "info", source, args),
-    warn: (...args: unknown[]) => logWithConsole("warn", "warn", source, args),
+    log: (...args: unknown[]) =>
+      logWithConsole("log", "info", source, args, options),
+    info: (...args: unknown[]) =>
+      logWithConsole("info", "info", source, args, options),
+    warn: (...args: unknown[]) =>
+      logWithConsole("warn", "warn", source, args, options),
     error: (...args: unknown[]) =>
-      logWithConsole("error", "error", source, args),
+      logWithConsole("error", "error", source, args, options),
     debug: (...args: unknown[]) =>
-      logWithConsole("debug", "debug", source, args),
+      logWithConsole("debug", "debug", source, args, options),
   } satisfies SidebarLogger;
 }
 

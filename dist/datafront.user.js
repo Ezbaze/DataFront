@@ -7215,7 +7215,7 @@
       try {
           return JSON.stringify(arg);
       }
-      catch (error) {
+      catch {
           return String(arg);
       }
   }
@@ -7338,17 +7338,19 @@
       }
       console.log(...args);
   }
-  function logWithConsole(method, level, source, args) {
-      callConsole(method, args);
+  function logWithConsole(method, level, source, args, options) {
+      if (options?.emitToConsole !== false) {
+          callConsole(method, args);
+      }
       emitLogEntry(level, args, source);
   }
-  function createSidebarLogger(source) {
+  function createSidebarLogger(source, options) {
       return {
-          log: (...args) => logWithConsole("log", "info", source, args),
-          info: (...args) => logWithConsole("info", "info", source, args),
-          warn: (...args) => logWithConsole("warn", "warn", source, args),
-          error: (...args) => logWithConsole("error", "error", source, args),
-          debug: (...args) => logWithConsole("debug", "debug", source, args),
+          log: (...args) => logWithConsole("log", "info", source, args, options),
+          info: (...args) => logWithConsole("info", "info", source, args, options),
+          warn: (...args) => logWithConsole("warn", "warn", source, args, options),
+          error: (...args) => logWithConsole("error", "error", source, args, options),
+          debug: (...args) => logWithConsole("debug", "debug", source, args, options),
       };
   }
   const sidebarLogger = createSidebarLogger("Sidebar");
@@ -10320,7 +10322,7 @@
               sidebarLogger.info("Saved sidebar state.");
           }
           else {
-              sidebarLogger.warn("Failed to save sidebar state.");
+              console.warn("Failed to save sidebar state.");
           }
       }
       ensureMissileOverlay() {
@@ -11807,7 +11809,7 @@
       }
       startContinuousRuntime(action, run) {
           if (typeof window === "undefined") {
-              sidebarLogger.warn("Continuous sidebar actions are unavailable outside the browser.");
+              console.warn("Continuous sidebar actions are unavailable outside the browser.");
               this.finalizeRunningAction(run.id, "failed");
               return;
           }
@@ -12067,7 +12069,9 @@
               }
               settings[key] = setting.value;
           }
-          const logger = createSidebarLogger(`Action ${run.name} [${run.id}]`);
+          const logger = createSidebarLogger(`Action ${run.name} [${run.id}]`, {
+              emitToConsole: false,
+          });
           return {
               game: this.buildActionGameApi(),
               lobby: this.buildActionLobbyApi(),
@@ -12143,7 +12147,7 @@
               return false;
           }
           if (this.game) {
-              sidebarLogger.warn("Cannot join a lobby while already attached to a live game.");
+              console.warn("Cannot join a lobby while already attached to a live game.");
               return false;
           }
           const target = (gameId ?? this.snapshot.currentLobbyQueue?.gameId)?.trim();
@@ -12189,7 +12193,7 @@
               return true;
           }
           catch (error) {
-              sidebarLogger.warn("Failed to trigger lobby join via lobby component", error);
+              console.warn("Failed to trigger lobby join via lobby component", error);
               return false;
           }
       }
@@ -12301,7 +12305,7 @@
                       sidebarLogger.info(`${label} stopped.`);
                       break;
                   case "failed":
-                      sidebarLogger.warn(`${label} failed.`);
+                      console.warn(`${label} failed.`);
                       break;
               }
           }
