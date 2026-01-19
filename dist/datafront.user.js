@@ -2856,12 +2856,6 @@
               label: "Copy usernames",
               onSelect: () => void copyTextToClipboard(target.players.map((player) => player.name).join("\n"), viewDocument$7),
           });
-          items.push({
-              label: "Copy player ids",
-              onSelect: () => void copyTextToClipboard(target.players
-                  .map((player) => player.publicId ?? player.id)
-                  .join("\n"), viewDocument$7),
-          });
           if (!items.length) {
               items.push({
                   label: "Stop trading",

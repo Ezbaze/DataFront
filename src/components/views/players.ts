@@ -379,16 +379,6 @@ function registerContextMenuDelegation(
           viewDocument,
         ),
     });
-    items.push({
-      label: "Copy player ids",
-      onSelect: () =>
-        void copyTextToClipboard(
-          target.players
-            .map((player) => player.publicId ?? player.id)
-            .join("\n"),
-          viewDocument,
-        ),
-    });
 
     if (!items.length) {
       items.push({
