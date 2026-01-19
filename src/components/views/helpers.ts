@@ -10,6 +10,7 @@ import { createElement, focusTile } from "../../utils";
 import type { ColumnVisibilityMenuOptions } from "./types";
 import { SidebarRole } from "../../sidebarRoles";
 import type { SidebarRoleValue } from "../../sidebarRoles";
+import { SIDEBAR_ID } from "../../constants";
 
 export interface TableHeader<TKey extends string = SortKey> {
   key: TKey;
@@ -657,7 +658,7 @@ export function showColumnVisibilityMenu(
 
   wrapper.appendChild(list);
   menu.replaceChildren(wrapper);
-  doc.body.appendChild(menu);
+  (doc.getElementById(SIDEBAR_ID) ?? doc.body).appendChild(menu);
 
   const menuRect = menu.getBoundingClientRect();
   const anchorRect = anchor.getBoundingClientRect();

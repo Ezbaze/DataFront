@@ -424,12 +424,18 @@
       PlayerPanel: "player-panel",
   };
 
+  const SIDEBAR_ID = "datafront";
+  const SIDEBAR_STYLE_ID = "datafront-styles";
+
   // Mirrors OpenFrontIO clan parsing:
   // - Matches the first `[TAG]` anywhere in the name
   // - Allows alphanumeric tags 2..5 chars
   // - Normalizes to uppercase for grouping/matching
   const CLAN_TAG_PATTERN = /\[([a-zA-Z0-9]{2,5})\]/;
   const numberFormatter = new Intl.NumberFormat("en-US");
+  function getMenuMount(doc) {
+      return doc.getElementById(SIDEBAR_ID) ?? doc.body;
+  }
   function normalizeTroopCount(value) {
       if (!Number.isFinite(value)) {
           return 0;
@@ -625,7 +631,7 @@
       }
       wrapper.appendChild(list);
       menu.replaceChildren(wrapper);
-      doc.body.appendChild(menu);
+      getMenuMount(doc).appendChild(menu);
       const rect = menu.getBoundingClientRect();
       const maxLeft = win.innerWidth - rect.width - 8;
       const maxTop = win.innerHeight - rect.height - 8;
@@ -1285,7 +1291,7 @@
       }
       wrapper.appendChild(list);
       menu.replaceChildren(wrapper);
-      doc.body.appendChild(menu);
+      (doc.getElementById(SIDEBAR_ID) ?? doc.body).appendChild(menu);
       const menuRect = menu.getBoundingClientRect();
       const anchorRect = anchor.getBoundingClientRect();
       const viewportWidth = win.innerWidth;
@@ -5674,9 +5680,6 @@
       }
   }
 
-  const SIDEBAR_ID = "datafront";
-  const SIDEBAR_STYLE_ID = "datafront-styles";
-
   const VIEW_OPTIONS = [
       { value: "players", label: "Players" },
       { value: "clanmates", label: "Clanmates" },
@@ -5932,8 +5935,7 @@
           sidebar.style.color = "#f1f5f9";
           sidebar.style.boxShadow = "0 25px 50px -12px rgb(0 0 0 / 0.25)";
           sidebar.style.backdropFilter = "blur(12px)";
-          sidebar.style.webkitBackdropFilter =
-              "blur(12px)";
+          sidebar.style.webkitBackdropFilter = "blur(12px)";
           sidebar.style.width = this.windowMode === "standalone" ? "100%" : "420px";
           sidebar.style.maxWidth = this.windowMode === "standalone" ? "100%" : "90vw";
           sidebar.style.fontFamily = `'Inter', 'Segoe UI', system-ui, sans-serif`;

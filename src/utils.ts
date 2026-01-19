@@ -1,5 +1,6 @@
 import type { TileSummary } from "./types";
 import { SidebarRole } from "./sidebarRoles";
+import { SIDEBAR_ID } from "./constants";
 
 // Mirrors OpenFrontIO clan parsing:
 // - Matches the first `[TAG]` anywhere in the name
@@ -8,6 +9,10 @@ import { SidebarRole } from "./sidebarRoles";
 const CLAN_TAG_PATTERN = /\[([a-zA-Z0-9]{2,5})\]/;
 
 const numberFormatter = new Intl.NumberFormat("en-US");
+
+function getMenuMount(doc: Document): HTMLElement {
+  return doc.getElementById(SIDEBAR_ID) ?? doc.body;
+}
 
 function normalizeTroopCount(value: number): number {
   if (!Number.isFinite(value)) {
@@ -291,7 +296,7 @@ export function showContextMenu(options: ShowContextMenuOptions): void {
 
   wrapper.appendChild(list);
   menu.replaceChildren(wrapper);
-  doc.body.appendChild(menu);
+  getMenuMount(doc).appendChild(menu);
 
   const rect = menu.getBoundingClientRect();
   const maxLeft = win.innerWidth - rect.width - 8;
