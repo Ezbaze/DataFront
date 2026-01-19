@@ -8,7 +8,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "bench": "vitest bench --run",
-    "build": "tsc && cross-env GORILLA_BUILD=1 NODE_OPTIONS=\"--require ./scripts/alias-typescript.cjs\" gorilla --input ./build/sidebar/main.js --output ./dist/datafront.user.js --config ./gorilla.json",
+    "build": "node ./scripts/build-tailwind.cjs && tsc && cross-env GORILLA_BUILD=1 NODE_OPTIONS=\"--require ./scripts/alias-typescript.cjs\" gorilla --input ./build/sidebar/main.js --output ./dist/datafront.user.js --config ./gorilla.json",
     "prepare": "husky install"
   },
   "lint-staged": {
@@ -19,15 +19,16 @@
     "*.{json,md,css,html}": "prettier --ignore-unknown --write"
   },
   "devDependencies": {
+    "@eslint/eslintrc": "^3.3.1",
+    "@eslint/js": "^9.38.0",
+    "@tailwindcss/forms": "^0.5.11",
+    "@typescript-eslint/eslint-plugin": "^8.26.0",
+    "@typescript-eslint/parser": "^8.26.0",
     "autoprefixer": "^10.4.20",
     "cross-env": "^7.0.3",
     "eslint": "^9.21.0",
-    "@eslint/eslintrc": "^3.3.1",
-    "@eslint/js": "^9.38.0",
-    "@typescript-eslint/eslint-plugin": "^8.26.0",
-    "@typescript-eslint/parser": "^8.26.0",
-    "gorilla-build": "^0.1.16",
     "eslint-config-prettier": "^10.1.1",
+    "gorilla-build": "^0.1.16",
     "husky": "^9.1.7",
     "lint-staged": "^16.1.2",
     "postcss": "^8.5.1",

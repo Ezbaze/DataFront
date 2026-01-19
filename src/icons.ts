@@ -1,5 +1,6 @@
 import {
   ArrowDown,
+  ChevronDown,
   Columns3,
   createElement,
   ExternalLink,
@@ -24,6 +25,7 @@ const ICONS = {
   columns: Columns3,
   radar: Radar,
   search: Search,
+  "chevron-down": ChevronDown,
   "external-link": ExternalLink,
 } as const;
 

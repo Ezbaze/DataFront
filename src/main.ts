@@ -2,13 +2,11 @@ import { SidebarApp } from "./app";
 import { DataStore } from "./data";
 import { sidebarLogger } from "./logger";
 import { SidebarWindowHandle } from "./types";
+import { datafrontTailwindCss } from "./generated/tailwind";
 
 declare global {
   interface Window {
     dataFront?: SidebarWindowHandle;
-    tailwind?: {
-      config?: unknown;
-    };
   }
 }
 
@@ -22,31 +20,15 @@ function createSessionId(): string {
   return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
-async function ensureTailwind(targetDocument: Document): Promise<void> {
-  if (targetDocument.querySelector("script[data-openfront-tailwind]")) {
+function ensureTailwind(targetDocument: Document): void {
+  const existing = targetDocument.getElementById("datafront-tailwind");
+  if (existing) {
     return;
   }
-  await new Promise<void>((resolve) => {
-    const script = targetDocument.createElement("script");
-    script.src = "https://cdn.tailwindcss.com?plugins=forms,typography";
-    script.dataset.openfrontTailwind = "true";
-    script.async = true;
-    const targetWindow = targetDocument.defaultView ?? window;
-    const tailwindGlobal: NonNullable<Window["tailwind"]> =
-      targetWindow.tailwind ?? {};
-    tailwindGlobal.config = {
-      corePlugins: {
-        preflight: false,
-      },
-      theme: {
-        extend: {},
-      },
-    };
-    targetWindow.tailwind = tailwindGlobal;
-    script.onload = () => resolve();
-    script.onerror = () => resolve();
-    targetDocument.head.appendChild(script);
-  });
+  const style = targetDocument.createElement("style");
+  style.id = "datafront-tailwind";
+  style.textContent = datafrontTailwindCss;
+  targetDocument.head.appendChild(style);
 }
 
 class SidebarWindowManager {
@@ -234,7 +216,7 @@ class SidebarWindowManager {
       // ignore
     }
 
-    void ensureTailwind(targetDocument);
+    ensureTailwind(targetDocument);
 
     const uiWindow = popupWindow;
     const app = new SidebarApp(
@@ -301,7 +283,7 @@ async function initializeSidebar(): Promise<void> {
   if (hostWindow.dataFront) {
     return;
   }
-  await ensureTailwind(document);
+  ensureTailwind(document);
   windowManager = new SidebarWindowManager();
   const sessionId = createSessionId();
   hostWindow.dataFront = {

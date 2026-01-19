@@ -107,6 +107,7 @@ interface OverlayRegistration {
   originalLeft: string;
   originalRight: string;
   originalMaxWidth: string;
+  originalTranslate: string;
 }
 
 export class SidebarApp {
@@ -353,11 +354,23 @@ export class SidebarApp {
   private createSidebarShell(): HTMLElement {
     this.uiDocument.getElementById(SIDEBAR_ID)?.remove();
 
-    const sidebar = this.createUiElement(
-      "aside",
-      "fixed top-0 left-0 z-[2147483646] flex h-full max-w-[90vw] flex-col border-r border-slate-800/80 bg-slate-950/95 text-slate-100 shadow-2xl backdrop-blur",
-    );
+    const sidebar = this.createUiElement("aside");
     sidebar.id = SIDEBAR_ID;
+    sidebar.style.position = "fixed";
+    sidebar.style.top = "0";
+    sidebar.style.left = "0";
+    sidebar.style.zIndex = "2147483646";
+    sidebar.style.display = "flex";
+    sidebar.style.flexDirection = "column";
+    sidebar.style.height = "100%";
+    sidebar.style.borderRight = "1px solid rgba(30, 41, 59, 0.8)";
+    sidebar.style.background = "rgba(2, 6, 23, 0.95)";
+    sidebar.style.color = "#f1f5f9";
+    sidebar.style.boxShadow = "0 25px 50px -12px rgb(0 0 0 / 0.25)";
+    sidebar.style.backdropFilter = "blur(12px)";
+    (
+      sidebar.style as unknown as { webkitBackdropFilter?: string }
+    ).webkitBackdropFilter = "blur(12px)";
     sidebar.style.width = this.windowMode === "standalone" ? "100%" : "420px";
     sidebar.style.maxWidth = this.windowMode === "standalone" ? "100%" : "90vw";
     sidebar.style.fontFamily = `'Inter', 'Segoe UI', system-ui, sans-serif`;
@@ -539,7 +552,8 @@ export class SidebarApp {
     const sidebarWidth = treatHidden
       ? 0
       : this.sidebar.getBoundingClientRect().width;
-    const offset = Math.round(sidebarWidth) + 16;
+    const sidebarOffset = Math.round(sidebarWidth);
+    const offset = sidebarOffset + 16;
     for (const selector of OVERLAY_SELECTORS) {
       const registration = this.ensureOverlayRegistration(selector);
       if (!registration) {
@@ -548,6 +562,18 @@ export class SidebarApp {
       }
 
       const target = registration.target;
+      if (selector === "control-panel") {
+        const style = target.style as CSSStyleDeclaration & {
+          translate?: string;
+        };
+        if (treatHidden) {
+          style.translate = registration.originalTranslate;
+        } else {
+          style.translate = `${sidebarOffset}px 0px`;
+        }
+        continue;
+      }
+
       if (treatHidden) {
         target.style.left = registration.originalLeft;
         target.style.right = registration.originalRight;
@@ -619,6 +645,11 @@ export class SidebarApp {
       existing && existing.target === target
         ? existing.originalMaxWidth
         : target.style.maxWidth;
+    const style = target.style as CSSStyleDeclaration & { translate?: string };
+    const originalTranslate =
+      existing && existing.target === target
+        ? existing.originalTranslate
+        : (style.translate ?? "");
 
     this.overlayElements.set(selector, {
       root,
@@ -626,6 +657,7 @@ export class SidebarApp {
       originalLeft,
       originalRight,
       originalMaxWidth,
+      originalTranslate,
     });
   }
 
@@ -656,6 +688,11 @@ export class SidebarApp {
   ): HTMLElement | null {
     if (!root.isConnected) {
       return null;
+    }
+
+    if (selector === "control-panel") {
+      const wrapper = root.parentElement;
+      return wrapper instanceof HTMLElement ? wrapper : root;
     }
 
     if (selector === "game-left-sidebar") {
@@ -1159,9 +1196,10 @@ export class SidebarApp {
       "flex items-center gap-2",
     );
 
+    const selectWrapper = this.createUiElement("div", "relative shrink-0");
     const select = this.createUiElement(
       "select",
-      "h-7 min-w-[8rem] max-w-full shrink-0 rounded-md border border-slate-700 bg-slate-900/80 px-2 py-1 text-xs text-slate-100 focus:outline-none focus:ring-2 focus:ring-sky-500/70",
+      "h-7 min-w-[8rem] max-w-full rounded-md border border-slate-700 bg-slate-900/80 bg-none px-2 py-1 pr-7 text-xs text-slate-100 appearance-none focus:outline-none focus:ring-2 focus:ring-sky-500/70",
     );
     for (const option of VIEW_OPTIONS) {
       const opt = this.uiDocument.createElement("option");
@@ -1170,7 +1208,14 @@ export class SidebarApp {
       select.appendChild(opt);
     }
     select.value = leaf.view;
-    headerControls.appendChild(select);
+    selectWrapper.appendChild(select);
+    selectWrapper.appendChild(
+      renderIcon(
+        "chevron-down",
+        "pointer-events-none absolute right-2 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-300",
+      ),
+    );
+    headerControls.appendChild(selectWrapper);
 
     const columnVisibilityButton = this.createUiElement(
       "button",
