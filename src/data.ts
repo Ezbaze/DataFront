@@ -560,6 +560,8 @@ export class DataStore {
   private displayEventPollingActive = false;
   private displayEventPollingLastTimestamp = 0;
   private lastProcessedDisplayUpdates: GameUpdatesLike = null;
+  private lastProcessedDisplayEventArray: unknown[] | null = null;
+  private lastProcessedDisplayEventArrayLength = 0;
   private readonly recentTroopDonations: Map<string, number> = new Map();
   private readonly recentGoldDonations: Map<string, number> = new Map();
   private readonly logSubscriptionCleanup: () => void;
@@ -577,7 +579,9 @@ export class DataStore {
   private readonly userMeHandler: (event: Event) => void;
 
   constructor(initialSnapshot?: GameSnapshot) {
-    this.hostDocument = unsafeWindow?.document ?? document;
+    this.hostDocument =
+      (globalThis as { unsafeWindow?: { document?: Document } }).unsafeWindow
+        ?.document ?? globalThis.document;
     this.userMeHandler = (event: Event) => {
       const custom = event as CustomEvent<unknown>;
       const detail = custom.detail as
@@ -3518,6 +3522,8 @@ export class DataStore {
     }
     this.displayEventPollingLastTimestamp = 0;
     this.lastProcessedDisplayUpdates = null;
+    this.lastProcessedDisplayEventArray = null;
+    this.lastProcessedDisplayEventArrayLength = 0;
     this.recentTroopDonations.clear();
     this.recentGoldDonations.clear();
   }
@@ -3537,18 +3543,44 @@ export class DataStore {
       return;
     }
 
-    if (updates === this.lastProcessedDisplayUpdates) {
+    const rawDisplayEvents = this.extractRawDisplayEvents(updates);
+    if (!rawDisplayEvents) {
+      this.lastProcessedDisplayUpdates = updates;
+      this.lastProcessedDisplayEventArray = null;
+      this.lastProcessedDisplayEventArrayLength = 0;
+      return;
+    }
+
+    const sameUpdatesObject = updates === this.lastProcessedDisplayUpdates;
+    const sameArrayObject =
+      rawDisplayEvents === this.lastProcessedDisplayEventArray;
+    const previousLength = sameArrayObject
+      ? this.lastProcessedDisplayEventArrayLength
+      : 0;
+
+    if (
+      sameUpdatesObject &&
+      sameArrayObject &&
+      rawDisplayEvents.length <= previousLength
+    ) {
       return;
     }
 
     this.lastProcessedDisplayUpdates = updates;
-    const displayEvents = this.extractDisplayEvents(updates);
-    if (displayEvents.length === 0) {
-      return;
-    }
+    this.lastProcessedDisplayEventArray = rawDisplayEvents;
+    this.lastProcessedDisplayEventArrayLength = rawDisplayEvents.length;
 
     const records = playerRecords ?? this.buildPlayerRecordLookupFromSnapshot();
-    for (const event of displayEvents) {
+    for (
+      let index = previousLength;
+      index < rawDisplayEvents.length;
+      index += 1
+    ) {
+      const entry = rawDisplayEvents[index];
+      if (!this.isDisplayMessageUpdate(entry)) {
+        continue;
+      }
+      const event = entry;
       const troopDonation = this.createTroopDonationEvent(event, records);
       if (
         troopDonation &&
@@ -3578,6 +3610,16 @@ export class DataStore {
         }
       }
     }
+  }
+
+  private extractRawDisplayEvents(updates: GameUpdatesLike): unknown[] | null {
+    if (!updates) {
+      return null;
+    }
+    const raw = (updates as Record<number, unknown>)[
+      GAME_UPDATE_TYPE_DISPLAY_EVENT
+    ];
+    return Array.isArray(raw) ? raw : null;
   }
 
   private extractDisplayEvents(

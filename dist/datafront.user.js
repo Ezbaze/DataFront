@@ -10194,6 +10194,8 @@
           this.displayEventPollingActive = false;
           this.displayEventPollingLastTimestamp = 0;
           this.lastProcessedDisplayUpdates = null;
+          this.lastProcessedDisplayEventArray = null;
+          this.lastProcessedDisplayEventArrayLength = 0;
           this.recentTroopDonations = new Map();
           this.recentGoldDonations = new Map();
           this.lobbyQueueRefreshPromise = null;
@@ -10202,7 +10204,9 @@
           this.lastLobbyTeamLogKey = null;
           this.lastLiveGameTeamLogKey = null;
           this.localPlayerPublicId = null;
-          this.hostDocument = unsafeWindow?.document ?? document;
+          this.hostDocument =
+              globalThis.unsafeWindow
+                  ?.document ?? globalThis.document;
           this.userMeHandler = (event) => {
               const custom = event;
               const detail = custom.detail;
@@ -12675,6 +12679,8 @@
           }
           this.displayEventPollingLastTimestamp = 0;
           this.lastProcessedDisplayUpdates = null;
+          this.lastProcessedDisplayEventArray = null;
+          this.lastProcessedDisplayEventArrayLength = 0;
           this.recentTroopDonations.clear();
           this.recentGoldDonations.clear();
       }
@@ -12690,16 +12696,31 @@
               console.warn("Failed to read recent game updates", error);
               return;
           }
-          if (updates === this.lastProcessedDisplayUpdates) {
+          const rawDisplayEvents = this.extractRawDisplayEvents(updates);
+          if (!rawDisplayEvents) {
+              this.lastProcessedDisplayUpdates = updates;
+              this.lastProcessedDisplayEventArray = null;
+              this.lastProcessedDisplayEventArrayLength = 0;
+              return;
+          }
+          const sameUpdatesObject = updates === this.lastProcessedDisplayUpdates;
+          const sameArrayObject = rawDisplayEvents === this.lastProcessedDisplayEventArray;
+          const previousLength = sameArrayObject
+              ? this.lastProcessedDisplayEventArrayLength
+              : 0;
+          if (sameUpdatesObject && sameArrayObject && rawDisplayEvents.length <= previousLength) {
               return;
           }
           this.lastProcessedDisplayUpdates = updates;
-          const displayEvents = this.extractDisplayEvents(updates);
-          if (displayEvents.length === 0) {
-              return;
-          }
+          this.lastProcessedDisplayEventArray = rawDisplayEvents;
+          this.lastProcessedDisplayEventArrayLength = rawDisplayEvents.length;
           const records = playerRecords ?? this.buildPlayerRecordLookupFromSnapshot();
-          for (const event of displayEvents) {
+          for (let index = previousLength; index < rawDisplayEvents.length; index += 1) {
+              const entry = rawDisplayEvents[index];
+              if (!this.isDisplayMessageUpdate(entry)) {
+                  continue;
+              }
+              const event = entry;
               const troopDonation = this.createTroopDonationEvent(event, records);
               if (troopDonation &&
                   this.registerDonation(troopDonation, this.recentTroopDonations)) {
@@ -12724,6 +12745,13 @@
                   }
               }
           }
+      }
+      extractRawDisplayEvents(updates) {
+          if (!updates) {
+              return null;
+          }
+          const raw = updates[GAME_UPDATE_TYPE_DISPLAY_EVENT];
+          return Array.isArray(raw) ? raw : null;
       }
       extractDisplayEvents(updates) {
           if (!updates) {
@@ -12893,7 +12921,11 @@
               const troops = paramValue("troops");
               const name = paramValue("name");
               if (troops && name) {
-                  return { direction: "received", amountDisplay: troops, otherName: name };
+                  return {
+                      direction: "received",
+                      amountDisplay: troops,
+                      otherName: name,
+                  };
               }
               if (!message) {
                   return null;
