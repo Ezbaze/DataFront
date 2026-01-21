@@ -5731,7 +5731,11 @@
           .join("\n");
       targetDocument.head.appendChild(nextStyle);
   }
-  const OVERLAY_SELECTORS = ["game-left-sidebar", "control-panel"];
+  const OVERLAY_SELECTORS = [
+      "game-left-sidebar",
+      "control-panel",
+      "leader-board",
+  ];
   class SidebarApp {
       constructor(store, options, uiDocument = document, uiWindow = window) {
           this.hostDocument = document;
@@ -5868,6 +5872,10 @@
               if (this.overlayResizeObserver) {
                   this.overlayResizeObserver.disconnect();
               }
+              if (this.overlayMutationFrame !== undefined) {
+                  this.hostWindow.cancelAnimationFrame(this.overlayMutationFrame);
+                  this.overlayMutationFrame = undefined;
+              }
               this.hostWindow.removeEventListener("resize", this.handleOverlayRealign);
               if (this.enableGlobalHotkeys) {
                   this.hostWindow.removeEventListener("keydown", this.handleGlobalKeyDown);
@@ -5989,75 +5997,21 @@
               }
           }
       }
-      observeGameOverlays() {
-          if (!this.enableOverlayAlignment) {
+      scheduleOverlayRealign() {
+          if (this.overlayMutationFrame !== undefined) {
               return;
           }
-          let discovered = false;
-          for (const selector of OVERLAY_SELECTORS) {
-              const registration = this.overlayElements.get(selector);
-              if (registration?.root.isConnected && registration.target.isConnected) {
-                  continue;
-              }
-              const found = document.querySelector(selector);
-              if (found) {
-                  const target = this.resolveOverlayTarget(selector, found);
-                  if (target) {
-                      this.registerOverlay(selector, found, target);
-                      discovered = true;
-                  }
-              }
-          }
-          if (discovered) {
+          this.overlayMutationFrame = this.hostWindow.requestAnimationFrame(() => {
+              this.overlayMutationFrame = undefined;
               this.repositionGameOverlay();
-          }
-          const hasMissing = OVERLAY_SELECTORS.some((selector) => {
-              const registration = this.overlayElements.get(selector);
-              return (!registration ||
-                  !registration.root.isConnected ||
-                  !registration.target.isConnected);
           });
-          if (!hasMissing) {
-              if (this.overlayObserver) {
-                  this.overlayObserver.disconnect();
-                  this.overlayObserver = undefined;
-              }
-              return;
-          }
-          if (this.overlayObserver) {
+      }
+      observeGameOverlays() {
+          if (!this.enableOverlayAlignment || this.overlayObserver) {
               return;
           }
           this.overlayObserver = new MutationObserver(() => {
-              let updated = false;
-              for (const selector of OVERLAY_SELECTORS) {
-                  const registration = this.overlayElements.get(selector);
-                  if (registration?.root.isConnected && registration.target.isConnected) {
-                      continue;
-                  }
-                  const candidate = document.querySelector(selector);
-                  if (candidate) {
-                      const target = this.resolveOverlayTarget(selector, candidate);
-                      if (target) {
-                          this.registerOverlay(selector, candidate, target);
-                          updated = true;
-                      }
-                  }
-                  else if (registration) {
-                      this.overlayElements.delete(selector);
-                      updated = true;
-                  }
-              }
-              if (updated) {
-                  this.repositionGameOverlay();
-              }
-              const stillMissing = OVERLAY_SELECTORS.some((selector) => {
-                  const current = this.overlayElements.get(selector);
-                  return (!current || !current.root.isConnected || !current.target.isConnected);
-              });
-              if (!stillMissing) {
-                  this.overlayObserver?.disconnect();
-                  this.overlayObserver = undefined;
-              }
+              this.scheduleOverlayRealign();
           });
           this.overlayObserver.observe(document.body, {
               childList: true,
@@ -6107,29 +6061,40 @@
               this.observeGameOverlays();
           }
       }
-      ensureOverlayRegistration(selector) {
-          let registration = this.overlayElements.get(selector) ?? null;
-          let root = registration?.root;
-          if (!root || !root.isConnected) {
-              const candidate = document.querySelector(selector);
-              if (!candidate) {
-                  this.overlayElements.delete(selector);
-                  return null;
-              }
-              root = candidate;
+      restoreOverlayRegistration(selector, registration) {
+          if (selector === "control-panel") {
+              const style = registration.target.style;
+              style.translate = registration.originalTranslate;
+              return;
           }
-          let target = registration?.target;
-          if (!target || !target.isConnected) {
-              const resolved = this.resolveOverlayTarget(selector, root);
-              if (!resolved) {
+          registration.target.style.left = registration.originalLeft;
+          registration.target.style.right = registration.originalRight;
+          registration.target.style.maxWidth = registration.originalMaxWidth;
+      }
+      ensureOverlayRegistration(selector) {
+          const root = document.querySelector(selector);
+          let registration = this.overlayElements.get(selector) ?? null;
+          if (!root) {
+              if (registration) {
+                  this.restoreOverlayRegistration(selector, registration);
                   this.overlayElements.delete(selector);
-                  return null;
               }
-              target = resolved;
+              return null;
+          }
+          const target = this.resolveOverlayTarget(selector, root);
+          if (!target) {
+              if (registration) {
+                  this.restoreOverlayRegistration(selector, registration);
+                  this.overlayElements.delete(selector);
+              }
+              return null;
           }
           if (!registration ||
               registration.root !== root ||
               registration.target !== target) {
+              if (registration) {
+                  this.restoreOverlayRegistration(selector, registration);
+              }
               this.registerOverlay(selector, root, target);
               registration = this.overlayElements.get(selector) ?? null;
           }
@@ -6184,6 +6149,9 @@
           if (selector === "control-panel") {
               const wrapper = root.parentElement;
               return wrapper instanceof HTMLElement ? wrapper : root;
+          }
+          if (selector === "leader-board") {
+              return root;
           }
           if (selector === "game-left-sidebar") {
               const fixedChild = this.findPositionedChild(root);
@@ -12708,7 +12676,9 @@
           const previousLength = sameArrayObject
               ? this.lastProcessedDisplayEventArrayLength
               : 0;
-          if (sameUpdatesObject && sameArrayObject && rawDisplayEvents.length <= previousLength) {
+          if (sameUpdatesObject &&
+              sameArrayObject &&
+              rawDisplayEvents.length <= previousLength) {
               return;
           }
           this.lastProcessedDisplayUpdates = updates;

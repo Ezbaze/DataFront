@@ -98,7 +98,11 @@ function ensureSidebarStyles(targetDocument: Document): void {
   targetDocument.head.appendChild(nextStyle);
 }
 
-const OVERLAY_SELECTORS = ["game-left-sidebar", "control-panel"] as const;
+const OVERLAY_SELECTORS = [
+  "game-left-sidebar",
+  "control-panel",
+  "leader-board",
+] as const;
 type OverlaySelector = (typeof OVERLAY_SELECTORS)[number];
 
 interface OverlayRegistration {
@@ -126,6 +130,7 @@ export class SidebarApp {
   >();
   private overlayObserver?: MutationObserver;
   private overlayResizeObserver?: ResizeObserver;
+  private overlayMutationFrame?: number;
   private readonly handleOverlayRealign = () =>
     this.runWithUiContext(() => this.repositionGameOverlay());
   private readonly handleGlobalKeyDown = (event: KeyboardEvent) =>
@@ -285,6 +290,10 @@ export class SidebarApp {
       }
       if (this.overlayResizeObserver) {
         this.overlayResizeObserver.disconnect();
+      }
+      if (this.overlayMutationFrame !== undefined) {
+        this.hostWindow.cancelAnimationFrame(this.overlayMutationFrame);
+        this.overlayMutationFrame = undefined;
       }
       this.hostWindow.removeEventListener("resize", this.handleOverlayRealign);
       if (this.enableGlobalHotkeys) {
@@ -455,86 +464,23 @@ export class SidebarApp {
     }
   }
 
-  private observeGameOverlays(): void {
-    if (!this.enableOverlayAlignment) {
+  private scheduleOverlayRealign(): void {
+    if (this.overlayMutationFrame !== undefined) {
       return;
     }
-    let discovered = false;
-    for (const selector of OVERLAY_SELECTORS) {
-      const registration = this.overlayElements.get(selector);
-      if (registration?.root.isConnected && registration.target.isConnected) {
-        continue;
-      }
-      const found = document.querySelector<HTMLElement>(selector);
-      if (found) {
-        const target = this.resolveOverlayTarget(selector, found);
-        if (target) {
-          this.registerOverlay(selector, found, target);
-          discovered = true;
-        }
-      }
-    }
-
-    if (discovered) {
+    this.overlayMutationFrame = this.hostWindow.requestAnimationFrame(() => {
+      this.overlayMutationFrame = undefined;
       this.repositionGameOverlay();
-    }
-
-    const hasMissing = OVERLAY_SELECTORS.some((selector) => {
-      const registration = this.overlayElements.get(selector);
-      return (
-        !registration ||
-        !registration.root.isConnected ||
-        !registration.target.isConnected
-      );
     });
+  }
 
-    if (!hasMissing) {
-      if (this.overlayObserver) {
-        this.overlayObserver.disconnect();
-        this.overlayObserver = undefined;
-      }
-      return;
-    }
-
-    if (this.overlayObserver) {
+  private observeGameOverlays(): void {
+    if (!this.enableOverlayAlignment || this.overlayObserver) {
       return;
     }
 
     this.overlayObserver = new MutationObserver(() => {
-      let updated = false;
-      for (const selector of OVERLAY_SELECTORS) {
-        const registration = this.overlayElements.get(selector);
-        if (registration?.root.isConnected && registration.target.isConnected) {
-          continue;
-        }
-        const candidate = document.querySelector<HTMLElement>(selector);
-        if (candidate) {
-          const target = this.resolveOverlayTarget(selector, candidate);
-          if (target) {
-            this.registerOverlay(selector, candidate, target);
-            updated = true;
-          }
-        } else if (registration) {
-          this.overlayElements.delete(selector);
-          updated = true;
-        }
-      }
-
-      if (updated) {
-        this.repositionGameOverlay();
-      }
-
-      const stillMissing = OVERLAY_SELECTORS.some((selector) => {
-        const current = this.overlayElements.get(selector);
-        return (
-          !current || !current.root.isConnected || !current.target.isConnected
-        );
-      });
-
-      if (!stillMissing) {
-        this.overlayObserver?.disconnect();
-        this.overlayObserver = undefined;
-      }
+      this.scheduleOverlayRealign();
     });
 
     this.overlayObserver.observe(document.body, {
@@ -590,29 +536,44 @@ export class SidebarApp {
     }
   }
 
+  private restoreOverlayRegistration(
+    selector: OverlaySelector,
+    registration: OverlayRegistration,
+  ): void {
+    if (selector === "control-panel") {
+      const style = registration.target.style as CSSStyleDeclaration & {
+        translate?: string;
+      };
+      style.translate = registration.originalTranslate;
+      return;
+    }
+
+    registration.target.style.left = registration.originalLeft;
+    registration.target.style.right = registration.originalRight;
+    registration.target.style.maxWidth = registration.originalMaxWidth;
+  }
+
   private ensureOverlayRegistration(
     selector: OverlaySelector,
   ): OverlayRegistration | null {
+    const root = document.querySelector<HTMLElement>(selector);
     let registration = this.overlayElements.get(selector) ?? null;
-    let root = registration?.root;
 
-    if (!root || !root.isConnected) {
-      const candidate = document.querySelector<HTMLElement>(selector);
-      if (!candidate) {
+    if (!root) {
+      if (registration) {
+        this.restoreOverlayRegistration(selector, registration);
         this.overlayElements.delete(selector);
-        return null;
       }
-      root = candidate;
+      return null;
     }
 
-    let target = registration?.target;
-    if (!target || !target.isConnected) {
-      const resolved = this.resolveOverlayTarget(selector, root);
-      if (!resolved) {
+    const target = this.resolveOverlayTarget(selector, root);
+    if (!target) {
+      if (registration) {
+        this.restoreOverlayRegistration(selector, registration);
         this.overlayElements.delete(selector);
-        return null;
       }
-      target = resolved;
+      return null;
     }
 
     if (
@@ -620,6 +581,9 @@ export class SidebarApp {
       registration.root !== root ||
       registration.target !== target
     ) {
+      if (registration) {
+        this.restoreOverlayRegistration(selector, registration);
+      }
       this.registerOverlay(selector, root, target);
       registration = this.overlayElements.get(selector) ?? null;
     }
@@ -693,6 +657,10 @@ export class SidebarApp {
     if (selector === "control-panel") {
       const wrapper = root.parentElement;
       return wrapper instanceof HTMLElement ? wrapper : root;
+    }
+
+    if (selector === "leader-board") {
+      return root;
     }
 
     if (selector === "game-left-sidebar") {
