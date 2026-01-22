@@ -406,6 +406,8 @@ export interface PanelLeafNode {
   id: string;
   type: "leaf";
   view: ViewType;
+  viewSearchFilters: Partial<Record<ViewType, string>>;
+  viewSearchEnabled: Partial<Record<ViewType, boolean>>;
   expandedRows: Set<string>;
   expandedGroups: Set<string>;
   sortStates: Partial<Record<ViewType, SortState>>;
@@ -441,10 +443,13 @@ export interface PanelLeafElements {
   header: HTMLElement;
   body: HTMLElement;
   viewSelect: HTMLSelectElement;
+  viewSearchButton: HTMLButtonElement;
   columnVisibilityButton: HTMLButtonElement;
   newActionButton: HTMLButtonElement;
   clearLogsButton: HTMLButtonElement;
   followLogsButton: HTMLButtonElement;
+  viewSearchInput?: HTMLInputElement;
+  viewSearchWrapper?: HTMLDivElement;
 }
 
 export interface PanelGroupElements {

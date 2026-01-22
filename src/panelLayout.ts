@@ -30,6 +30,8 @@ export function createLeaf(view: ViewType): PanelLeafNode {
     id: `leaf-${++leafIdCounter}`,
     type: "leaf",
     view,
+    viewSearchFilters: {},
+    viewSearchEnabled: {},
     expandedRows: new Set<string>(),
     expandedGroups: new Set<string>(),
     sortStates: {

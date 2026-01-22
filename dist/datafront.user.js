@@ -324,6 +324,8 @@
           id: `leaf-${++leafIdCounter}`,
           type: "leaf",
           view,
+          viewSearchFilters: {},
+          viewSearchEnabled: {},
           expandedRows: new Set(),
           expandedGroups: new Set(),
           sortStates: {
@@ -5689,7 +5691,7 @@
       { value: "overlays", label: "Overlays" },
   ];
   const PANEL_ACTION_BUTTON_BASE_CLASS = [
-      "flex h-7 w-7 items-center justify-center",
+      "flex h-7 w-7 shrink-0 items-center justify-center",
       "rounded-md border border-slate-700/70",
       "bg-slate-800/70 text-slate-300 transition-colors",
       "hover:border-sky-500/60 hover:text-sky-200",
@@ -5728,7 +5730,15 @@
     #${SIDEBAR_ID} [data-sidebar-role="${role}"]::-webkit-scrollbar-track {
       background-color: transparent;
     }`)
-          .join("\n");
+          .join("\n")
+          .concat(`
+    #${SIDEBAR_ID} .df-header-controls {
+      scrollbar-width: none;
+      -ms-overflow-style: none;
+    }
+    #${SIDEBAR_ID} .df-header-controls::-webkit-scrollbar {
+      display: none;
+    }`);
       targetDocument.head.appendChild(nextStyle);
   }
   const OVERLAY_SELECTORS = [
@@ -6377,148 +6387,238 @@
               this.onSearchFilterChanged?.(next);
           }
       }
-      getFilteredSnapshot(view) {
-          const filter = this.searchFilter.trim().toLowerCase();
-          if (!filter) {
-              return this.snapshot;
+      isViewSearchSupported(view) {
+          return (view === "players" ||
+              view === "clanmates" ||
+              view === "teams" ||
+              view === "attacks" ||
+              view === "ships" ||
+              view === "logs" ||
+              view === "actions" ||
+              view === "runningActions");
+      }
+      updateLeafSearchFilter(leaf, next) {
+          const current = leaf.viewSearchFilters[leaf.view] ?? "";
+          if (current === next) {
+              return;
           }
-          const compiledQuery = compileSearchQuery(filter);
-          const useSimpleSearch = !compiledQuery.ok;
-          const ast = compiledQuery.ok ? compiledQuery.ast : null;
-          const matchesPlayer = (player) => {
-              const fields = [
-                  player.name,
-                  player.id,
-                  player.team ?? "",
-                  player.clan ? `[${player.clan}]` : "",
-              ];
-              return fields.some((field) => field.toString().toLowerCase().includes(filter));
-          };
-          if (view === "clanmates" || view === "teams") {
-              return this.snapshot;
+          leaf.viewSearchFilters[leaf.view] = next;
+          this.refreshLeafContent(leaf);
+      }
+      handleLeafSearchInput(leaf, raw) {
+          this.runWithUiContext(() => {
+              const hasContent = raw.trim().length >= 1;
+              this.updateLeafSearchFilter(leaf, hasContent ? raw : "");
+          });
+      }
+      handleLeafSearchSubmit(leaf, raw) {
+          this.runWithUiContext(() => {
+              if (!raw.trim()) {
+                  return;
+              }
+              this.updateLeafSearchFilter(leaf, raw);
+              const coordinates = this.parseCoordinates(raw.trim());
+              if (coordinates) {
+                  focusTile(coordinates);
+              }
+          });
+      }
+      toggleLeafSearchEnabled(leaf) {
+          const view = leaf.view;
+          const supportsSearch = this.isViewSearchSupported(view);
+          if (!supportsSearch) {
+              return;
           }
-          if (view === "attacks") {
-              const players = this.snapshot.players.map((player) => {
-                  const outgoingAttacks = player.outgoingAttacks.filter((attack) => {
-                      if (useSimpleSearch) {
+          const nextEnabled = !(leaf.viewSearchEnabled[view] ?? false);
+          leaf.viewSearchEnabled[view] = nextEnabled;
+          if (!nextEnabled) {
+              leaf.viewSearchFilters[view] = "";
+          }
+          this.refreshLeafContent(leaf);
+          if (nextEnabled) {
+              this.uiWindow.setTimeout(() => {
+                  leaf.element?.viewSearchInput?.focus();
+                  leaf.element?.viewSearchInput?.select();
+              }, 0);
+          }
+      }
+      ensureLeafViewSearchElements(leaf) {
+          const element = leaf.element;
+          if (!element) {
+              throw new Error("Leaf UI not initialized");
+          }
+          if (element.viewSearchWrapper && element.viewSearchInput) {
+              return { wrapper: element.viewSearchWrapper, input: element.viewSearchInput };
+          }
+          const wrapper = this.createUiElement("div", "border-b border-slate-800/70 bg-slate-950/40 px-2 py-2");
+          const input = this.createUiElement("input", "h-8 w-full rounded-md border border-slate-800/70 bg-slate-900/70 px-2 text-xs leading-none text-slate-100 shadow-inner placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500/50");
+          input.type = "search";
+          input.autocomplete = "off";
+          input.placeholder = "Search view...";
+          input.addEventListener("input", () => this.handleLeafSearchInput(leaf, input.value));
+          input.addEventListener("keydown", (event) => {
+              if (event.key === "Enter") {
+                  event.preventDefault();
+                  this.handleLeafSearchSubmit(leaf, input.value);
+              }
+              else if (event.key === "Escape") {
+                  event.preventDefault();
+                  leaf.viewSearchEnabled[leaf.view] = false;
+                  leaf.viewSearchFilters[leaf.view] = "";
+                  this.refreshLeafContent(leaf);
+              }
+          });
+          wrapper.appendChild(input);
+          element.viewSearchWrapper = wrapper;
+          element.viewSearchInput = input;
+          return { wrapper, input };
+      }
+      getFilteredSnapshot(view, viewSearchFilter, globalSearchFilter) {
+          const applyFilter = (source, searchFilter) => {
+              const filter = searchFilter.trim().toLowerCase();
+              if (!filter) {
+                  return source;
+              }
+              const compiledQuery = compileSearchQuery(filter);
+              const useSimpleSearch = !compiledQuery.ok;
+              const ast = compiledQuery.ok ? compiledQuery.ast : null;
+              const matchesPlayer = (player) => {
+                  const fields = [
+                      player.name,
+                      player.id,
+                      player.team ?? "",
+                      player.clan ? `[${player.clan}]` : "",
+                  ];
+                  return fields.some((field) => field.toString().toLowerCase().includes(filter));
+              };
+              if (view === "clanmates" || view === "teams") {
+                  return source;
+              }
+              if (view === "attacks") {
+                  const players = source.players.map((player) => {
+                      const outgoingAttacks = player.outgoingAttacks.filter((attack) => {
+                          if (useSimpleSearch) {
+                              const fields = [
+                                  attack.id,
+                                  player.name,
+                                  attack.target,
+                                  attack.troops.toString(),
+                              ];
+                              return fields.some((field) => `${field ?? ""}`.toLowerCase().includes(filter));
+                          }
+                          return matchesSearchQuery(ast, {
+                              kind: "attack",
+                              attack: {
+                                  id: attack.id,
+                                  attacker: player.name,
+                                  target: attack.target,
+                                  troops: attack.troops,
+                              },
+                          });
+                      });
+                      return { ...player, outgoingAttacks };
+                  });
+                  return { ...source, players };
+              }
+              if (view === "players") {
+                  const players = useSimpleSearch
+                      ? source.players.filter(matchesPlayer)
+                      : source.players.filter((player) => matchesSearchQuery(ast, { kind: "player", player }));
+                  return { ...source, players };
+              }
+              if (view === "ships") {
+                  const ships = useSimpleSearch
+                      ? source.ships.filter((ship) => {
+                          const computedStatus = ship.retreating
+                              ? "Retreating"
+                              : ship.reachedTarget
+                                  ? "Arrived"
+                                  : ship.destination
+                                      ? "En route"
+                                      : "Unknown";
                           const fields = [
-                              attack.id,
-                              player.name,
-                              attack.target,
-                              attack.troops.toString(),
+                              `${ship.type} #${ship.id}`,
+                              ship.ownerName,
+                              ship.type,
+                              computedStatus,
+                              ship.origin ? `${ship.origin.x},${ship.origin.y}` : "",
+                              ship.destination
+                                  ? `${ship.destination.x},${ship.destination.y}`
+                                  : "",
                           ];
                           return fields.some((field) => `${field ?? ""}`.toLowerCase().includes(filter));
+                      })
+                      : source.ships.filter((ship) => matchesSearchQuery(ast, { kind: "ship", ship }));
+                  return { ...source, ships };
+              }
+              if (view === "logs") {
+                  const sidebarLogs = source.sidebarLogs?.filter((entry) => {
+                      if (!useSimpleSearch) {
+                          return matchesSearchQuery(ast, { kind: "log", entry });
                       }
-                      return matchesSearchQuery(ast, {
-                          kind: "attack",
-                          attack: {
-                              id: attack.id,
-                              attacker: player.name,
-                              target: attack.target,
-                              troops: attack.troops,
-                          },
-                      });
-                  });
-                  return { ...player, outgoingAttacks };
-              });
-              return { ...this.snapshot, players };
-          }
-          if (view === "players") {
-              const players = useSimpleSearch
-                  ? this.snapshot.players.filter(matchesPlayer)
-                  : this.snapshot.players.filter((player) => matchesSearchQuery(ast, { kind: "player", player }));
-              return { ...this.snapshot, players };
-          }
-          if (view === "ships") {
-              const ships = useSimpleSearch
-                  ? this.snapshot.ships.filter((ship) => {
-                      const computedStatus = ship.retreating
-                          ? "Retreating"
-                          : ship.reachedTarget
-                              ? "Arrived"
-                              : ship.destination
-                                  ? "En route"
-                                  : "Unknown";
-                      const fields = [
-                          `${ship.type} #${ship.id}`,
-                          ship.ownerName,
-                          ship.type,
-                          computedStatus,
-                          ship.origin ? `${ship.origin.x},${ship.origin.y}` : "",
-                          ship.destination
-                              ? `${ship.destination.x},${ship.destination.y}`
-                              : "",
-                      ];
-                      return fields.some((field) => `${field ?? ""}`.toLowerCase().includes(filter));
-                  })
-                  : this.snapshot.ships.filter((ship) => matchesSearchQuery(ast, { kind: "ship", ship }));
-              return { ...this.snapshot, ships };
-          }
-          if (view === "logs") {
-              const sidebarLogs = this.snapshot.sidebarLogs?.filter((entry) => {
-                  if (!useSimpleSearch) {
-                      return matchesSearchQuery(ast, { kind: "log", entry });
+                      const message = entry.message?.toLowerCase() ?? "";
+                      const logSource = entry.source?.toLowerCase() ?? "";
+                      const level = entry.level?.toLowerCase() ?? "";
+                      const tokenText = (entry.tokens ?? [])
+                          .map((token) => token.type === "text" ? token.text : (token.label ?? ""))
+                          .join(" ")
+                          .toLowerCase();
+                      return (message.includes(filter) ||
+                          logSource.includes(filter) ||
+                          level.includes(filter) ||
+                          tokenText.includes(filter));
+                  }) ?? [];
+                  return { ...source, sidebarLogs };
+              }
+              if (view === "actions") {
+                  const state = source.sidebarActions;
+                  if (!state) {
+                      return source;
                   }
-                  const message = entry.message?.toLowerCase() ?? "";
-                  const source = entry.source?.toLowerCase() ?? "";
-                  const level = entry.level?.toLowerCase() ?? "";
-                  const tokenText = (entry.tokens ?? [])
-                      .map((token) => token.type === "text" ? token.text : (token.label ?? ""))
-                      .join(" ")
-                      .toLowerCase();
-                  return (message.includes(filter) ||
-                      source.includes(filter) ||
-                      level.includes(filter) ||
-                      tokenText.includes(filter));
-              }) ?? [];
-              return { ...this.snapshot, sidebarLogs };
-          }
-          if (view === "actions") {
-              const state = this.snapshot.sidebarActions;
-              if (!state) {
-                  return this.snapshot;
+                  const filteredActions = useSimpleSearch
+                      ? state.actions.filter((action) => {
+                          const description = action.description?.toLowerCase() ?? "";
+                          return (action.name.toLowerCase().includes(filter) ||
+                              description.includes(filter));
+                      })
+                      : state.actions.filter((action) => matchesSearchQuery(ast, { kind: "action", action }));
+                  const filteredRunning = useSimpleSearch
+                      ? state.running.filter((run) => {
+                          const fields = [run.name, run.status, run.runMode];
+                          return fields.some((field) => `${field ?? ""}`.toLowerCase().includes(filter));
+                      })
+                      : state.running.filter((run) => matchesSearchQuery(ast, { kind: "runningAction", run }));
+                  const sidebarActions = {
+                      ...state,
+                      actions: filteredActions,
+                      running: filteredRunning,
+                  };
+                  return { ...source, sidebarActions };
               }
-              const filteredActions = useSimpleSearch
-                  ? state.actions.filter((action) => {
-                      const description = action.description?.toLowerCase() ?? "";
-                      return (action.name.toLowerCase().includes(filter) ||
-                          description.includes(filter));
-                  })
-                  : state.actions.filter((action) => matchesSearchQuery(ast, { kind: "action", action }));
-              const filteredRunning = useSimpleSearch
-                  ? state.running.filter((run) => {
-                      const fields = [run.name, run.status, run.runMode];
-                      return fields.some((field) => `${field ?? ""}`.toLowerCase().includes(filter));
-                  })
-                  : state.running.filter((run) => matchesSearchQuery(ast, { kind: "runningAction", run }));
-              const sidebarActions = {
-                  ...state,
-                  actions: filteredActions,
-                  running: filteredRunning,
-              };
-              return { ...this.snapshot, sidebarActions };
-          }
-          if (view === "runningActions") {
-              const state = this.snapshot.sidebarActions;
-              if (!state) {
-                  return this.snapshot;
+              if (view === "runningActions") {
+                  const state = source.sidebarActions;
+                  if (!state) {
+                      return source;
+                  }
+                  const filteredRunning = useSimpleSearch
+                      ? state.running.filter((run) => {
+                          const fields = [run.name, run.status, run.runMode];
+                          return fields.some((field) => field.toString().toLowerCase().includes(filter));
+                      })
+                      : state.running.filter((run) => matchesSearchQuery(ast, { kind: "runningAction", run }));
+                  const sidebarActions = { ...state, running: filteredRunning };
+                  return { ...source, sidebarActions };
               }
-              const filteredRunning = useSimpleSearch
-                  ? state.running.filter((run) => {
-                      const fields = [run.name, run.status, run.runMode];
-                      return fields.some((field) => field.toString().toLowerCase().includes(filter));
-                  })
-                  : state.running.filter((run) => matchesSearchQuery(ast, { kind: "runningAction", run }));
-              const sidebarActions = { ...state, running: filteredRunning };
-              return { ...this.snapshot, sidebarActions };
-          }
-          return this.snapshot;
+              return source;
+          };
+          const afterViewFilter = applyFilter(this.snapshot, viewSearchFilter);
+          return applyFilter(afterViewFilter, globalSearchFilter);
       }
       buildLeafElement(leaf) {
           const wrapper = this.createUiElement("div", "flex min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-slate-800/70 bg-slate-900/70 shadow-inner");
           wrapper.dataset.nodeId = leaf.id;
-          const header = this.createUiElement("div", "flex items-center justify-between gap-2 border-b border-slate-800/70 bg-slate-900/80 px-3 py-2");
-          const headerControls = this.createUiElement("div", "flex items-center gap-2");
+          const header = this.createUiElement("div", "flex items-center justify-between gap-2 border-b border-slate-800/70 bg-slate-900/80 px-2 py-2");
+          const headerControls = this.createUiElement("div", "df-header-controls flex flex-1 min-w-0 items-center gap-2 overflow-x-auto overflow-y-hidden whitespace-nowrap");
           const selectWrapper = this.createUiElement("div", "relative shrink-0");
           const select = this.createUiElement("select", "h-7 min-w-[8rem] max-w-full rounded-md border border-slate-700 bg-slate-900/80 bg-none px-2 py-1 pr-7 text-xs text-slate-100 appearance-none focus:outline-none focus:ring-2 focus:ring-sky-500/70");
           for (const option of VIEW_OPTIONS) {
@@ -6552,6 +6652,18 @@
               });
           });
           headerControls.appendChild(columnVisibilityButton);
+          const viewSearchButton = this.createUiElement("button", getPanelActionButtonClass());
+          viewSearchButton.type = "button";
+          viewSearchButton.setAttribute("aria-label", "Toggle view search");
+          viewSearchButton.appendChild(renderIcon("search", "h-4 w-4"));
+          viewSearchButton.addEventListener("click", (event) => {
+              this.runWithUiContext(() => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  this.toggleLeafSearchEnabled(leaf);
+              });
+          });
+          headerControls.appendChild(viewSearchButton);
           const newActionButton = this.createUiElement("button", getPanelActionButtonClass());
           newActionButton.type = "button";
           newActionButton.setAttribute("aria-label", "New action");
@@ -6615,6 +6727,7 @@
               header,
               body,
               viewSelect: select,
+              viewSearchButton,
               columnVisibilityButton,
               newActionButton,
               clearLogsButton,
@@ -6745,6 +6858,28 @@
           if (element.viewSelect.value !== leaf.view) {
               element.viewSelect.value = leaf.view;
           }
+          const viewSearchButton = element.viewSearchButton;
+          const supportsSearch = this.isViewSearchSupported(leaf.view);
+          viewSearchButton.style.display = supportsSearch ? "" : "none";
+          if (supportsSearch) {
+              viewSearchButton.removeAttribute("aria-hidden");
+              viewSearchButton.tabIndex = 0;
+              const enabled = leaf.viewSearchEnabled[leaf.view] ?? false;
+              viewSearchButton.setAttribute("aria-pressed", enabled ? "true" : "false");
+              viewSearchButton.classList.toggle("border-slate-700/70", !enabled);
+              viewSearchButton.classList.toggle("bg-slate-800/70", !enabled);
+              viewSearchButton.classList.toggle("text-slate-300", !enabled);
+              viewSearchButton.classList.toggle("border-sky-500/70", enabled);
+              viewSearchButton.classList.toggle("bg-sky-500/20", enabled);
+              viewSearchButton.classList.toggle("text-sky-100", enabled);
+              viewSearchButton.title = enabled ? "Disable view search" : "Enable view search";
+          }
+          else {
+              viewSearchButton.setAttribute("aria-hidden", "true");
+              viewSearchButton.tabIndex = -1;
+              viewSearchButton.removeAttribute("aria-pressed");
+              viewSearchButton.removeAttribute("title");
+          }
           const columnVisibilityButton = element.columnVisibilityButton;
           const supportsColumns = isColumnVisibilitySupported(leaf.view);
           columnVisibilityButton.style.display = supportsColumns ? "" : "none";
@@ -6824,12 +6959,23 @@
           }
           this.updateLeafHeaderControls(leaf);
           const previousContainer = leaf.contentContainer ??
+              element.body.querySelector('[data-datafront-view-container="true"]') ??
               element.body.firstElementChild;
           const previousCleanup = leaf.viewCleanup;
           const previousScrollTop = leaf.scrollTop ?? previousContainer?.scrollTop ?? 0;
           const previousScrollLeft = leaf.scrollLeft ?? previousContainer?.scrollLeft ?? 0;
           const lifecycle = this.createViewLifecycle(leaf);
-          const nextContainer = buildViewContent(leaf, this.getFilteredSnapshot(leaf.view), () => this.refreshLeafContent(leaf), { document: this.uiDocument, window: this.uiWindow }, previousContainer ?? undefined, lifecycle.callbacks, this.viewActions, this.searchFilter);
+          const viewSearchEnabled = this.isViewSearchSupported(leaf.view) &&
+              (leaf.viewSearchEnabled[leaf.view] ?? false);
+          const viewSearchFilter = viewSearchEnabled
+              ? leaf.viewSearchFilters[leaf.view] ?? ""
+              : "";
+          const combinedSearchFilter = [viewSearchFilter, this.searchFilter]
+              .map((value) => value.trim())
+              .filter(Boolean)
+              .join(" ");
+          const nextContainer = buildViewContent(leaf, this.getFilteredSnapshot(leaf.view, viewSearchFilter, this.searchFilter), () => this.refreshLeafContent(leaf), { document: this.uiDocument, window: this.uiWindow }, previousContainer ?? undefined, lifecycle.callbacks, this.viewActions, combinedSearchFilter);
+          nextContainer.dataset.datafrontViewContainer = "true";
           const replaced = !!previousContainer && nextContainer !== previousContainer;
           if (replaced) {
               if (previousCleanup) {
@@ -6846,10 +6992,23 @@
           else {
               leaf.viewCleanup = undefined;
           }
-          if (!previousContainer ||
-              nextContainer !== previousContainer ||
-              nextContainer.parentElement !== element.body) {
-              element.body.replaceChildren(nextContainer);
+          let viewSearchWrapper;
+          if (viewSearchEnabled) {
+              const searchElements = this.ensureLeafViewSearchElements(leaf);
+              viewSearchWrapper = searchElements.wrapper;
+              const expected = leaf.viewSearchFilters[leaf.view] ?? "";
+              if (searchElements.input.value !== expected) {
+                  searchElements.input.value = expected;
+              }
+          }
+          const desiredChildren = viewSearchEnabled
+              ? [viewSearchWrapper, nextContainer]
+              : [nextContainer];
+          const shouldReplace = element.body.childElementCount !== desiredChildren.length ||
+              element.body.firstElementChild !== desiredChildren[0] ||
+              element.body.lastElementChild !== desiredChildren[desiredChildren.length - 1];
+          if (shouldReplace) {
+              element.body.replaceChildren(...desiredChildren);
           }
           leaf.contentContainer = nextContainer;
           if (nextContainer) {
@@ -14195,7 +14354,7 @@
       }
   }
 
-  const datafrontTailwindCss = `#datafront .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border-width:0}#datafront .pointer-events-none{pointer-events:none}#datafront .visible{visibility:visible}#datafront .static{position:static}#datafront .fixed{position:fixed}#datafront .absolute{position:absolute}#datafront .relative{position:relative}#datafront .sticky{position:sticky}#datafront .left-0{left:0}#datafront .left-1{left:.25rem}#datafront .right-0{right:0}#datafront .right-2{right:.5rem}#datafront .top-0{top:0}#datafront .top-1{top:.25rem}#datafront .top-1\\/2{top:50%}#datafront .z-10{z-index:10}#datafront .z-\\[2147483646\\]{z-index:2147483646}#datafront .z-\\[2147483647\\]{z-index:2147483647}#datafront .-mx-px{margin-left:-1px;margin-right:-1px}#datafront .-my-px{margin-top:-1px;margin-bottom:-1px}#datafront .mt-2{margin-top:.5rem}#datafront .mt-3{margin-top:.75rem}#datafront .block{display:block}#datafront .flex{display:flex}#datafront .inline-flex{display:inline-flex}#datafront .\\!table{display:table!important}#datafront .table{display:table}#datafront .grid{display:grid}#datafront .hidden{display:none}#datafront .h-10{height:2.5rem}#datafront .h-12{height:3rem}#datafront .h-2{height:.5rem}#datafront .h-3{height:.75rem}#datafront .h-3\\.5{height:.875rem}#datafront .h-4{height:1rem}#datafront .h-5{height:1.25rem}#datafront .h-6{height:1.5rem}#datafront .h-7{height:1.75rem}#datafront .h-full{height:100%}#datafront .h-px{height:1px}#datafront .min-h-0{min-height:0}#datafront .min-h-\\[220px\\]{min-height:220px}#datafront .min-h-\\[72px\\]{min-height:72px}#datafront .min-h-full{min-height:100%}#datafront .w-10{width:2.5rem}#datafront .w-12{width:3rem}#datafront .w-2{width:.5rem}#datafront .w-3{width:.75rem}#datafront .w-3\\.5{width:.875rem}#datafront .w-32{width:8rem}#datafront .w-36{width:9rem}#datafront .w-4{width:1rem}#datafront .w-40{width:10rem}#datafront .w-44{width:11rem}#datafront .w-48{width:12rem}#datafront .w-5{width:1.25rem}#datafront .w-6{width:1.5rem}#datafront .w-7{width:1.75rem}#datafront .w-full{width:100%}#datafront .w-px{width:1px}#datafront .min-w-0{min-width:0}#datafront .min-w-\\[160px\\]{min-width:160px}#datafront .min-w-\\[200px\\]{min-width:200px}#datafront .min-w-\\[8rem\\]{min-width:8rem}#datafront .min-w-full{min-width:100%}#datafront .max-w-\\[10rem\\]{max-width:10rem}#datafront .max-w-full{max-width:100%}#datafront .max-w-xs{max-width:20rem}#datafront .flex-1{flex:1 1 0%}#datafront .shrink-0{flex-shrink:0}#datafront .border-collapse{border-collapse:collapse}#datafront .-translate-y-1{--tw-translate-y:-0.25rem}#datafront .-translate-y-1,#datafront .-translate-y-1\\/2{transform:translate(var(--tw-translate-x),var(--tw-translate-y)) rotate(var(--tw-rotate)) skewX(var(--tw-skew-x)) skewY(var(--tw-skew-y)) scaleX(var(--tw-scale-x)) scaleY(var(--tw-scale-y))}#datafront .-translate-y-1\\/2{--tw-translate-y:-50%}#datafront .translate-x-full{--tw-translate-x:100%;transform:translate(var(--tw-translate-x),var(--tw-translate-y)) rotate(var(--tw-rotate)) skewX(var(--tw-skew-x)) skewY(var(--tw-skew-y)) scaleX(var(--tw-scale-x)) scaleY(var(--tw-scale-y))}#datafront .\\!transform{transform:translate(var(--tw-translate-x),var(--tw-translate-y)) rotate(var(--tw-rotate)) skewX(var(--tw-skew-x)) skewY(var(--tw-skew-y)) scaleX(var(--tw-scale-x)) scaleY(var(--tw-scale-y))!important}#datafront .transform{transform:translate(var(--tw-translate-x),var(--tw-translate-y)) rotate(var(--tw-rotate)) skewX(var(--tw-skew-x)) skewY(var(--tw-skew-y)) scaleX(var(--tw-scale-x)) scaleY(var(--tw-scale-y))}#datafront .cursor-col-resize{cursor:col-resize}#datafront .cursor-default{cursor:default}#datafront .cursor-not-allowed{cursor:not-allowed}#datafront .cursor-pointer{cursor:pointer}#datafront .cursor-row-resize{cursor:row-resize}#datafront .select-none{-webkit-user-select:none;-moz-user-select:none;user-select:none}#datafront .resize{resize:both}#datafront .appearance-none{-webkit-appearance:none;-moz-appearance:none;appearance:none}#datafront .flex-row{flex-direction:row}#datafront .flex-col{flex-direction:column}#datafront .flex-wrap{flex-wrap:wrap}#datafront .items-start{align-items:flex-start}#datafront .items-end{align-items:flex-end}#datafront .items-center{align-items:center}#datafront .items-baseline{align-items:baseline}#datafront .justify-start{justify-content:flex-start}#datafront .justify-end{justify-content:flex-end}#datafront .justify-center{justify-content:center}#datafront .justify-between{justify-content:space-between}#datafront .gap-1{gap:.25rem}#datafront .gap-2{gap:.5rem}#datafront .gap-3{gap:.75rem}#datafront .gap-4{gap:1rem}#datafront .gap-6{gap:1.5rem}#datafront :is(.space-y-1>:not([hidden])~:not([hidden])){--tw-space-y-reverse:0;margin-top:calc(.25rem*(1 - var(--tw-space-y-reverse)));margin-bottom:calc(.25rem*var(--tw-space-y-reverse))}#datafront :is(.space-y-2>:not([hidden])~:not([hidden])){--tw-space-y-reverse:0;margin-top:calc(.5rem*(1 - var(--tw-space-y-reverse)));margin-bottom:calc(.5rem*var(--tw-space-y-reverse))}#datafront :is(.space-y-3>:not([hidden])~:not([hidden])){--tw-space-y-reverse:0;margin-top:calc(.75rem*(1 - var(--tw-space-y-reverse)));margin-bottom:calc(.75rem*var(--tw-space-y-reverse))}#datafront :is(.space-y-4>:not([hidden])~:not([hidden])){--tw-space-y-reverse:0;margin-top:calc(1rem*(1 - var(--tw-space-y-reverse)));margin-bottom:calc(1rem*var(--tw-space-y-reverse))}#datafront .overflow-auto{overflow:auto}#datafront .overflow-hidden{overflow:hidden}#datafront .truncate{overflow:hidden;text-overflow:ellipsis}#datafront .truncate,#datafront .whitespace-nowrap{white-space:nowrap}#datafront .whitespace-pre-wrap{white-space:pre-wrap}#datafront .break-words{overflow-wrap:break-word}#datafront .rounded{border-radius:.25rem}#datafront .rounded-full{border-radius:9999px}#datafront .rounded-lg{border-radius:.5rem}#datafront .rounded-md{border-radius:.375rem}#datafront .rounded-sm{border-radius:.125rem}#datafront .rounded-r-full{border-top-right-radius:9999px;border-bottom-right-radius:9999px}#datafront .border{border-width:1px}#datafront .border-b{border-bottom-width:1px}#datafront .border-r{border-right-width:1px}#datafront .border-t{border-top-width:1px}#datafront .border-none{border-style:none}#datafront .\\!border-rose-500{--tw-border-opacity:1!important;border-color:rgb(244 63 94/var(--tw-border-opacity,1))!important}#datafront .border-amber-400{--tw-border-opacity:1;border-color:rgb(251 191 36/var(--tw-border-opacity,1))}#datafront .border-amber-400\\/40{border-color:rgba(251,191,36,.4)}#datafront .border-emerald-400{--tw-border-opacity:1;border-color:rgb(52 211 153/var(--tw-border-opacity,1))}#datafront .border-emerald-400\\/60{border-color:rgba(52,211,153,.6)}#datafront .border-rose-500{--tw-border-opacity:1;border-color:rgb(244 63 94/var(--tw-border-opacity,1))}#datafront .border-rose-500\\/40{border-color:rgba(244,63,94,.4)}#datafront .border-rose-500\\/50{border-color:rgba(244,63,94,.5)}#datafront .border-sky-400{--tw-border-opacity:1;border-color:rgb(56 189 248/var(--tw-border-opacity,1))}#datafront .border-sky-400\\/40{border-color:rgba(56,189,248,.4)}#datafront .border-sky-500{--tw-border-opacity:1;border-color:rgb(14 165 233/var(--tw-border-opacity,1))}#datafront .border-sky-500\\/40{border-color:rgba(14,165,233,.4)}#datafront .border-sky-500\\/50{border-color:rgba(14,165,233,.5)}#datafront .border-sky-500\\/60{border-color:rgba(14,165,233,.6)}#datafront .border-sky-500\\/70{border-color:rgba(14,165,233,.7)}#datafront .border-slate-600{--tw-border-opacity:1;border-color:rgb(71 85 105/var(--tw-border-opacity,1))}#datafront .border-slate-600\\/50{border-color:rgba(71,85,105,.5)}#datafront .border-slate-700{--tw-border-opacity:1;border-color:rgb(51 65 85/var(--tw-border-opacity,1))}#datafront .border-slate-700\\/70{border-color:rgba(51,65,85,.7)}#datafront .border-slate-700\\/80{border-color:rgba(51,65,85,.8)}#datafront .border-slate-800{--tw-border-opacity:1;border-color:rgb(30 41 59/var(--tw-border-opacity,1))}#datafront .border-slate-800\\/60{border-color:rgba(30,41,59,.6)}#datafront .border-slate-800\\/70{border-color:rgba(30,41,59,.7)}#datafront .border-slate-800\\/80{border-color:rgba(30,41,59,.8)}#datafront .border-slate-900{--tw-border-opacity:1;border-color:rgb(15 23 42/var(--tw-border-opacity,1))}#datafront .border-slate-900\\/70{border-color:rgba(15,23,42,.7)}#datafront .border-slate-900\\/80{border-color:rgba(15,23,42,.8)}#datafront .bg-amber-400{--tw-bg-opacity:1;background-color:rgb(251 191 36/var(--tw-bg-opacity,1))}#datafront .bg-amber-400\\/15{background-color:rgba(251,191,36,.15)}#datafront .bg-amber-500{--tw-bg-opacity:1;background-color:rgb(245 158 11/var(--tw-bg-opacity,1))}#datafront .bg-amber-500\\/20{background-color:rgba(245,158,11,.2)}#datafront .bg-emerald-100{--tw-bg-opacity:1;background-color:rgb(209 250 229/var(--tw-bg-opacity,1))}#datafront .bg-emerald-500{--tw-bg-opacity:1;background-color:rgb(16 185 129/var(--tw-bg-opacity,1))}#datafront .bg-emerald-500\\/20{background-color:rgba(16,185,129,.2)}#datafront .bg-emerald-500\\/40{background-color:rgba(16,185,129,.4)}#datafront .bg-red-500{--tw-bg-opacity:1;background-color:rgb(239 68 68/var(--tw-bg-opacity,1))}#datafront .bg-rose-500{--tw-bg-opacity:1;background-color:rgb(244 63 94/var(--tw-bg-opacity,1))}#datafront .bg-rose-500\\/10{background-color:rgba(244,63,94,.1)}#datafront .bg-rose-500\\/15{background-color:rgba(244,63,94,.15)}#datafront .bg-rose-500\\/20{background-color:rgba(244,63,94,.2)}#datafront .bg-sky-400{--tw-bg-opacity:1;background-color:rgb(56 189 248/var(--tw-bg-opacity,1))}#datafront .bg-sky-400\\/15{background-color:rgba(56,189,248,.15)}#datafront .bg-sky-500{--tw-bg-opacity:1;background-color:rgb(14 165 233/var(--tw-bg-opacity,1))}#datafront .bg-sky-500\\/10{background-color:rgba(14,165,233,.1)}#datafront .bg-sky-500\\/20{background-color:rgba(14,165,233,.2)}#datafront .bg-slate-300{--tw-bg-opacity:1;background-color:rgb(203 213 225/var(--tw-bg-opacity,1))}#datafront .bg-slate-600{--tw-bg-opacity:1;background-color:rgb(71 85 105/var(--tw-bg-opacity,1))}#datafront .bg-slate-600\\/60{background-color:rgba(71,85,105,.6)}#datafront .bg-slate-700{--tw-bg-opacity:1;background-color:rgb(51 65 85/var(--tw-bg-opacity,1))}#datafront .bg-slate-700\\/60{background-color:rgba(51,65,85,.6)}#datafront .bg-slate-800{--tw-bg-opacity:1;background-color:rgb(30 41 59/var(--tw-bg-opacity,1))}#datafront .bg-slate-800\\/50{background-color:rgba(30,41,59,.5)}#datafront .bg-slate-800\\/60{background-color:rgba(30,41,59,.6)}#datafront .bg-slate-800\\/70{background-color:rgba(30,41,59,.7)}#datafront .bg-slate-800\\/80{background-color:rgba(30,41,59,.8)}#datafront .bg-slate-900{--tw-bg-opacity:1;background-color:rgb(15 23 42/var(--tw-bg-opacity,1))}#datafront .bg-slate-900\\/40{background-color:rgba(15,23,42,.4)}#datafront .bg-slate-900\\/70{background-color:rgba(15,23,42,.7)}#datafront .bg-slate-900\\/80{background-color:rgba(15,23,42,.8)}#datafront .bg-slate-900\\/90{background-color:rgba(15,23,42,.9)}#datafront .bg-slate-900\\/95{background-color:rgba(15,23,42,.95)}#datafront .bg-slate-950{--tw-bg-opacity:1;background-color:rgb(2 6 23/var(--tw-bg-opacity,1))}#datafront .bg-slate-950\\/60{background-color:rgba(2,6,23,.6)}#datafront .bg-slate-950\\/70{background-color:rgba(2,6,23,.7)}#datafront .bg-slate-950\\/80{background-color:rgba(2,6,23,.8)}#datafront .bg-slate-950\\/95{background-color:rgba(2,6,23,.95)}#datafront .bg-transparent{background-color:transparent}#datafront .bg-none{background-image:none}#datafront .p-3{padding:.75rem}#datafront .p-4{padding:1rem}#datafront .p-6{padding:1.5rem}#datafront .px-0{padding-left:0;padding-right:0}#datafront .px-1{padding-left:.25rem;padding-right:.25rem}#datafront .px-1\\.5{padding-left:.375rem;padding-right:.375rem}#datafront .px-2{padding-left:.5rem;padding-right:.5rem}#datafront .px-2\\.5{padding-left:.625rem;padding-right:.625rem}#datafront .px-3{padding-left:.75rem;padding-right:.75rem}#datafront .px-4{padding-left:1rem;padding-right:1rem}#datafront .py-0{padding-top:0;padding-bottom:0}#datafront .py-0\\.5{padding-top:.125rem;padding-bottom:.125rem}#datafront .py-1{padding-top:.25rem;padding-bottom:.25rem}#datafront .py-1\\.5{padding-top:.375rem;padding-bottom:.375rem}#datafront .py-2{padding-top:.5rem;padding-bottom:.5rem}#datafront .py-4{padding-top:1rem;padding-bottom:1rem}#datafront .py-8{padding-top:2rem;padding-bottom:2rem}#datafront .pb-3{padding-bottom:.75rem}#datafront .pr-7{padding-right:1.75rem}#datafront .pt-4{padding-top:1rem}#datafront .text-left{text-align:left}#datafront .text-center{text-align:center}#datafront .text-right{text-align:right}#datafront .align-top{vertical-align:top}#datafront .font-mono{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,Liberation Mono,Courier New,monospace}#datafront .text-\\[0\\.65rem\\]{font-size:.65rem}#datafront .text-\\[0\\.6rem\\]{font-size:.6rem}#datafront .text-\\[0\\.75rem\\]{font-size:.75rem}#datafront .text-\\[0\\.7rem\\]{font-size:.7rem}#datafront .text-base{font-size:1rem;line-height:1.5rem}#datafront .text-lg{font-size:1.125rem;line-height:1.75rem}#datafront .text-sm{font-size:.875rem;line-height:1.25rem}#datafront .text-xs{font-size:.75rem;line-height:1rem}#datafront .font-medium{font-weight:500}#datafront .font-semibold{font-weight:600}#datafront .uppercase{text-transform:uppercase}#datafront .capitalize{text-transform:capitalize}#datafront .italic{font-style:italic}#datafront .tracking-wide{letter-spacing:.025em}#datafront .text-amber-200{--tw-text-opacity:1;color:rgb(253 230 138/var(--tw-text-opacity,1))}#datafront .text-amber-300{--tw-text-opacity:1;color:rgb(252 211 77/var(--tw-text-opacity,1))}#datafront .text-emerald-200{--tw-text-opacity:1;color:rgb(167 243 208/var(--tw-text-opacity,1))}#datafront .text-inherit{color:inherit}#datafront .text-rose-200{--tw-text-opacity:1;color:rgb(254 205 211/var(--tw-text-opacity,1))}#datafront .text-rose-400{--tw-text-opacity:1;color:rgb(251 113 133/var(--tw-text-opacity,1))}#datafront .text-sky-100{--tw-text-opacity:1;color:rgb(224 242 254/var(--tw-text-opacity,1))}#datafront .text-sky-200{--tw-text-opacity:1;color:rgb(186 230 253/var(--tw-text-opacity,1))}#datafront .text-sky-300{--tw-text-opacity:1;color:rgb(125 211 252/var(--tw-text-opacity,1))}#datafront .text-sky-400{--tw-text-opacity:1;color:rgb(56 189 248/var(--tw-text-opacity,1))}#datafront .text-slate-100{--tw-text-opacity:1;color:rgb(241 245 249/var(--tw-text-opacity,1))}#datafront .text-slate-200{--tw-text-opacity:1;color:rgb(226 232 240/var(--tw-text-opacity,1))}#datafront .text-slate-300{--tw-text-opacity:1;color:rgb(203 213 225/var(--tw-text-opacity,1))}#datafront .text-slate-400{--tw-text-opacity:1;color:rgb(148 163 184/var(--tw-text-opacity,1))}#datafront .text-slate-50{--tw-text-opacity:1;color:rgb(248 250 252/var(--tw-text-opacity,1))}#datafront .text-slate-500{--tw-text-opacity:1;color:rgb(100 116 139/var(--tw-text-opacity,1))}#datafront .text-white{--tw-text-opacity:1;color:rgb(255 255 255/var(--tw-text-opacity,1))}#datafront .opacity-40{opacity:.4}#datafront .opacity-50{opacity:.5}#datafront .shadow{--tw-shadow:0 1px 3px 0 rgba(0,0,0,.1),0 1px 2px -1px rgba(0,0,0,.1);--tw-shadow-colored:0 1px 3px 0 var(--tw-shadow-color),0 1px 2px -1px var(--tw-shadow-color)}#datafront .shadow,#datafront .shadow-2xl{box-shadow:var(--tw-ring-offset-shadow,0 0 #0000),var(--tw-ring-shadow,0 0 #0000),var(--tw-shadow)}#datafront .shadow-2xl{--tw-shadow:0 25px 50px -12px rgba(0,0,0,.25);--tw-shadow-colored:0 25px 50px -12px var(--tw-shadow-color)}#datafront .shadow-inner{--tw-shadow:inset 0 2px 4px 0 rgba(0,0,0,.05);--tw-shadow-colored:inset 0 2px 4px 0 var(--tw-shadow-color)}#datafront .shadow-inner,#datafront .shadow-xl{box-shadow:var(--tw-ring-offset-shadow,0 0 #0000),var(--tw-ring-shadow,0 0 #0000),var(--tw-shadow)}#datafront .shadow-xl{--tw-shadow:0 20px 25px -5px rgba(0,0,0,.1),0 8px 10px -6px rgba(0,0,0,.1);--tw-shadow-colored:0 20px 25px -5px var(--tw-shadow-color),0 8px 10px -6px var(--tw-shadow-color)}#datafront .ring-0{--tw-ring-offset-shadow:var(--tw-ring-inset) 0 0 0 var(--tw-ring-offset-width) var(--tw-ring-offset-color);--tw-ring-shadow:var(--tw-ring-inset) 0 0 0 calc(var(--tw-ring-offset-width)) var(--tw-ring-color);box-shadow:var(--tw-ring-offset-shadow),var(--tw-ring-shadow),var(--tw-shadow,0 0 #0000)}#datafront .ring-sky-500{--tw-ring-opacity:1;--tw-ring-color:rgb(14 165 233/var(--tw-ring-opacity,1))}#datafront .blur{--tw-blur:blur(8px);filter:var(--tw-blur) var(--tw-brightness) var(--tw-contrast) var(--tw-grayscale) var(--tw-hue-rotate) var(--tw-invert) var(--tw-saturate) var(--tw-sepia) var(--tw-drop-shadow)}#datafront .\\!filter{filter:var(--tw-blur) var(--tw-brightness) var(--tw-contrast) var(--tw-grayscale) var(--tw-hue-rotate) var(--tw-invert) var(--tw-saturate) var(--tw-sepia) var(--tw-drop-shadow)!important}#datafront .filter{filter:var(--tw-blur) var(--tw-brightness) var(--tw-contrast) var(--tw-grayscale) var(--tw-hue-rotate) var(--tw-invert) var(--tw-saturate) var(--tw-sepia) var(--tw-drop-shadow)}#datafront .backdrop-blur{--tw-backdrop-blur:blur(8px)}#datafront .backdrop-blur,#datafront .backdrop-blur-sm{backdrop-filter:var(--tw-backdrop-blur) var(--tw-backdrop-brightness) var(--tw-backdrop-contrast) var(--tw-backdrop-grayscale) var(--tw-backdrop-hue-rotate) var(--tw-backdrop-invert) var(--tw-backdrop-opacity) var(--tw-backdrop-saturate) var(--tw-backdrop-sepia)}#datafront .backdrop-blur-sm{--tw-backdrop-blur:blur(4px)}#datafront .transition{transition-property:color,background-color,border-color,text-decoration-color,fill,stroke,opacity,box-shadow,transform,filter,backdrop-filter;transition-timing-function:cubic-bezier(.4,0,.2,1);transition-duration:.15s}#datafront .transition-colors{transition-property:color,background-color,border-color,text-decoration-color,fill,stroke;transition-timing-function:cubic-bezier(.4,0,.2,1);transition-duration:.15s}#datafront .transition-transform{transition-property:transform;transition-timing-function:cubic-bezier(.4,0,.2,1);transition-duration:.15s}#datafront .duration-150{transition-duration:.15s}#datafront .ease-out{transition-timing-function:cubic-bezier(0,0,.2,1)}#datafront .placeholder\\:text-slate-500::-moz-placeholder{--tw-text-opacity:1;color:rgb(100 116 139/var(--tw-text-opacity,1))}#datafront .placeholder\\:text-slate-500::placeholder{--tw-text-opacity:1;color:rgb(100 116 139/var(--tw-text-opacity,1))}#datafront .last\\:border-r-0:last-child{border-right-width:0}#datafront .hover\\:\\!border-rose-500\\/70:hover{border-color:rgba(244,63,94,.7)!important}#datafront .hover\\:border-rose-500\\/60:hover{border-color:rgba(244,63,94,.6)}#datafront .hover\\:border-sky-500\\/60:hover{border-color:rgba(14,165,233,.6)}#datafront .hover\\:border-sky-500\\/70:hover{border-color:rgba(14,165,233,.7)}#datafront .hover\\:bg-emerald-500\\/50:hover{background-color:rgba(16,185,129,.5)}#datafront .hover\\:bg-rose-500\\/20:hover{background-color:rgba(244,63,94,.2)}#datafront .hover\\:bg-sky-500\\/10:hover{background-color:rgba(14,165,233,.1)}#datafront .hover\\:bg-sky-500\\/20:hover{background-color:rgba(14,165,233,.2)}#datafront .hover\\:bg-sky-500\\/30:hover{background-color:rgba(14,165,233,.3)}#datafront .hover\\:bg-slate-700\\/80:hover{background-color:rgba(51,65,85,.8)}#datafront .hover\\:bg-slate-800\\/40:hover{background-color:rgba(30,41,59,.4)}#datafront .hover\\:bg-slate-800\\/50:hover{background-color:rgba(30,41,59,.5)}#datafront .hover\\:bg-slate-800\\/60:hover{background-color:rgba(30,41,59,.6)}#datafront .hover\\:bg-slate-800\\/70:hover{background-color:rgba(30,41,59,.7)}#datafront .hover\\:bg-slate-800\\/80:hover{background-color:rgba(30,41,59,.8)}#datafront .hover\\:bg-slate-900\\/40:hover{background-color:rgba(15,23,42,.4)}#datafront .hover\\:bg-transparent:hover{background-color:transparent}#datafront .hover\\:\\!text-rose-200:hover{--tw-text-opacity:1!important;color:rgb(254 205 211/var(--tw-text-opacity,1))!important}#datafront .hover\\:text-rose-300:hover{--tw-text-opacity:1;color:rgb(253 164 175/var(--tw-text-opacity,1))}#datafront .hover\\:text-sky-100:hover{--tw-text-opacity:1;color:rgb(224 242 254/var(--tw-text-opacity,1))}#datafront .hover\\:text-sky-200:hover{--tw-text-opacity:1;color:rgb(186 230 253/var(--tw-text-opacity,1))}#datafront .hover\\:text-slate-50:hover{--tw-text-opacity:1;color:rgb(248 250 252/var(--tw-text-opacity,1))}#datafront .focus\\:border-transparent:focus{border-color:transparent}#datafront .focus\\:outline-none:focus{outline:2px solid transparent;outline-offset:2px}#datafront .focus\\:ring-0:focus{--tw-ring-offset-shadow:var(--tw-ring-inset) 0 0 0 var(--tw-ring-offset-width) var(--tw-ring-offset-color);--tw-ring-shadow:var(--tw-ring-inset) 0 0 0 calc(var(--tw-ring-offset-width)) var(--tw-ring-color)}#datafront .focus\\:ring-0:focus,#datafront .focus\\:ring-2:focus{box-shadow:var(--tw-ring-offset-shadow),var(--tw-ring-shadow),var(--tw-shadow,0 0 #0000)}#datafront .focus\\:ring-2:focus{--tw-ring-offset-shadow:var(--tw-ring-inset) 0 0 0 var(--tw-ring-offset-width) var(--tw-ring-offset-color);--tw-ring-shadow:var(--tw-ring-inset) 0 0 0 calc(2px + var(--tw-ring-offset-width)) var(--tw-ring-color)}#datafront .focus\\:ring-sky-500:focus{--tw-ring-opacity:1;--tw-ring-color:rgb(14 165 233/var(--tw-ring-opacity,1))}#datafront .focus\\:ring-sky-500\\/50:focus{--tw-ring-color:rgba(14,165,233,.5)}#datafront .focus\\:ring-sky-500\\/60:focus{--tw-ring-color:rgba(14,165,233,.6)}#datafront .focus\\:ring-sky-500\\/70:focus{--tw-ring-color:rgba(14,165,233,.7)}#datafront .focus-visible\\:ring-2:focus-visible{--tw-ring-offset-shadow:var(--tw-ring-inset) 0 0 0 var(--tw-ring-offset-width) var(--tw-ring-offset-color);--tw-ring-shadow:var(--tw-ring-inset) 0 0 0 calc(2px + var(--tw-ring-offset-width)) var(--tw-ring-color);box-shadow:var(--tw-ring-offset-shadow),var(--tw-ring-shadow),var(--tw-shadow,0 0 #0000)}#datafront .focus-visible\\:ring-sky-500\\/60:focus-visible{--tw-ring-color:rgba(14,165,233,.6)}#datafront :is(.group:hover .group-hover\\:bg-sky-400\\/60){background-color:rgba(56,189,248,.6)}@media (min-width:640px){#datafront .sm\\:grid-cols-3{grid-template-columns:repeat(3,minmax(0,1fr))}}@media (min-width:768px){#datafront .md\\:grid-cols-2{grid-template-columns:repeat(2,minmax(0,1fr))}}`;
+  const datafrontTailwindCss = `#datafront .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border-width:0}#datafront .pointer-events-none{pointer-events:none}#datafront .visible{visibility:visible}#datafront .static{position:static}#datafront .fixed{position:fixed}#datafront .absolute{position:absolute}#datafront .relative{position:relative}#datafront .sticky{position:sticky}#datafront .left-0{left:0}#datafront .left-1{left:.25rem}#datafront .right-0{right:0}#datafront .right-2{right:.5rem}#datafront .top-0{top:0}#datafront .top-1{top:.25rem}#datafront .top-1\\/2{top:50%}#datafront .z-10{z-index:10}#datafront .z-\\[2147483646\\]{z-index:2147483646}#datafront .z-\\[2147483647\\]{z-index:2147483647}#datafront .-mx-px{margin-left:-1px;margin-right:-1px}#datafront .-my-px{margin-top:-1px;margin-bottom:-1px}#datafront .mt-2{margin-top:.5rem}#datafront .mt-3{margin-top:.75rem}#datafront .block{display:block}#datafront .flex{display:flex}#datafront .inline-flex{display:inline-flex}#datafront .\\!table{display:table!important}#datafront .table{display:table}#datafront .grid{display:grid}#datafront .hidden{display:none}#datafront .h-10{height:2.5rem}#datafront .h-12{height:3rem}#datafront .h-2{height:.5rem}#datafront .h-3{height:.75rem}#datafront .h-3\\.5{height:.875rem}#datafront .h-4{height:1rem}#datafront .h-5{height:1.25rem}#datafront .h-6{height:1.5rem}#datafront .h-7{height:1.75rem}#datafront .h-8{height:2rem}#datafront .h-full{height:100%}#datafront .h-px{height:1px}#datafront .min-h-0{min-height:0}#datafront .min-h-\\[220px\\]{min-height:220px}#datafront .min-h-\\[72px\\]{min-height:72px}#datafront .min-h-full{min-height:100%}#datafront .w-10{width:2.5rem}#datafront .w-12{width:3rem}#datafront .w-2{width:.5rem}#datafront .w-3{width:.75rem}#datafront .w-3\\.5{width:.875rem}#datafront .w-32{width:8rem}#datafront .w-36{width:9rem}#datafront .w-4{width:1rem}#datafront .w-40{width:10rem}#datafront .w-44{width:11rem}#datafront .w-48{width:12rem}#datafront .w-5{width:1.25rem}#datafront .w-6{width:1.5rem}#datafront .w-7{width:1.75rem}#datafront .w-full{width:100%}#datafront .w-px{width:1px}#datafront .min-w-0{min-width:0}#datafront .min-w-\\[160px\\]{min-width:160px}#datafront .min-w-\\[200px\\]{min-width:200px}#datafront .min-w-\\[8rem\\]{min-width:8rem}#datafront .min-w-full{min-width:100%}#datafront .max-w-\\[10rem\\]{max-width:10rem}#datafront .max-w-full{max-width:100%}#datafront .max-w-xs{max-width:20rem}#datafront .flex-1{flex:1 1 0%}#datafront .shrink-0{flex-shrink:0}#datafront .border-collapse{border-collapse:collapse}#datafront .-translate-y-1{--tw-translate-y:-0.25rem}#datafront .-translate-y-1,#datafront .-translate-y-1\\/2{transform:translate(var(--tw-translate-x),var(--tw-translate-y)) rotate(var(--tw-rotate)) skewX(var(--tw-skew-x)) skewY(var(--tw-skew-y)) scaleX(var(--tw-scale-x)) scaleY(var(--tw-scale-y))}#datafront .-translate-y-1\\/2{--tw-translate-y:-50%}#datafront .translate-x-full{--tw-translate-x:100%;transform:translate(var(--tw-translate-x),var(--tw-translate-y)) rotate(var(--tw-rotate)) skewX(var(--tw-skew-x)) skewY(var(--tw-skew-y)) scaleX(var(--tw-scale-x)) scaleY(var(--tw-scale-y))}#datafront .\\!transform{transform:translate(var(--tw-translate-x),var(--tw-translate-y)) rotate(var(--tw-rotate)) skewX(var(--tw-skew-x)) skewY(var(--tw-skew-y)) scaleX(var(--tw-scale-x)) scaleY(var(--tw-scale-y))!important}#datafront .transform{transform:translate(var(--tw-translate-x),var(--tw-translate-y)) rotate(var(--tw-rotate)) skewX(var(--tw-skew-x)) skewY(var(--tw-skew-y)) scaleX(var(--tw-scale-x)) scaleY(var(--tw-scale-y))}#datafront .cursor-col-resize{cursor:col-resize}#datafront .cursor-default{cursor:default}#datafront .cursor-not-allowed{cursor:not-allowed}#datafront .cursor-pointer{cursor:pointer}#datafront .cursor-row-resize{cursor:row-resize}#datafront .select-none{-webkit-user-select:none;-moz-user-select:none;user-select:none}#datafront .resize{resize:both}#datafront .appearance-none{-webkit-appearance:none;-moz-appearance:none;appearance:none}#datafront .flex-row{flex-direction:row}#datafront .flex-col{flex-direction:column}#datafront .flex-wrap{flex-wrap:wrap}#datafront .items-start{align-items:flex-start}#datafront .items-end{align-items:flex-end}#datafront .items-center{align-items:center}#datafront .items-baseline{align-items:baseline}#datafront .justify-start{justify-content:flex-start}#datafront .justify-end{justify-content:flex-end}#datafront .justify-center{justify-content:center}#datafront .justify-between{justify-content:space-between}#datafront .gap-1{gap:.25rem}#datafront .gap-2{gap:.5rem}#datafront .gap-3{gap:.75rem}#datafront .gap-4{gap:1rem}#datafront .gap-6{gap:1.5rem}#datafront :is(.space-y-1>:not([hidden])~:not([hidden])){--tw-space-y-reverse:0;margin-top:calc(.25rem*(1 - var(--tw-space-y-reverse)));margin-bottom:calc(.25rem*var(--tw-space-y-reverse))}#datafront :is(.space-y-2>:not([hidden])~:not([hidden])){--tw-space-y-reverse:0;margin-top:calc(.5rem*(1 - var(--tw-space-y-reverse)));margin-bottom:calc(.5rem*var(--tw-space-y-reverse))}#datafront :is(.space-y-3>:not([hidden])~:not([hidden])){--tw-space-y-reverse:0;margin-top:calc(.75rem*(1 - var(--tw-space-y-reverse)));margin-bottom:calc(.75rem*var(--tw-space-y-reverse))}#datafront :is(.space-y-4>:not([hidden])~:not([hidden])){--tw-space-y-reverse:0;margin-top:calc(1rem*(1 - var(--tw-space-y-reverse)));margin-bottom:calc(1rem*var(--tw-space-y-reverse))}#datafront .overflow-auto{overflow:auto}#datafront .overflow-hidden{overflow:hidden}#datafront .overflow-x-auto{overflow-x:auto}#datafront .overflow-y-hidden{overflow-y:hidden}#datafront .truncate{overflow:hidden;text-overflow:ellipsis}#datafront .truncate,#datafront .whitespace-nowrap{white-space:nowrap}#datafront .whitespace-pre-wrap{white-space:pre-wrap}#datafront .break-words{overflow-wrap:break-word}#datafront .rounded{border-radius:.25rem}#datafront .rounded-full{border-radius:9999px}#datafront .rounded-lg{border-radius:.5rem}#datafront .rounded-md{border-radius:.375rem}#datafront .rounded-sm{border-radius:.125rem}#datafront .rounded-r-full{border-top-right-radius:9999px;border-bottom-right-radius:9999px}#datafront .border{border-width:1px}#datafront .border-b{border-bottom-width:1px}#datafront .border-r{border-right-width:1px}#datafront .border-t{border-top-width:1px}#datafront .border-none{border-style:none}#datafront .\\!border-rose-500{--tw-border-opacity:1!important;border-color:rgb(244 63 94/var(--tw-border-opacity,1))!important}#datafront .border-amber-400{--tw-border-opacity:1;border-color:rgb(251 191 36/var(--tw-border-opacity,1))}#datafront .border-amber-400\\/40{border-color:rgba(251,191,36,.4)}#datafront .border-emerald-400{--tw-border-opacity:1;border-color:rgb(52 211 153/var(--tw-border-opacity,1))}#datafront .border-emerald-400\\/60{border-color:rgba(52,211,153,.6)}#datafront .border-rose-500{--tw-border-opacity:1;border-color:rgb(244 63 94/var(--tw-border-opacity,1))}#datafront .border-rose-500\\/40{border-color:rgba(244,63,94,.4)}#datafront .border-rose-500\\/50{border-color:rgba(244,63,94,.5)}#datafront .border-sky-400{--tw-border-opacity:1;border-color:rgb(56 189 248/var(--tw-border-opacity,1))}#datafront .border-sky-400\\/40{border-color:rgba(56,189,248,.4)}#datafront .border-sky-500{--tw-border-opacity:1;border-color:rgb(14 165 233/var(--tw-border-opacity,1))}#datafront .border-sky-500\\/40{border-color:rgba(14,165,233,.4)}#datafront .border-sky-500\\/50{border-color:rgba(14,165,233,.5)}#datafront .border-sky-500\\/60{border-color:rgba(14,165,233,.6)}#datafront .border-sky-500\\/70{border-color:rgba(14,165,233,.7)}#datafront .border-slate-600{--tw-border-opacity:1;border-color:rgb(71 85 105/var(--tw-border-opacity,1))}#datafront .border-slate-600\\/50{border-color:rgba(71,85,105,.5)}#datafront .border-slate-700{--tw-border-opacity:1;border-color:rgb(51 65 85/var(--tw-border-opacity,1))}#datafront .border-slate-700\\/70{border-color:rgba(51,65,85,.7)}#datafront .border-slate-700\\/80{border-color:rgba(51,65,85,.8)}#datafront .border-slate-800{--tw-border-opacity:1;border-color:rgb(30 41 59/var(--tw-border-opacity,1))}#datafront .border-slate-800\\/60{border-color:rgba(30,41,59,.6)}#datafront .border-slate-800\\/70{border-color:rgba(30,41,59,.7)}#datafront .border-slate-800\\/80{border-color:rgba(30,41,59,.8)}#datafront .border-slate-900{--tw-border-opacity:1;border-color:rgb(15 23 42/var(--tw-border-opacity,1))}#datafront .border-slate-900\\/70{border-color:rgba(15,23,42,.7)}#datafront .border-slate-900\\/80{border-color:rgba(15,23,42,.8)}#datafront .bg-amber-400{--tw-bg-opacity:1;background-color:rgb(251 191 36/var(--tw-bg-opacity,1))}#datafront .bg-amber-400\\/15{background-color:rgba(251,191,36,.15)}#datafront .bg-amber-500{--tw-bg-opacity:1;background-color:rgb(245 158 11/var(--tw-bg-opacity,1))}#datafront .bg-amber-500\\/20{background-color:rgba(245,158,11,.2)}#datafront .bg-emerald-100{--tw-bg-opacity:1;background-color:rgb(209 250 229/var(--tw-bg-opacity,1))}#datafront .bg-emerald-500{--tw-bg-opacity:1;background-color:rgb(16 185 129/var(--tw-bg-opacity,1))}#datafront .bg-emerald-500\\/20{background-color:rgba(16,185,129,.2)}#datafront .bg-emerald-500\\/40{background-color:rgba(16,185,129,.4)}#datafront .bg-red-500{--tw-bg-opacity:1;background-color:rgb(239 68 68/var(--tw-bg-opacity,1))}#datafront .bg-rose-500{--tw-bg-opacity:1;background-color:rgb(244 63 94/var(--tw-bg-opacity,1))}#datafront .bg-rose-500\\/10{background-color:rgba(244,63,94,.1)}#datafront .bg-rose-500\\/15{background-color:rgba(244,63,94,.15)}#datafront .bg-rose-500\\/20{background-color:rgba(244,63,94,.2)}#datafront .bg-sky-400{--tw-bg-opacity:1;background-color:rgb(56 189 248/var(--tw-bg-opacity,1))}#datafront .bg-sky-400\\/15{background-color:rgba(56,189,248,.15)}#datafront .bg-sky-500{--tw-bg-opacity:1;background-color:rgb(14 165 233/var(--tw-bg-opacity,1))}#datafront .bg-sky-500\\/10{background-color:rgba(14,165,233,.1)}#datafront .bg-sky-500\\/20{background-color:rgba(14,165,233,.2)}#datafront .bg-slate-300{--tw-bg-opacity:1;background-color:rgb(203 213 225/var(--tw-bg-opacity,1))}#datafront .bg-slate-600{--tw-bg-opacity:1;background-color:rgb(71 85 105/var(--tw-bg-opacity,1))}#datafront .bg-slate-600\\/60{background-color:rgba(71,85,105,.6)}#datafront .bg-slate-700{--tw-bg-opacity:1;background-color:rgb(51 65 85/var(--tw-bg-opacity,1))}#datafront .bg-slate-700\\/60{background-color:rgba(51,65,85,.6)}#datafront .bg-slate-800{--tw-bg-opacity:1;background-color:rgb(30 41 59/var(--tw-bg-opacity,1))}#datafront .bg-slate-800\\/50{background-color:rgba(30,41,59,.5)}#datafront .bg-slate-800\\/60{background-color:rgba(30,41,59,.6)}#datafront .bg-slate-800\\/70{background-color:rgba(30,41,59,.7)}#datafront .bg-slate-800\\/80{background-color:rgba(30,41,59,.8)}#datafront .bg-slate-900{--tw-bg-opacity:1;background-color:rgb(15 23 42/var(--tw-bg-opacity,1))}#datafront .bg-slate-900\\/40{background-color:rgba(15,23,42,.4)}#datafront .bg-slate-900\\/70{background-color:rgba(15,23,42,.7)}#datafront .bg-slate-900\\/80{background-color:rgba(15,23,42,.8)}#datafront .bg-slate-900\\/90{background-color:rgba(15,23,42,.9)}#datafront .bg-slate-900\\/95{background-color:rgba(15,23,42,.95)}#datafront .bg-slate-950{--tw-bg-opacity:1;background-color:rgb(2 6 23/var(--tw-bg-opacity,1))}#datafront .bg-slate-950\\/40{background-color:rgba(2,6,23,.4)}#datafront .bg-slate-950\\/60{background-color:rgba(2,6,23,.6)}#datafront .bg-slate-950\\/70{background-color:rgba(2,6,23,.7)}#datafront .bg-slate-950\\/80{background-color:rgba(2,6,23,.8)}#datafront .bg-slate-950\\/95{background-color:rgba(2,6,23,.95)}#datafront .bg-transparent{background-color:transparent}#datafront .bg-none{background-image:none}#datafront .p-3{padding:.75rem}#datafront .p-4{padding:1rem}#datafront .p-6{padding:1.5rem}#datafront .px-0{padding-left:0;padding-right:0}#datafront .px-1{padding-left:.25rem;padding-right:.25rem}#datafront .px-1\\.5{padding-left:.375rem;padding-right:.375rem}#datafront .px-2{padding-left:.5rem;padding-right:.5rem}#datafront .px-2\\.5{padding-left:.625rem;padding-right:.625rem}#datafront .px-3{padding-left:.75rem;padding-right:.75rem}#datafront .px-4{padding-left:1rem;padding-right:1rem}#datafront .py-0{padding-top:0;padding-bottom:0}#datafront .py-0\\.5{padding-top:.125rem;padding-bottom:.125rem}#datafront .py-1{padding-top:.25rem;padding-bottom:.25rem}#datafront .py-1\\.5{padding-top:.375rem;padding-bottom:.375rem}#datafront .py-2{padding-top:.5rem;padding-bottom:.5rem}#datafront .py-4{padding-top:1rem;padding-bottom:1rem}#datafront .py-8{padding-top:2rem;padding-bottom:2rem}#datafront .pb-3{padding-bottom:.75rem}#datafront .pr-7{padding-right:1.75rem}#datafront .pt-4{padding-top:1rem}#datafront .text-left{text-align:left}#datafront .text-center{text-align:center}#datafront .text-right{text-align:right}#datafront .align-top{vertical-align:top}#datafront .font-mono{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,Liberation Mono,Courier New,monospace}#datafront .text-\\[0\\.65rem\\]{font-size:.65rem}#datafront .text-\\[0\\.6rem\\]{font-size:.6rem}#datafront .text-\\[0\\.75rem\\]{font-size:.75rem}#datafront .text-\\[0\\.7rem\\]{font-size:.7rem}#datafront .text-base{font-size:1rem;line-height:1.5rem}#datafront .text-lg{font-size:1.125rem;line-height:1.75rem}#datafront .text-sm{font-size:.875rem;line-height:1.25rem}#datafront .text-xs{font-size:.75rem;line-height:1rem}#datafront .font-medium{font-weight:500}#datafront .font-semibold{font-weight:600}#datafront .uppercase{text-transform:uppercase}#datafront .capitalize{text-transform:capitalize}#datafront .italic{font-style:italic}#datafront .leading-none{line-height:1}#datafront .tracking-wide{letter-spacing:.025em}#datafront .text-amber-200{--tw-text-opacity:1;color:rgb(253 230 138/var(--tw-text-opacity,1))}#datafront .text-amber-300{--tw-text-opacity:1;color:rgb(252 211 77/var(--tw-text-opacity,1))}#datafront .text-emerald-200{--tw-text-opacity:1;color:rgb(167 243 208/var(--tw-text-opacity,1))}#datafront .text-inherit{color:inherit}#datafront .text-rose-200{--tw-text-opacity:1;color:rgb(254 205 211/var(--tw-text-opacity,1))}#datafront .text-rose-400{--tw-text-opacity:1;color:rgb(251 113 133/var(--tw-text-opacity,1))}#datafront .text-sky-100{--tw-text-opacity:1;color:rgb(224 242 254/var(--tw-text-opacity,1))}#datafront .text-sky-200{--tw-text-opacity:1;color:rgb(186 230 253/var(--tw-text-opacity,1))}#datafront .text-sky-300{--tw-text-opacity:1;color:rgb(125 211 252/var(--tw-text-opacity,1))}#datafront .text-sky-400{--tw-text-opacity:1;color:rgb(56 189 248/var(--tw-text-opacity,1))}#datafront .text-slate-100{--tw-text-opacity:1;color:rgb(241 245 249/var(--tw-text-opacity,1))}#datafront .text-slate-200{--tw-text-opacity:1;color:rgb(226 232 240/var(--tw-text-opacity,1))}#datafront .text-slate-300{--tw-text-opacity:1;color:rgb(203 213 225/var(--tw-text-opacity,1))}#datafront .text-slate-400{--tw-text-opacity:1;color:rgb(148 163 184/var(--tw-text-opacity,1))}#datafront .text-slate-50{--tw-text-opacity:1;color:rgb(248 250 252/var(--tw-text-opacity,1))}#datafront .text-slate-500{--tw-text-opacity:1;color:rgb(100 116 139/var(--tw-text-opacity,1))}#datafront .text-white{--tw-text-opacity:1;color:rgb(255 255 255/var(--tw-text-opacity,1))}#datafront .opacity-40{opacity:.4}#datafront .opacity-50{opacity:.5}#datafront .shadow{--tw-shadow:0 1px 3px 0 rgba(0,0,0,.1),0 1px 2px -1px rgba(0,0,0,.1);--tw-shadow-colored:0 1px 3px 0 var(--tw-shadow-color),0 1px 2px -1px var(--tw-shadow-color)}#datafront .shadow,#datafront .shadow-2xl{box-shadow:var(--tw-ring-offset-shadow,0 0 #0000),var(--tw-ring-shadow,0 0 #0000),var(--tw-shadow)}#datafront .shadow-2xl{--tw-shadow:0 25px 50px -12px rgba(0,0,0,.25);--tw-shadow-colored:0 25px 50px -12px var(--tw-shadow-color)}#datafront .shadow-inner{--tw-shadow:inset 0 2px 4px 0 rgba(0,0,0,.05);--tw-shadow-colored:inset 0 2px 4px 0 var(--tw-shadow-color)}#datafront .shadow-inner,#datafront .shadow-xl{box-shadow:var(--tw-ring-offset-shadow,0 0 #0000),var(--tw-ring-shadow,0 0 #0000),var(--tw-shadow)}#datafront .shadow-xl{--tw-shadow:0 20px 25px -5px rgba(0,0,0,.1),0 8px 10px -6px rgba(0,0,0,.1);--tw-shadow-colored:0 20px 25px -5px var(--tw-shadow-color),0 8px 10px -6px var(--tw-shadow-color)}#datafront .ring-0{--tw-ring-offset-shadow:var(--tw-ring-inset) 0 0 0 var(--tw-ring-offset-width) var(--tw-ring-offset-color);--tw-ring-shadow:var(--tw-ring-inset) 0 0 0 calc(var(--tw-ring-offset-width)) var(--tw-ring-color);box-shadow:var(--tw-ring-offset-shadow),var(--tw-ring-shadow),var(--tw-shadow,0 0 #0000)}#datafront .ring-sky-500{--tw-ring-opacity:1;--tw-ring-color:rgb(14 165 233/var(--tw-ring-opacity,1))}#datafront .blur{--tw-blur:blur(8px);filter:var(--tw-blur) var(--tw-brightness) var(--tw-contrast) var(--tw-grayscale) var(--tw-hue-rotate) var(--tw-invert) var(--tw-saturate) var(--tw-sepia) var(--tw-drop-shadow)}#datafront .\\!filter{filter:var(--tw-blur) var(--tw-brightness) var(--tw-contrast) var(--tw-grayscale) var(--tw-hue-rotate) var(--tw-invert) var(--tw-saturate) var(--tw-sepia) var(--tw-drop-shadow)!important}#datafront .filter{filter:var(--tw-blur) var(--tw-brightness) var(--tw-contrast) var(--tw-grayscale) var(--tw-hue-rotate) var(--tw-invert) var(--tw-saturate) var(--tw-sepia) var(--tw-drop-shadow)}#datafront .backdrop-blur{--tw-backdrop-blur:blur(8px)}#datafront .backdrop-blur,#datafront .backdrop-blur-sm{backdrop-filter:var(--tw-backdrop-blur) var(--tw-backdrop-brightness) var(--tw-backdrop-contrast) var(--tw-backdrop-grayscale) var(--tw-backdrop-hue-rotate) var(--tw-backdrop-invert) var(--tw-backdrop-opacity) var(--tw-backdrop-saturate) var(--tw-backdrop-sepia)}#datafront .backdrop-blur-sm{--tw-backdrop-blur:blur(4px)}#datafront .transition{transition-property:color,background-color,border-color,text-decoration-color,fill,stroke,opacity,box-shadow,transform,filter,backdrop-filter;transition-timing-function:cubic-bezier(.4,0,.2,1);transition-duration:.15s}#datafront .transition-colors{transition-property:color,background-color,border-color,text-decoration-color,fill,stroke;transition-timing-function:cubic-bezier(.4,0,.2,1);transition-duration:.15s}#datafront .transition-transform{transition-property:transform;transition-timing-function:cubic-bezier(.4,0,.2,1);transition-duration:.15s}#datafront .duration-150{transition-duration:.15s}#datafront .ease-out{transition-timing-function:cubic-bezier(0,0,.2,1)}#datafront .placeholder\\:text-slate-500::-moz-placeholder{--tw-text-opacity:1;color:rgb(100 116 139/var(--tw-text-opacity,1))}#datafront .placeholder\\:text-slate-500::placeholder{--tw-text-opacity:1;color:rgb(100 116 139/var(--tw-text-opacity,1))}#datafront .last\\:border-r-0:last-child{border-right-width:0}#datafront .hover\\:\\!border-rose-500\\/70:hover{border-color:rgba(244,63,94,.7)!important}#datafront .hover\\:border-rose-500\\/60:hover{border-color:rgba(244,63,94,.6)}#datafront .hover\\:border-sky-500\\/60:hover{border-color:rgba(14,165,233,.6)}#datafront .hover\\:border-sky-500\\/70:hover{border-color:rgba(14,165,233,.7)}#datafront .hover\\:bg-emerald-500\\/50:hover{background-color:rgba(16,185,129,.5)}#datafront .hover\\:bg-rose-500\\/20:hover{background-color:rgba(244,63,94,.2)}#datafront .hover\\:bg-sky-500\\/10:hover{background-color:rgba(14,165,233,.1)}#datafront .hover\\:bg-sky-500\\/20:hover{background-color:rgba(14,165,233,.2)}#datafront .hover\\:bg-sky-500\\/30:hover{background-color:rgba(14,165,233,.3)}#datafront .hover\\:bg-slate-700\\/80:hover{background-color:rgba(51,65,85,.8)}#datafront .hover\\:bg-slate-800\\/40:hover{background-color:rgba(30,41,59,.4)}#datafront .hover\\:bg-slate-800\\/50:hover{background-color:rgba(30,41,59,.5)}#datafront .hover\\:bg-slate-800\\/60:hover{background-color:rgba(30,41,59,.6)}#datafront .hover\\:bg-slate-800\\/70:hover{background-color:rgba(30,41,59,.7)}#datafront .hover\\:bg-slate-800\\/80:hover{background-color:rgba(30,41,59,.8)}#datafront .hover\\:bg-slate-900\\/40:hover{background-color:rgba(15,23,42,.4)}#datafront .hover\\:bg-transparent:hover{background-color:transparent}#datafront .hover\\:\\!text-rose-200:hover{--tw-text-opacity:1!important;color:rgb(254 205 211/var(--tw-text-opacity,1))!important}#datafront .hover\\:text-rose-300:hover{--tw-text-opacity:1;color:rgb(253 164 175/var(--tw-text-opacity,1))}#datafront .hover\\:text-sky-100:hover{--tw-text-opacity:1;color:rgb(224 242 254/var(--tw-text-opacity,1))}#datafront .hover\\:text-sky-200:hover{--tw-text-opacity:1;color:rgb(186 230 253/var(--tw-text-opacity,1))}#datafront .hover\\:text-slate-50:hover{--tw-text-opacity:1;color:rgb(248 250 252/var(--tw-text-opacity,1))}#datafront .focus\\:border-transparent:focus{border-color:transparent}#datafront .focus\\:outline-none:focus{outline:2px solid transparent;outline-offset:2px}#datafront .focus\\:ring-0:focus{--tw-ring-offset-shadow:var(--tw-ring-inset) 0 0 0 var(--tw-ring-offset-width) var(--tw-ring-offset-color);--tw-ring-shadow:var(--tw-ring-inset) 0 0 0 calc(var(--tw-ring-offset-width)) var(--tw-ring-color)}#datafront .focus\\:ring-0:focus,#datafront .focus\\:ring-2:focus{box-shadow:var(--tw-ring-offset-shadow),var(--tw-ring-shadow),var(--tw-shadow,0 0 #0000)}#datafront .focus\\:ring-2:focus{--tw-ring-offset-shadow:var(--tw-ring-inset) 0 0 0 var(--tw-ring-offset-width) var(--tw-ring-offset-color);--tw-ring-shadow:var(--tw-ring-inset) 0 0 0 calc(2px + var(--tw-ring-offset-width)) var(--tw-ring-color)}#datafront .focus\\:ring-sky-500:focus{--tw-ring-opacity:1;--tw-ring-color:rgb(14 165 233/var(--tw-ring-opacity,1))}#datafront .focus\\:ring-sky-500\\/50:focus{--tw-ring-color:rgba(14,165,233,.5)}#datafront .focus\\:ring-sky-500\\/60:focus{--tw-ring-color:rgba(14,165,233,.6)}#datafront .focus\\:ring-sky-500\\/70:focus{--tw-ring-color:rgba(14,165,233,.7)}#datafront .focus-visible\\:ring-2:focus-visible{--tw-ring-offset-shadow:var(--tw-ring-inset) 0 0 0 var(--tw-ring-offset-width) var(--tw-ring-offset-color);--tw-ring-shadow:var(--tw-ring-inset) 0 0 0 calc(2px + var(--tw-ring-offset-width)) var(--tw-ring-color);box-shadow:var(--tw-ring-offset-shadow),var(--tw-ring-shadow),var(--tw-shadow,0 0 #0000)}#datafront .focus-visible\\:ring-sky-500\\/60:focus-visible{--tw-ring-color:rgba(14,165,233,.6)}#datafront :is(.group:hover .group-hover\\:bg-sky-400\\/60){background-color:rgba(56,189,248,.6)}@media (min-width:640px){#datafront .sm\\:grid-cols-3{grid-template-columns:repeat(3,minmax(0,1fr))}}@media (min-width:768px){#datafront .md\\:grid-cols-2{grid-template-columns:repeat(2,minmax(0,1fr))}}`;
 
   function createSessionId() {
       if (typeof crypto !== "undefined" &&

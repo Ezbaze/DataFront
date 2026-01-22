@@ -49,7 +49,7 @@ const VIEW_OPTIONS: { value: ViewType; label: string }[] = [
 ];
 
 const PANEL_ACTION_BUTTON_BASE_CLASS = [
-  "flex h-7 w-7 items-center justify-center",
+  "flex h-7 w-7 shrink-0 items-center justify-center",
   "rounded-md border border-slate-700/70",
   "bg-slate-800/70 text-slate-300 transition-colors",
   "hover:border-sky-500/60 hover:text-sky-200",
@@ -93,7 +93,14 @@ function ensureSidebarStyles(targetDocument: Document): void {
       background-color: transparent;
     }`,
     )
-    .join("\n");
+    .join("\n").concat(`
+    #${SIDEBAR_ID} .df-header-controls {
+      scrollbar-width: none;
+      -ms-overflow-style: none;
+    }
+    #${SIDEBAR_ID} .df-header-controls::-webkit-scrollbar {
+      display: none;
+    }`);
 
   targetDocument.head.appendChild(nextStyle);
 }
@@ -971,180 +978,305 @@ export class SidebarApp {
     }
   }
 
-  private getFilteredSnapshot(view: ViewType): GameSnapshot {
-    const filter = this.searchFilter.trim().toLowerCase();
-    if (!filter) {
-      return this.snapshot;
+  private isViewSearchSupported(view: ViewType): boolean {
+    return (
+      view === "players" ||
+      view === "clanmates" ||
+      view === "teams" ||
+      view === "attacks" ||
+      view === "ships" ||
+      view === "logs" ||
+      view === "actions" ||
+      view === "runningActions"
+    );
+  }
+
+  private updateLeafSearchFilter(leaf: PanelLeafNode, next: string): void {
+    const current = leaf.viewSearchFilters[leaf.view] ?? "";
+    if (current === next) {
+      return;
+    }
+    leaf.viewSearchFilters[leaf.view] = next;
+    this.refreshLeafContent(leaf);
+  }
+
+  private handleLeafSearchInput(leaf: PanelLeafNode, raw: string): void {
+    this.runWithUiContext(() => {
+      const hasContent = raw.trim().length >= 1;
+      this.updateLeafSearchFilter(leaf, hasContent ? raw : "");
+    });
+  }
+
+  private handleLeafSearchSubmit(leaf: PanelLeafNode, raw: string): void {
+    this.runWithUiContext(() => {
+      if (!raw.trim()) {
+        return;
+      }
+      this.updateLeafSearchFilter(leaf, raw);
+      const coordinates = this.parseCoordinates(raw.trim());
+      if (coordinates) {
+        focusTile(coordinates);
+      }
+    });
+  }
+
+  private toggleLeafSearchEnabled(leaf: PanelLeafNode): void {
+    const view = leaf.view;
+    const supportsSearch = this.isViewSearchSupported(view);
+    if (!supportsSearch) {
+      return;
     }
 
-    const compiledQuery = compileSearchQuery(filter);
-    const useSimpleSearch = !compiledQuery.ok;
-    const ast = compiledQuery.ok ? compiledQuery.ast : null;
+    const nextEnabled = !(leaf.viewSearchEnabled[view] ?? false);
+    leaf.viewSearchEnabled[view] = nextEnabled;
 
-    const matchesPlayer = (player: PlayerRecord): boolean => {
-      const fields = [
-        player.name,
-        player.id,
-        player.team ?? "",
-        player.clan ? `[${player.clan}]` : "",
-      ];
-      return fields.some((field) =>
-        field.toString().toLowerCase().includes(filter),
-      );
+    if (!nextEnabled) {
+      leaf.viewSearchFilters[view] = "";
+    }
+
+    this.refreshLeafContent(leaf);
+
+    if (nextEnabled) {
+      this.uiWindow.setTimeout(() => {
+        leaf.element?.viewSearchInput?.focus();
+        leaf.element?.viewSearchInput?.select();
+      }, 0);
+    }
+  }
+
+  private ensureLeafViewSearchElements(leaf: PanelLeafNode): {
+    wrapper: HTMLDivElement;
+    input: HTMLInputElement;
+  } {
+    const element = leaf.element;
+    if (!element) {
+      throw new Error("Leaf UI not initialized");
+    }
+
+    if (element.viewSearchWrapper && element.viewSearchInput) {
+      return {
+        wrapper: element.viewSearchWrapper,
+        input: element.viewSearchInput,
+      };
+    }
+
+    const wrapper = this.createUiElement(
+      "div",
+      "border-b border-slate-800/70 bg-slate-950/40 px-2 py-2",
+    );
+    const input = this.createUiElement(
+      "input",
+      "h-8 w-full rounded-md border border-slate-800/70 bg-slate-900/70 px-2 text-xs leading-none text-slate-100 shadow-inner placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500/50",
+    );
+    input.type = "search";
+    input.autocomplete = "off";
+    input.placeholder = "Search view...";
+    input.addEventListener("input", () =>
+      this.handleLeafSearchInput(leaf, input.value),
+    );
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        this.handleLeafSearchSubmit(leaf, input.value);
+      } else if (event.key === "Escape") {
+        event.preventDefault();
+        leaf.viewSearchEnabled[leaf.view] = false;
+        leaf.viewSearchFilters[leaf.view] = "";
+        this.refreshLeafContent(leaf);
+      }
+    });
+    wrapper.appendChild(input);
+    element.viewSearchWrapper = wrapper;
+    element.viewSearchInput = input;
+    return { wrapper, input };
+  }
+
+  private getFilteredSnapshot(
+    view: ViewType,
+    viewSearchFilter: string,
+    globalSearchFilter: string,
+  ): GameSnapshot {
+    const applyFilter = (
+      source: GameSnapshot,
+      searchFilter: string,
+    ): GameSnapshot => {
+      const filter = searchFilter.trim().toLowerCase();
+      if (!filter) {
+        return source;
+      }
+
+      const compiledQuery = compileSearchQuery(filter);
+      const useSimpleSearch = !compiledQuery.ok;
+      const ast = compiledQuery.ok ? compiledQuery.ast : null;
+
+      const matchesPlayer = (player: PlayerRecord): boolean => {
+        const fields = [
+          player.name,
+          player.id,
+          player.team ?? "",
+          player.clan ? `[${player.clan}]` : "",
+        ];
+        return fields.some((field) =>
+          field.toString().toLowerCase().includes(filter),
+        );
+      };
+
+      if (view === "clanmates" || view === "teams") {
+        return source;
+      }
+
+      if (view === "attacks") {
+        const players = source.players.map((player) => {
+          const outgoingAttacks = player.outgoingAttacks.filter((attack) => {
+            if (useSimpleSearch) {
+              const fields = [
+                attack.id,
+                player.name,
+                attack.target,
+                attack.troops.toString(),
+              ];
+              return fields.some((field) =>
+                `${field ?? ""}`.toLowerCase().includes(filter),
+              );
+            }
+            return matchesSearchQuery(ast!, {
+              kind: "attack",
+              attack: {
+                id: attack.id,
+                attacker: player.name,
+                target: attack.target,
+                troops: attack.troops,
+              },
+            });
+          });
+          return { ...player, outgoingAttacks };
+        });
+
+        return { ...source, players };
+      }
+
+      if (view === "players") {
+        const players = useSimpleSearch
+          ? source.players.filter(matchesPlayer)
+          : source.players.filter((player) =>
+              matchesSearchQuery(ast!, { kind: "player", player }),
+            );
+        return { ...source, players };
+      }
+
+      if (view === "ships") {
+        const ships = useSimpleSearch
+          ? source.ships.filter((ship) => {
+              const computedStatus = ship.retreating
+                ? "Retreating"
+                : ship.reachedTarget
+                  ? "Arrived"
+                  : ship.destination
+                    ? "En route"
+                    : "Unknown";
+              const fields = [
+                `${ship.type} #${ship.id}`,
+                ship.ownerName,
+                ship.type,
+                computedStatus,
+                ship.origin ? `${ship.origin.x},${ship.origin.y}` : "",
+                ship.destination
+                  ? `${ship.destination.x},${ship.destination.y}`
+                  : "",
+              ];
+              return fields.some((field) =>
+                `${field ?? ""}`.toLowerCase().includes(filter),
+              );
+            })
+          : source.ships.filter((ship) =>
+              matchesSearchQuery(ast!, { kind: "ship", ship }),
+            );
+        return { ...source, ships };
+      }
+
+      if (view === "logs") {
+        const sidebarLogs =
+          source.sidebarLogs?.filter((entry) => {
+            if (!useSimpleSearch) {
+              return matchesSearchQuery(ast!, { kind: "log", entry });
+            }
+            const message = entry.message?.toLowerCase() ?? "";
+            const logSource = entry.source?.toLowerCase() ?? "";
+            const level = entry.level?.toLowerCase() ?? "";
+            const tokenText = (entry.tokens ?? [])
+              .map((token) =>
+                token.type === "text" ? token.text : (token.label ?? ""),
+              )
+              .join(" ")
+              .toLowerCase();
+            return (
+              message.includes(filter) ||
+              logSource.includes(filter) ||
+              level.includes(filter) ||
+              tokenText.includes(filter)
+            );
+          }) ?? [];
+        return { ...source, sidebarLogs };
+      }
+
+      if (view === "actions") {
+        const state = source.sidebarActions;
+        if (!state) {
+          return source;
+        }
+        const filteredActions = useSimpleSearch
+          ? state.actions.filter((action) => {
+              const description = action.description?.toLowerCase() ?? "";
+              return (
+                action.name.toLowerCase().includes(filter) ||
+                description.includes(filter)
+              );
+            })
+          : state.actions.filter((action) =>
+              matchesSearchQuery(ast!, { kind: "action", action }),
+            );
+        const filteredRunning = useSimpleSearch
+          ? state.running.filter((run) => {
+              const fields = [run.name, run.status, run.runMode];
+              return fields.some((field) =>
+                `${field ?? ""}`.toLowerCase().includes(filter),
+              );
+            })
+          : state.running.filter((run) =>
+              matchesSearchQuery(ast!, { kind: "runningAction", run }),
+            );
+        const sidebarActions = {
+          ...state,
+          actions: filteredActions,
+          running: filteredRunning,
+        };
+        return { ...source, sidebarActions };
+      }
+
+      if (view === "runningActions") {
+        const state = source.sidebarActions;
+        if (!state) {
+          return source;
+        }
+        const filteredRunning = useSimpleSearch
+          ? state.running.filter((run) => {
+              const fields = [run.name, run.status, run.runMode];
+              return fields.some((field) =>
+                field.toString().toLowerCase().includes(filter),
+              );
+            })
+          : state.running.filter((run) =>
+              matchesSearchQuery(ast!, { kind: "runningAction", run }),
+            );
+        const sidebarActions = { ...state, running: filteredRunning };
+        return { ...source, sidebarActions };
+      }
+
+      return source;
     };
 
-    if (view === "clanmates" || view === "teams") {
-      return this.snapshot;
-    }
-
-    if (view === "attacks") {
-      const players = this.snapshot.players.map((player) => {
-        const outgoingAttacks = player.outgoingAttacks.filter((attack) => {
-          if (useSimpleSearch) {
-            const fields = [
-              attack.id,
-              player.name,
-              attack.target,
-              attack.troops.toString(),
-            ];
-            return fields.some((field) =>
-              `${field ?? ""}`.toLowerCase().includes(filter),
-            );
-          }
-          return matchesSearchQuery(ast!, {
-            kind: "attack",
-            attack: {
-              id: attack.id,
-              attacker: player.name,
-              target: attack.target,
-              troops: attack.troops,
-            },
-          });
-        });
-        return { ...player, outgoingAttacks };
-      });
-
-      return { ...this.snapshot, players };
-    }
-
-    if (view === "players") {
-      const players = useSimpleSearch
-        ? this.snapshot.players.filter(matchesPlayer)
-        : this.snapshot.players.filter((player) =>
-            matchesSearchQuery(ast!, { kind: "player", player }),
-          );
-      return { ...this.snapshot, players };
-    }
-
-    if (view === "ships") {
-      const ships = useSimpleSearch
-        ? this.snapshot.ships.filter((ship) => {
-            const computedStatus = ship.retreating
-              ? "Retreating"
-              : ship.reachedTarget
-                ? "Arrived"
-                : ship.destination
-                  ? "En route"
-                  : "Unknown";
-            const fields = [
-              `${ship.type} #${ship.id}`,
-              ship.ownerName,
-              ship.type,
-              computedStatus,
-              ship.origin ? `${ship.origin.x},${ship.origin.y}` : "",
-              ship.destination
-                ? `${ship.destination.x},${ship.destination.y}`
-                : "",
-            ];
-            return fields.some((field) =>
-              `${field ?? ""}`.toLowerCase().includes(filter),
-            );
-          })
-        : this.snapshot.ships.filter((ship) =>
-            matchesSearchQuery(ast!, { kind: "ship", ship }),
-          );
-      return { ...this.snapshot, ships };
-    }
-
-    if (view === "logs") {
-      const sidebarLogs =
-        this.snapshot.sidebarLogs?.filter((entry) => {
-          if (!useSimpleSearch) {
-            return matchesSearchQuery(ast!, { kind: "log", entry });
-          }
-          const message = entry.message?.toLowerCase() ?? "";
-          const source = entry.source?.toLowerCase() ?? "";
-          const level = entry.level?.toLowerCase() ?? "";
-          const tokenText = (entry.tokens ?? [])
-            .map((token) =>
-              token.type === "text" ? token.text : (token.label ?? ""),
-            )
-            .join(" ")
-            .toLowerCase();
-          return (
-            message.includes(filter) ||
-            source.includes(filter) ||
-            level.includes(filter) ||
-            tokenText.includes(filter)
-          );
-        }) ?? [];
-      return { ...this.snapshot, sidebarLogs };
-    }
-
-    if (view === "actions") {
-      const state = this.snapshot.sidebarActions;
-      if (!state) {
-        return this.snapshot;
-      }
-      const filteredActions = useSimpleSearch
-        ? state.actions.filter((action) => {
-            const description = action.description?.toLowerCase() ?? "";
-            return (
-              action.name.toLowerCase().includes(filter) ||
-              description.includes(filter)
-            );
-          })
-        : state.actions.filter((action) =>
-            matchesSearchQuery(ast!, { kind: "action", action }),
-          );
-      const filteredRunning = useSimpleSearch
-        ? state.running.filter((run) => {
-            const fields = [run.name, run.status, run.runMode];
-            return fields.some((field) =>
-              `${field ?? ""}`.toLowerCase().includes(filter),
-            );
-          })
-        : state.running.filter((run) =>
-            matchesSearchQuery(ast!, { kind: "runningAction", run }),
-          );
-      const sidebarActions = {
-        ...state,
-        actions: filteredActions,
-        running: filteredRunning,
-      };
-      return { ...this.snapshot, sidebarActions };
-    }
-
-    if (view === "runningActions") {
-      const state = this.snapshot.sidebarActions;
-      if (!state) {
-        return this.snapshot;
-      }
-      const filteredRunning = useSimpleSearch
-        ? state.running.filter((run) => {
-            const fields = [run.name, run.status, run.runMode];
-            return fields.some((field) =>
-              field.toString().toLowerCase().includes(filter),
-            );
-          })
-        : state.running.filter((run) =>
-            matchesSearchQuery(ast!, { kind: "runningAction", run }),
-          );
-      const sidebarActions = { ...state, running: filteredRunning };
-      return { ...this.snapshot, sidebarActions };
-    }
-
-    return this.snapshot;
+    const afterViewFilter = applyFilter(this.snapshot, viewSearchFilter);
+    return applyFilter(afterViewFilter, globalSearchFilter);
   }
 
   private buildLeafElement(leaf: PanelLeafNode): HTMLElement {
@@ -1156,12 +1288,12 @@ export class SidebarApp {
 
     const header = this.createUiElement(
       "div",
-      "flex items-center justify-between gap-2 border-b border-slate-800/70 bg-slate-900/80 px-3 py-2",
+      "flex items-center justify-between gap-2 border-b border-slate-800/70 bg-slate-900/80 px-2 py-2",
     );
 
     const headerControls = this.createUiElement(
       "div",
-      "flex items-center gap-2",
+      "df-header-controls flex flex-1 min-w-0 items-center gap-2 overflow-x-auto overflow-y-hidden whitespace-nowrap",
     );
 
     const selectWrapper = this.createUiElement("div", "relative shrink-0");
@@ -1210,6 +1342,22 @@ export class SidebarApp {
     });
 
     headerControls.appendChild(columnVisibilityButton);
+
+    const viewSearchButton = this.createUiElement(
+      "button",
+      getPanelActionButtonClass(),
+    );
+    viewSearchButton.type = "button";
+    viewSearchButton.setAttribute("aria-label", "Toggle view search");
+    viewSearchButton.appendChild(renderIcon("search", "h-4 w-4"));
+    viewSearchButton.addEventListener("click", (event) => {
+      this.runWithUiContext(() => {
+        event.preventDefault();
+        event.stopPropagation();
+        this.toggleLeafSearchEnabled(leaf);
+      });
+    });
+    headerControls.appendChild(viewSearchButton);
 
     const newActionButton = this.createUiElement(
       "button",
@@ -1313,6 +1461,7 @@ export class SidebarApp {
       header,
       body,
       viewSelect: select,
+      viewSearchButton,
       columnVisibilityButton,
       newActionButton,
       clearLogsButton,
@@ -1480,6 +1629,30 @@ export class SidebarApp {
       element.viewSelect.value = leaf.view;
     }
 
+    const viewSearchButton = element.viewSearchButton;
+    const supportsSearch = this.isViewSearchSupported(leaf.view);
+    viewSearchButton.style.display = supportsSearch ? "" : "none";
+    if (supportsSearch) {
+      viewSearchButton.removeAttribute("aria-hidden");
+      viewSearchButton.tabIndex = 0;
+      const enabled = leaf.viewSearchEnabled[leaf.view] ?? false;
+      viewSearchButton.setAttribute("aria-pressed", enabled ? "true" : "false");
+      viewSearchButton.classList.toggle("border-slate-700/70", !enabled);
+      viewSearchButton.classList.toggle("bg-slate-800/70", !enabled);
+      viewSearchButton.classList.toggle("text-slate-300", !enabled);
+      viewSearchButton.classList.toggle("border-sky-500/70", enabled);
+      viewSearchButton.classList.toggle("bg-sky-500/20", enabled);
+      viewSearchButton.classList.toggle("text-sky-100", enabled);
+      viewSearchButton.title = enabled
+        ? "Disable view search"
+        : "Enable view search";
+    } else {
+      viewSearchButton.setAttribute("aria-hidden", "true");
+      viewSearchButton.tabIndex = -1;
+      viewSearchButton.removeAttribute("aria-pressed");
+      viewSearchButton.removeAttribute("title");
+    }
+
     const columnVisibilityButton = element.columnVisibilityButton;
     const supportsColumns = isColumnVisibilitySupported(leaf.view);
     columnVisibilityButton.style.display = supportsColumns ? "" : "none";
@@ -1564,6 +1737,9 @@ export class SidebarApp {
     this.updateLeafHeaderControls(leaf);
     const previousContainer =
       leaf.contentContainer ??
+      (element.body.querySelector(
+        '[data-datafront-view-container="true"]',
+      ) as HTMLElement | null) ??
       (element.body.firstElementChild as HTMLElement | null);
     const previousCleanup = leaf.viewCleanup;
     const previousScrollTop =
@@ -1571,16 +1747,27 @@ export class SidebarApp {
     const previousScrollLeft =
       leaf.scrollLeft ?? previousContainer?.scrollLeft ?? 0;
     const lifecycle = this.createViewLifecycle(leaf);
+    const viewSearchEnabled =
+      this.isViewSearchSupported(leaf.view) &&
+      (leaf.viewSearchEnabled[leaf.view] ?? false);
+    const viewSearchFilter = viewSearchEnabled
+      ? (leaf.viewSearchFilters[leaf.view] ?? "")
+      : "";
+    const combinedSearchFilter = [viewSearchFilter, this.searchFilter]
+      .map((value) => value.trim())
+      .filter(Boolean)
+      .join(" ");
     const nextContainer = buildViewContent(
       leaf,
-      this.getFilteredSnapshot(leaf.view),
+      this.getFilteredSnapshot(leaf.view, viewSearchFilter, this.searchFilter),
       () => this.refreshLeafContent(leaf),
       { document: this.uiDocument, window: this.uiWindow },
       previousContainer ?? undefined,
       lifecycle.callbacks,
       this.viewActions,
-      this.searchFilter,
+      combinedSearchFilter,
     );
+    nextContainer.dataset.datafrontViewContainer = "true";
     const replaced = !!previousContainer && nextContainer !== previousContainer;
     if (replaced) {
       if (previousCleanup) {
@@ -1597,12 +1784,26 @@ export class SidebarApp {
       leaf.viewCleanup = undefined;
     }
 
-    if (
-      !previousContainer ||
-      nextContainer !== previousContainer ||
-      nextContainer.parentElement !== element.body
-    ) {
-      element.body.replaceChildren(nextContainer);
+    let viewSearchWrapper: HTMLDivElement | undefined;
+    if (viewSearchEnabled) {
+      const searchElements = this.ensureLeafViewSearchElements(leaf);
+      viewSearchWrapper = searchElements.wrapper;
+      const expected = leaf.viewSearchFilters[leaf.view] ?? "";
+      if (searchElements.input.value !== expected) {
+        searchElements.input.value = expected;
+      }
+    }
+
+    const desiredChildren = viewSearchEnabled
+      ? [viewSearchWrapper!, nextContainer]
+      : [nextContainer];
+    const shouldReplace =
+      element.body.childElementCount !== desiredChildren.length ||
+      element.body.firstElementChild !== desiredChildren[0] ||
+      element.body.lastElementChild !==
+        desiredChildren[desiredChildren.length - 1];
+    if (shouldReplace) {
+      element.body.replaceChildren(...desiredChildren);
     }
 
     leaf.contentContainer = nextContainer;
