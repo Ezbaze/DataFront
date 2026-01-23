@@ -13,22 +13,31 @@ describe("DataStore display event polling", () => {
       game: unknown;
       processRecentDisplayEvents: () => void;
       buildPlayerRecordLookupFromSnapshot: () => Map<string, unknown>;
-      createTroopDonationEvent: (update: { message: string }) => unknown;
+      resolveDonationEvents: (events: Array<{ message: string }>) => {
+        troopDonations: Array<Record<string, unknown>>;
+        goldDonations: Array<Record<string, unknown>>;
+      };
       registerDonation: () => boolean;
       emitActionEvent: (type: string, payload: unknown) => void;
     };
 
     store.buildPlayerRecordLookupFromSnapshot = () => new Map();
-    store.createTroopDonationEvent = (update) =>
-      update.message === "donation"
-        ? {
-            senderId: "1",
-            recipientId: "2",
-            amountDisplay: "10",
-            amountApprox: 10,
-            tick: 1,
-          }
-        : null;
+    store.resolveDonationEvents = (events) => ({
+      troopDonations: events.length
+        ? [
+            {
+              senderId: "1",
+              senderName: "Sender",
+              recipientId: "2",
+              recipientName: "Recipient",
+              amountDisplay: "10",
+              amountApprox: 10,
+              tick: 1,
+            },
+          ]
+        : [],
+      goldDonations: [],
+    });
     store.registerDonation = () => true;
 
     const emitted: string[] = [];

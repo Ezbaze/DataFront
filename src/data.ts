@@ -192,6 +192,17 @@ interface DisplayMessageUpdateLike {
   params?: Record<string, unknown>;
 }
 
+type DonationKind = "troops" | "gold";
+
+interface DonationMessageCandidate {
+  kind: DonationKind;
+  direction: "sent" | "received";
+  amountDisplay: string;
+  amountApprox: number | null;
+  otherName: string;
+  playerSmallId: number | null;
+}
+
 interface ActionGamePlayerInfo {
   id: string;
   name: string;
@@ -3571,43 +3582,50 @@ export class DataStore {
     this.lastProcessedDisplayEventArrayLength = rawDisplayEvents.length;
 
     const records = playerRecords ?? this.buildPlayerRecordLookupFromSnapshot();
+    const displayEvents: DisplayMessageUpdateLike[] = [];
     for (
       let index = previousLength;
       index < rawDisplayEvents.length;
       index += 1
     ) {
       const entry = rawDisplayEvents[index];
-      if (!this.isDisplayMessageUpdate(entry)) {
-        continue;
+      if (this.isDisplayMessageUpdate(entry)) {
+        displayEvents.push(entry);
       }
-      const event = entry;
-      const troopDonation = this.createTroopDonationEvent(event, records);
-      if (
-        troopDonation &&
-        this.registerDonation(troopDonation, this.recentTroopDonations)
-      ) {
-        this.emitActionEvent("troopsDonated", troopDonation);
-        if (this.troopDonationOverlay?.isActive()) {
-          const senderView = this.resolvePlayerViewById(troopDonation.senderId);
-          this.troopDonationOverlay.registerDonation(troopDonation, {
-            fallbackColor: this.resolvePlayerColor(senderView),
-          });
-        }
-        continue;
-      }
+    }
 
-      const goldDonation = this.createGoldDonationEvent(event, records);
-      if (
-        goldDonation &&
-        this.registerDonation(goldDonation, this.recentGoldDonations)
-      ) {
-        this.emitActionEvent("goldDonated", goldDonation);
-        if (this.goldDonationOverlay?.isActive()) {
-          const senderView = this.resolvePlayerViewById(goldDonation.senderId);
-          this.goldDonationOverlay.registerDonation(goldDonation, {
-            fallbackColor: this.resolvePlayerColor(senderView),
-          });
-        }
+    if (displayEvents.length === 0) {
+      return;
+    }
+
+    const { troopDonations, goldDonations } = this.resolveDonationEvents(
+      displayEvents,
+      records,
+    );
+
+    for (const troopDonation of troopDonations) {
+      if (!this.registerDonation(troopDonation, this.recentTroopDonations)) {
+        continue;
+      }
+      this.emitActionEvent("troopsDonated", troopDonation);
+      if (this.troopDonationOverlay?.isActive()) {
+        const senderView = this.resolvePlayerViewById(troopDonation.senderId);
+        this.troopDonationOverlay.registerDonation(troopDonation, {
+          fallbackColor: this.resolvePlayerColor(senderView),
+        });
+      }
+    }
+
+    for (const goldDonation of goldDonations) {
+      if (!this.registerDonation(goldDonation, this.recentGoldDonations)) {
+        continue;
+      }
+      this.emitActionEvent("goldDonated", goldDonation);
+      if (this.goldDonationOverlay?.isActive()) {
+        const senderView = this.resolvePlayerViewById(goldDonation.senderId);
+        this.goldDonationOverlay.registerDonation(goldDonation, {
+          fallbackColor: this.resolvePlayerColor(senderView),
+        });
       }
     }
   }
@@ -3663,77 +3681,211 @@ export class DataStore {
     return true;
   }
 
-  private createTroopDonationEvent(
-    update: DisplayMessageUpdateLike,
+  private resolveDonationEvents(
+    displayEvents: DisplayMessageUpdateLike[],
     playerRecords: Map<string, PlayerRecord>,
-  ): SidebarTroopDonationEvent | null {
-    const parsed = this.parseTroopDonationMessage(update);
-    if (!parsed) {
-      return null;
+  ): {
+    troopDonations: SidebarTroopDonationEvent[];
+    goldDonations: SidebarGoldDonationEvent[];
+  } {
+    const candidates: DonationMessageCandidate[] = [];
+
+    for (const event of displayEvents) {
+      const troopParsed = this.parseTroopDonationMessage(event);
+      if (troopParsed) {
+        candidates.push({
+          kind: "troops",
+          direction: troopParsed.direction,
+          amountDisplay: troopParsed.amountDisplay,
+          amountApprox: this.parseDonationAmount(troopParsed.amountDisplay),
+          otherName: troopParsed.otherName,
+          playerSmallId: event.playerID,
+        });
+        continue;
+      }
+
+      const goldParsed = this.parseGoldDonationMessage(event);
+      if (goldParsed) {
+        candidates.push({
+          kind: "gold",
+          direction: goldParsed.direction,
+          amountDisplay: goldParsed.amountDisplay,
+          amountApprox: this.parseDonationAmount(goldParsed.amountDisplay),
+          otherName: goldParsed.otherName,
+          playerSmallId: event.playerID,
+        });
+      }
     }
 
-    const records = playerRecords;
-    let sender: PlayerSummary | null = null;
-    let recipient: PlayerSummary | null = null;
+    const troopDonations: SidebarTroopDonationEvent[] =
+      this.resolveDonationCandidates(
+        candidates.filter((candidate) => candidate.kind === "troops"),
+        playerRecords,
+      );
+    const goldDonations: SidebarGoldDonationEvent[] =
+      this.resolveDonationCandidates(
+        candidates.filter((candidate) => candidate.kind === "gold"),
+        playerRecords,
+      );
 
-    if (parsed.direction === "sent") {
-      sender = this.buildPlayerSummaryFromSmallId(update.playerID, records);
-      recipient = this.buildPlayerSummaryFromName(parsed.otherName, records);
-    } else {
-      recipient = this.buildPlayerSummaryFromSmallId(update.playerID, records);
-      sender = this.buildPlayerSummaryFromName(parsed.otherName, records);
-    }
-
-    if (!sender || !recipient) {
-      return null;
-    }
-
-    const amountApprox = this.parseDonationAmount(parsed.amountDisplay);
-    return {
-      senderId: sender.id,
-      senderName: sender.name,
-      senderClan: sender.clan ?? undefined,
-      senderTeam: sender.team ?? undefined,
-      senderIsSelf: sender.isSelf,
-      senderColor: sender.color ?? undefined,
-      recipientId: recipient.id,
-      recipientName: recipient.name,
-      recipientClan: recipient.clan ?? undefined,
-      recipientTeam: recipient.team ?? undefined,
-      recipientIsSelf: recipient.isSelf,
-      recipientColor: recipient.color ?? undefined,
-      amountDisplay: parsed.amountDisplay,
-      amountApprox,
-      tick: this.getCurrentGameTick(),
-    } satisfies SidebarTroopDonationEvent;
+    return { troopDonations, goldDonations };
   }
 
-  private createGoldDonationEvent(
-    update: DisplayMessageUpdateLike,
+  private resolveDonationCandidates(
+    candidates: DonationMessageCandidate[],
     playerRecords: Map<string, PlayerRecord>,
-  ): SidebarGoldDonationEvent | null {
-    const parsed = this.parseGoldDonationMessage(update);
-    if (!parsed) {
-      return null;
+  ): SidebarDonationEvent[] {
+    const resolved: SidebarDonationEvent[] = [];
+    if (candidates.length === 0) {
+      return resolved;
     }
 
-    const records = playerRecords;
-    let sender: PlayerSummary | null = null;
-    let recipient: PlayerSummary | null = null;
+    const used = new Set<number>();
+    const nameCache = new Map<number, string | null>();
+    const amountKeyFor = (candidate: DonationMessageCandidate): string =>
+      this.buildDonationAmountKey(
+        candidate.amountDisplay,
+        candidate.amountApprox,
+      );
 
-    if (parsed.direction === "sent") {
-      sender = this.buildPlayerSummaryFromSmallId(update.playerID, records);
-      recipient = this.buildPlayerSummaryFromName(parsed.otherName, records);
-    } else {
-      recipient = this.buildPlayerSummaryFromSmallId(update.playerID, records);
-      sender = this.buildPlayerSummaryFromName(parsed.otherName, records);
+    const resolveName = (smallId: number | null): string | null => {
+      if (smallId === null) {
+        return null;
+      }
+      if (nameCache.has(smallId)) {
+        return nameCache.get(smallId) ?? null;
+      }
+      const name = this.resolveDisplayNameBySmallIdForDonation(smallId);
+      const normalized = name ? this.normalizeDonationName(name) : null;
+      nameCache.set(smallId, normalized);
+      return normalized;
+    };
+
+    for (let i = 0; i < candidates.length; i += 1) {
+      const candidate = candidates[i];
+      if (candidate.direction !== "sent") {
+        continue;
+      }
+      if (used.has(i)) {
+        continue;
+      }
+      const senderSmallId = candidate.playerSmallId;
+      if (senderSmallId === null) {
+        continue;
+      }
+
+      const senderName = resolveName(senderSmallId);
+      if (!senderName) {
+        continue;
+      }
+      const recipientNameFromMessage = this.normalizeDonationName(
+        candidate.otherName,
+      );
+      const amountKey = amountKeyFor(candidate);
+
+      let matchIndex: number | null = null;
+      for (let j = 0; j < candidates.length; j += 1) {
+        if (j === i || used.has(j)) {
+          continue;
+        }
+        const other = candidates[j];
+        if (other.direction !== "received") {
+          continue;
+        }
+        if (other.playerSmallId === null) {
+          continue;
+        }
+        if (amountKeyFor(other) !== amountKey) {
+          continue;
+        }
+        const otherSenderName = this.normalizeDonationName(other.otherName);
+        if (otherSenderName !== senderName) {
+          continue;
+        }
+        const recipientName = resolveName(other.playerSmallId);
+        if (!recipientName || recipientName !== recipientNameFromMessage) {
+          continue;
+        }
+        matchIndex = j;
+        break;
+      }
+
+      if (matchIndex !== null) {
+        used.add(i);
+        used.add(matchIndex);
+        const recipientSmallId = candidates[matchIndex].playerSmallId!;
+        const amountApprox =
+          candidate.amountApprox ?? candidates[matchIndex].amountApprox ?? null;
+        const donation = this.createDonationEventFromSmallIds(
+          senderSmallId,
+          recipientSmallId,
+          candidate.amountDisplay,
+          amountApprox,
+          playerRecords,
+        );
+        if (donation) {
+          resolved.push(donation);
+        }
+      }
     }
+
+    for (let i = 0; i < candidates.length; i += 1) {
+      if (used.has(i)) {
+        continue;
+      }
+      const candidate = candidates[i];
+      const actorSmallId = candidate.playerSmallId;
+      if (actorSmallId === null) {
+        continue;
+      }
+      const otherView = this.findPlayerViewByNameUnique(candidate.otherName);
+      if (!otherView) {
+        continue;
+      }
+      const otherSmallId = this.safePlayerSmallId(otherView);
+      if (otherSmallId === null) {
+        continue;
+      }
+      const senderSmallId =
+        candidate.direction === "sent" ? actorSmallId : otherSmallId;
+      const recipientSmallId =
+        candidate.direction === "sent" ? otherSmallId : actorSmallId;
+
+      const donation = this.createDonationEventFromSmallIds(
+        senderSmallId,
+        recipientSmallId,
+        candidate.amountDisplay,
+        candidate.amountApprox,
+        playerRecords,
+      );
+      if (donation) {
+        resolved.push(donation);
+      }
+    }
+
+    return resolved;
+  }
+
+  private createDonationEventFromSmallIds(
+    senderSmallId: number,
+    recipientSmallId: number,
+    amountDisplay: string,
+    amountApprox: number | null,
+    playerRecords: Map<string, PlayerRecord>,
+  ): SidebarDonationEvent | null {
+    const sender = this.buildPlayerSummaryFromSmallId(
+      senderSmallId,
+      playerRecords,
+    );
+    const recipient = this.buildPlayerSummaryFromSmallId(
+      recipientSmallId,
+      playerRecords,
+    );
 
     if (!sender || !recipient) {
       return null;
     }
 
-    const amountApprox = this.parseDonationAmount(parsed.amountDisplay);
     return {
       senderId: sender.id,
       senderName: sender.name,
@@ -3747,10 +3899,79 @@ export class DataStore {
       recipientTeam: recipient.team ?? undefined,
       recipientIsSelf: recipient.isSelf,
       recipientColor: recipient.color ?? undefined,
-      amountDisplay: parsed.amountDisplay,
+      amountDisplay,
       amountApprox,
       tick: this.getCurrentGameTick(),
-    } satisfies SidebarGoldDonationEvent;
+    } satisfies SidebarDonationEvent;
+  }
+
+  private buildDonationAmountKey(
+    amountDisplay: string,
+    amountApprox: number | null,
+  ): string {
+    const hasApprox = amountApprox !== null && amountApprox !== undefined;
+    return hasApprox ? `~${amountApprox}` : amountDisplay.trim().toLowerCase();
+  }
+
+  private normalizeDonationName(name: string): string {
+    return name.replace(/\s+/g, " ").trim();
+  }
+
+  private resolveDisplayNameBySmallIdForDonation(
+    smallId: number,
+  ): string | null {
+    if (!this.game) {
+      return null;
+    }
+    try {
+      const entity = this.game.playerBySmallID(smallId);
+      if ("displayName" in entity && typeof entity.displayName === "function") {
+        const name = entity.displayName();
+        return typeof name === "string" && name.trim() ? name.trim() : null;
+      }
+      if ("name" in entity && typeof entity.name === "function") {
+        const name = entity.name();
+        return typeof name === "string" && name.trim() ? name.trim() : null;
+      }
+    } catch {
+      // Ignore name resolution failures for donation matching.
+    }
+    return null;
+  }
+
+  private findPlayerViewByNameUnique(name: string): PlayerViewLike | null {
+    if (!this.game) {
+      return null;
+    }
+    const normalized = this.normalizeDonationName(name);
+    if (!normalized) {
+      return null;
+    }
+
+    let match: PlayerViewLike | null = null;
+    try {
+      const players = this.game.playerViews();
+      for (const player of players) {
+        let displayName: string | null = null;
+        try {
+          displayName = this.normalizeDonationName(player.displayName());
+        } catch {
+          displayName = null;
+        }
+        if (!displayName || displayName !== normalized) {
+          continue;
+        }
+        if (match) {
+          return null;
+        }
+        match = player;
+      }
+    } catch (error) {
+      console.warn("Failed to search players by name", error);
+      return null;
+    }
+
+    return match;
   }
 
   private registerDonation(
