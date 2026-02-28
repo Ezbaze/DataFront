@@ -10141,6 +10141,8 @@
   const MISSILE_TRAJECTORY_OVERLAY_ID = "missile-trajectories";
   const HISTORICAL_MISSILE_OVERLAY_ID = "historical-missiles";
   const DONATION_DEDUP_TICK_WINDOW = 5;
+  const WEB_SOCKET_DONATION_PENDING_MAX = 300;
+  const WEB_SOCKET_DONATION_PENDING_TTL_MS = 30000;
   const TROOP_DONATION_OVERLAY_ID = "troop-donations";
   const GOLD_DONATION_OVERLAY_ID = "gold-donations";
   const TRADE_ROUTE_OVERLAY_ID = "trade-routes";
@@ -10208,6 +10210,25 @@
           hash |= 0;
       }
       return Math.abs(hash);
+  }
+  function formatOpenFrontNumber(value) {
+      const num = Math.max(Number.isFinite(value) ? value : 0, 0);
+      if (num >= 10000000) {
+          return `${(Math.floor(num / 100000) / 10).toFixed(1)}M`;
+      }
+      if (num >= 1000000) {
+          return `${(Math.floor(num / 10000) / 100).toFixed(2)}M`;
+      }
+      if (num >= 100000) {
+          return `${Math.floor(num / 1000)}K`;
+      }
+      if (num >= 10000) {
+          return `${(Math.floor(num / 100) / 10).toFixed(1)}K`;
+      }
+      if (num >= 1000) {
+          return `${(Math.floor(num / 10) / 100).toFixed(2)}K`;
+      }
+      return Math.floor(num).toString();
   }
   class ActionEventManager {
       constructor(label, register, touch) {
@@ -10330,12 +10351,16 @@
           this.lastProcessedDisplayEventArrayLength = 0;
           this.recentTroopDonations = new Map();
           this.recentGoldDonations = new Map();
+          this.pendingWebSocketDonationIntents = [];
           this.lobbyQueueRefreshPromise = null;
           this.lobbyDetailsCache = new Map();
           this.lobbyWorkerInfoPromise = null;
           this.lastLobbyTeamLogKey = null;
           this.lastLiveGameTeamLogKey = null;
           this.localPlayerPublicId = null;
+          this.hostWindow =
+              globalThis.unsafeWindow ??
+                  (typeof window !== "undefined" ? window : null);
           this.hostDocument =
               globalThis.unsafeWindow
                   ?.document ?? globalThis.document;
@@ -10351,6 +10376,7 @@
                       : null;
           };
           this.hostDocument.addEventListener("userMeResponse", this.userMeHandler);
+          this.webSocketDonationCleanup = this.installWebSocketDonationHook();
           this.actionsState = this.createInitialActionsState();
           this.sidebarOverlays = [
               {
@@ -10404,7 +10430,10 @@
               this.appendLogEntry(entry);
           });
           if (typeof window !== "undefined") {
-              window.addEventListener("beforeunload", () => this.logSubscriptionCleanup(), { once: true });
+              window.addEventListener("beforeunload", () => {
+                  this.logSubscriptionCleanup();
+                  this.webSocketDonationCleanup?.();
+              }, { once: true });
           }
           if (typeof window !== "undefined") {
               this.scheduleGameDiscovery(true);
@@ -10413,6 +10442,208 @@
           }
           this.restoreSidebarState();
           this.ensureAllEventActionsRunning();
+      }
+      installWebSocketDonationHook() {
+          const hostWindow = this.hostWindow;
+          if (!hostWindow || typeof hostWindow.WebSocket !== "function") {
+              return null;
+          }
+          const messageListener = (message) => {
+              const candidates = this.extractWebSocketDonationIntentCandidatesFromMessage(message);
+              if (candidates.length > 0) {
+                  this.enqueueWebSocketDonationIntentCandidates(candidates);
+              }
+          };
+          DataStore.wsDonationListeners.add(messageListener);
+          let hookState = DataStore.wsDonationHooksByWindow.get(hostWindow);
+          if (!hookState) {
+              const nativeWebSocket = hostWindow.WebSocket;
+              const observedSockets = new WeakSet();
+              const dispatchMessage = (message) => {
+                  for (const listener of DataStore.wsDonationListeners) {
+                      try {
+                          listener(message);
+                      }
+                      catch (error) {
+                          console.warn("WebSocket donation listener failed", error);
+                      }
+                  }
+              };
+              const attachSocket = (socket) => {
+                  if (observedSockets.has(socket)) {
+                      return;
+                  }
+                  observedSockets.add(socket);
+                  socket.addEventListener("message", (event) => {
+                      if (typeof event.data !== "string") {
+                          return;
+                      }
+                      try {
+                          const parsed = JSON.parse(event.data);
+                          dispatchMessage(parsed);
+                      }
+                      catch {
+                          // Ignore non-JSON messages.
+                      }
+                  });
+              };
+              const originalSend = nativeWebSocket.prototype.send;
+              const patchedSend = function patchedWebSocketSend(data) {
+                  attachSocket(this);
+                  originalSend.call(this, data);
+              };
+              nativeWebSocket.prototype.send = patchedSend;
+              const hostWindowMutable = hostWindow;
+              const patchedWebSocket = function DataFrontWebSocket(url, protocols) {
+                  const socket = protocols === undefined
+                      ? new nativeWebSocket(url)
+                      : new nativeWebSocket(url, protocols);
+                  attachSocket(socket);
+                  return socket;
+              };
+              hostWindowMutable.WebSocket = patchedWebSocket;
+              hostWindowMutable.WebSocket.prototype = nativeWebSocket.prototype;
+              Object.setPrototypeOf(hostWindowMutable.WebSocket, nativeWebSocket);
+              const teardown = () => {
+                  if (nativeWebSocket.prototype.send === patchedSend) {
+                      nativeWebSocket.prototype.send = originalSend;
+                  }
+                  if (hostWindowMutable.WebSocket === patchedWebSocket) {
+                      hostWindowMutable.WebSocket = nativeWebSocket;
+                  }
+              };
+              hookState = {
+                  refCount: 0,
+                  teardown,
+              };
+              DataStore.wsDonationHooksByWindow.set(hostWindow, hookState);
+          }
+          hookState.refCount += 1;
+          let cleanedUp = false;
+          return () => {
+              if (cleanedUp) {
+                  return;
+              }
+              cleanedUp = true;
+              DataStore.wsDonationListeners.delete(messageListener);
+              const currentHook = DataStore.wsDonationHooksByWindow.get(hostWindow);
+              if (!currentHook) {
+                  return;
+              }
+              currentHook.refCount = Math.max(0, currentHook.refCount - 1);
+              if (currentHook.refCount === 0) {
+                  currentHook.teardown();
+                  DataStore.wsDonationHooksByWindow.delete(hostWindow);
+              }
+          };
+      }
+      extractWebSocketDonationIntentCandidatesFromMessage(message) {
+          if (!message || typeof message !== "object") {
+              return [];
+          }
+          const payload = message;
+          if (payload.type !== "turn") {
+              return [];
+          }
+          const intents = payload.turn?.intents;
+          if (!Array.isArray(intents) || intents.length === 0) {
+              return [];
+          }
+          const candidates = [];
+          const now = Date.now();
+          for (const raw of intents) {
+              const intent = raw;
+              if (intent.type !== "donate_gold" &&
+                  intent.type !== "donate_troops") {
+                  continue;
+              }
+              const senderClientId = intent.clientID !== undefined && intent.clientID !== null
+                  ? String(intent.clientID).trim()
+                  : "";
+              const recipientPlayerId = intent.recipient !== undefined && intent.recipient !== null
+                  ? String(intent.recipient).trim()
+                  : "";
+              if (!senderClientId || !recipientPlayerId) {
+                  continue;
+              }
+              const kind = intent.type === "donate_gold" ? "gold" : "troops";
+              const amount = this.resolveDonationIntentAmount(intent, kind);
+              if (amount === null || amount <= 0) {
+                  continue;
+              }
+              const amountDisplay = this.formatDonationAmountDisplay(kind, amount);
+              candidates.push({
+                  kind,
+                  senderClientId,
+                  recipientPlayerId,
+                  amountDisplay,
+                  amountApprox: amount,
+                  observedAtMs: now,
+              });
+          }
+          return candidates;
+      }
+      resolveDonationIntentAmount(intent, kind) {
+          const rawAmount = kind === "gold" ? intent.gold : intent.troops;
+          if (typeof rawAmount === "number" && Number.isFinite(rawAmount)) {
+              return Math.max(0, Math.floor(rawAmount));
+          }
+          const senderClientId = intent.clientID !== undefined && intent.clientID !== null
+              ? String(intent.clientID).trim()
+              : "";
+          const recipientPlayerId = intent.recipient !== undefined && intent.recipient !== null
+              ? String(intent.recipient).trim()
+              : "";
+          if (!senderClientId || !recipientPlayerId || !this.game) {
+              return null;
+          }
+          const sender = this.resolvePlayerViewByClientId(senderClientId);
+          const recipient = this.resolvePlayerById(recipientPlayerId);
+          if (!sender || !recipient) {
+              return null;
+          }
+          if (kind === "gold") {
+              const senderGoldRaw = sender.gold();
+              const senderGold = typeof senderGoldRaw === "bigint" ? Number(senderGoldRaw) : senderGoldRaw;
+              if (!Number.isFinite(senderGold) || senderGold <= 0) {
+                  return null;
+              }
+              return Math.max(0, Math.floor(senderGold / 3));
+          }
+          const config = this.game.config();
+          const defaultDonation = typeof config.defaultDonationAmount === "function"
+              ? config.defaultDonationAmount(sender)
+              : Math.floor(sender.troops() / 3);
+          if (!Number.isFinite(defaultDonation) || defaultDonation <= 0) {
+              return null;
+          }
+          let amount = Math.max(0, Math.floor(defaultDonation));
+          if (typeof config.maxTroops === "function") {
+              const maxTroops = config.maxTroops(recipient);
+              const capacityLeft = Math.floor(maxTroops - recipient.troops());
+              if (Number.isFinite(capacityLeft)) {
+                  amount = Math.min(amount, Math.max(0, capacityLeft));
+              }
+          }
+          return amount > 0 ? amount : null;
+      }
+      formatDonationAmountDisplay(kind, rawAmount) {
+          if (kind === "troops") {
+              return formatOpenFrontNumber(rawAmount / 10);
+          }
+          return formatOpenFrontNumber(rawAmount);
+      }
+      enqueueWebSocketDonationIntentCandidates(candidates) {
+          if (candidates.length === 0) {
+              return;
+          }
+          for (const candidate of candidates) {
+              this.pendingWebSocketDonationIntents.push(candidate);
+          }
+          if (this.pendingWebSocketDonationIntents.length > WEB_SOCKET_DONATION_PENDING_MAX) {
+              this.pendingWebSocketDonationIntents.splice(0, this.pendingWebSocketDonationIntents.length -
+                  WEB_SOCKET_DONATION_PENDING_MAX);
+          }
       }
       attachActionsState(snapshot) {
           return {
@@ -12815,6 +13046,7 @@
           this.lastProcessedDisplayEventArrayLength = 0;
           this.recentTroopDonations.clear();
           this.recentGoldDonations.clear();
+          this.pendingWebSocketDonationIntents = [];
       }
       processRecentDisplayEvents(playerRecords) {
           if (!this.game || typeof this.game.updatesSinceLastTick !== "function") {
@@ -12828,6 +13060,8 @@
               console.warn("Failed to read recent game updates", error);
               return;
           }
+          const records = playerRecords ?? this.buildPlayerRecordLookupFromSnapshot();
+          this.processPendingWebSocketDonationIntents(records);
           const rawDisplayEvents = this.extractRawDisplayEvents(updates);
           if (!rawDisplayEvents) {
               this.lastProcessedDisplayUpdates = updates;
@@ -12848,7 +13082,6 @@
           this.lastProcessedDisplayUpdates = updates;
           this.lastProcessedDisplayEventArray = rawDisplayEvents;
           this.lastProcessedDisplayEventArrayLength = rawDisplayEvents.length;
-          const records = playerRecords ?? this.buildPlayerRecordLookupFromSnapshot();
           const displayEvents = [];
           for (let index = previousLength; index < rawDisplayEvents.length; index += 1) {
               const entry = rawDisplayEvents[index];
@@ -12861,28 +13094,53 @@
           }
           const { troopDonations, goldDonations } = this.resolveDonationEvents(displayEvents, records);
           for (const troopDonation of troopDonations) {
-              if (!this.registerDonation(troopDonation, this.recentTroopDonations)) {
-                  continue;
-              }
-              this.emitActionEvent("troopsDonated", troopDonation);
-              if (this.troopDonationOverlay?.isActive()) {
-                  const senderView = this.resolvePlayerViewById(troopDonation.senderId);
-                  this.troopDonationOverlay.registerDonation(troopDonation, {
-                      fallbackColor: this.resolvePlayerColor(senderView),
-                  });
-              }
+              this.handleResolvedDonation("troops", troopDonation);
           }
           for (const goldDonation of goldDonations) {
-              if (!this.registerDonation(goldDonation, this.recentGoldDonations)) {
+              this.handleResolvedDonation("gold", goldDonation);
+          }
+      }
+      processPendingWebSocketDonationIntents(playerRecords) {
+          if (this.pendingWebSocketDonationIntents.length === 0) {
+              return;
+          }
+          const unresolved = [];
+          const expirationThreshold = Date.now() - WEB_SOCKET_DONATION_PENDING_TTL_MS;
+          for (const candidate of this.pendingWebSocketDonationIntents) {
+              if (candidate.observedAtMs <= expirationThreshold) {
                   continue;
               }
-              this.emitActionEvent("goldDonated", goldDonation);
-              if (this.goldDonationOverlay?.isActive()) {
-                  const senderView = this.resolvePlayerViewById(goldDonation.senderId);
-                  this.goldDonationOverlay.registerDonation(goldDonation, {
+              const senderRecord = this.resolvePlayerRecordByClientId(candidate.senderClientId, playerRecords);
+              const recipientRecord = playerRecords.get(candidate.recipientPlayerId);
+              if (!senderRecord || !recipientRecord) {
+                  unresolved.push(candidate);
+              }
+          }
+          this.pendingWebSocketDonationIntents = unresolved;
+      }
+      handleResolvedDonation(kind, donation) {
+          const store = kind === "troops" ? this.recentTroopDonations : this.recentGoldDonations;
+          if (!this.registerDonation(donation, store)) {
+              return;
+          }
+          if (kind === "troops") {
+              const event = donation;
+              this.emitActionEvent("troopsDonated", event);
+              if (this.troopDonationOverlay?.isActive()) {
+                  const senderView = this.resolvePlayerViewById(event.senderId);
+                  this.troopDonationOverlay.registerDonation(event, {
                       fallbackColor: this.resolvePlayerColor(senderView),
                   });
               }
+              return;
+          }
+          const event = donation;
+          this.emitActionEvent("goldDonated", event);
+          if (this.goldDonationOverlay?.isActive()) {
+              const senderView = this.resolvePlayerViewById(event.senderId);
+              this.goldDonationOverlay.registerDonation(event, {
+                  fallbackColor: this.resolvePlayerColor(senderView),
+              });
           }
       }
       extractRawDisplayEvents(updates) {
@@ -13024,9 +13282,7 @@
                   used.add(i);
                   used.add(matchIndex);
                   const recipientSmallId = candidates[matchIndex].playerSmallId;
-                  const amountApprox = candidate.amountApprox ??
-                      candidates[matchIndex].amountApprox ??
-                      null;
+                  const amountApprox = candidate.amountApprox ?? candidates[matchIndex].amountApprox ?? null;
                   const donation = this.createDonationEventFromSmallIds(senderSmallId, recipientSmallId, candidate.amountDisplay, amountApprox, playerRecords);
                   if (donation) {
                       resolved.push(donation);
@@ -13058,6 +13314,32 @@
               }
           }
           return resolved;
+      }
+      resolvePlayerRecordByClientId(clientId, records) {
+          const normalized = clientId.trim();
+          if (!normalized) {
+              return null;
+          }
+          for (const record of records.values()) {
+              if (record.clientID === normalized) {
+                  return record;
+              }
+          }
+          if (this.game &&
+              typeof this.game.playerByClientID === "function") {
+              try {
+                  const view = this.game.playerByClientID(normalized);
+                  const id = view ? this.safePlayerId(view) : undefined;
+                  if (!id) {
+                      return null;
+                  }
+                  return records.get(id) ?? null;
+              }
+              catch {
+                  return null;
+              }
+          }
+          return null;
       }
       createDonationEventFromSmallIds(senderSmallId, recipientSmallId, amountDisplay, amountApprox, playerRecords) {
           const sender = this.buildPlayerSummaryFromSmallId(senderSmallId, playerRecords);
@@ -13096,8 +13378,7 @@
           }
           try {
               const entity = this.game.playerBySmallID(smallId);
-              if ("displayName" in entity &&
-                  typeof entity.displayName === "function") {
+              if ("displayName" in entity && typeof entity.displayName === "function") {
                   const name = entity.displayName();
                   return typeof name === "string" && name.trim() ? name.trim() : null;
               }
@@ -13634,6 +13915,59 @@
           const fallback = this.safePlayerSmallId(player);
           return fallback !== null ? String(fallback) : undefined;
       }
+      safePlayerClientId(player) {
+          try {
+              if (typeof player.clientID === "function") {
+                  const raw = player.clientID();
+                  if (typeof raw === "string" && raw.trim()) {
+                      return raw.trim();
+                  }
+              }
+          }
+          catch (error) {
+              console.warn("Failed to resolve player clientID", error);
+          }
+          const rawClientId = player.data?.clientID;
+          if (typeof rawClientId === "string" && rawClientId.trim()) {
+              return rawClientId.trim();
+          }
+          if (typeof rawClientId === "number" && Number.isFinite(rawClientId)) {
+              return String(rawClientId);
+          }
+          return undefined;
+      }
+      resolvePlayerViewByClientId(clientId) {
+          if (!this.game) {
+              return null;
+          }
+          const normalized = clientId.trim();
+          if (!normalized) {
+              return null;
+          }
+          if (typeof this.game.playerByClientID === "function") {
+              try {
+                  const direct = this.game.playerByClientID(normalized);
+                  if (this.isPlayerViewLike(direct)) {
+                      return direct;
+                  }
+              }
+              catch {
+                  // Fall through to linear scan.
+              }
+          }
+          try {
+              const players = this.game.playerViews();
+              for (const player of players) {
+                  if (this.safePlayerClientId(player) === normalized) {
+                      return player;
+                  }
+              }
+          }
+          catch {
+              return null;
+          }
+          return null;
+      }
       resolvePlayerColor(player) {
           if (!player) {
               return undefined;
@@ -13795,8 +14129,10 @@
           const tradeStoppedBySelf = tradeStatus.stoppedBySelf;
           const tradeStoppedByOther = tradeStatus.stoppedByOther;
           const isSelf = this.isSamePlayer(localPlayer, playerId);
+          const clientID = this.safePlayerClientId(player);
           return {
               id: playerId,
+              clientID,
               publicId: isSelf ? (this.localPlayerPublicId ?? undefined) : undefined,
               name,
               clan,
@@ -14507,6 +14843,8 @@
           return undefined;
       }
   }
+  DataStore.wsDonationListeners = new Set();
+  DataStore.wsDonationHooksByWindow = new WeakMap();
 
   const datafrontTailwindCss = `#datafront .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border-width:0}#datafront .pointer-events-none{pointer-events:none}#datafront .visible{visibility:visible}#datafront .static{position:static}#datafront .fixed{position:fixed}#datafront .absolute{position:absolute}#datafront .relative{position:relative}#datafront .sticky{position:sticky}#datafront .left-0{left:0}#datafront .left-1{left:.25rem}#datafront .right-0{right:0}#datafront .right-2{right:.5rem}#datafront .top-0{top:0}#datafront .top-1{top:.25rem}#datafront .top-1\\/2{top:50%}#datafront .z-10{z-index:10}#datafront .z-\\[2147483646\\]{z-index:2147483646}#datafront .z-\\[2147483647\\]{z-index:2147483647}#datafront .-mx-px{margin-left:-1px;margin-right:-1px}#datafront .-my-px{margin-top:-1px;margin-bottom:-1px}#datafront .mt-2{margin-top:.5rem}#datafront .mt-3{margin-top:.75rem}#datafront .block{display:block}#datafront .flex{display:flex}#datafront .inline-flex{display:inline-flex}#datafront .\\!table{display:table!important}#datafront .table{display:table}#datafront .grid{display:grid}#datafront .hidden{display:none}#datafront .h-10{height:2.5rem}#datafront .h-12{height:3rem}#datafront .h-2{height:.5rem}#datafront .h-3{height:.75rem}#datafront .h-3\\.5{height:.875rem}#datafront .h-4{height:1rem}#datafront .h-5{height:1.25rem}#datafront .h-6{height:1.5rem}#datafront .h-7{height:1.75rem}#datafront .h-8{height:2rem}#datafront .h-full{height:100%}#datafront .h-px{height:1px}#datafront .min-h-0{min-height:0}#datafront .min-h-\\[220px\\]{min-height:220px}#datafront .min-h-\\[72px\\]{min-height:72px}#datafront .min-h-full{min-height:100%}#datafront .w-10{width:2.5rem}#datafront .w-12{width:3rem}#datafront .w-2{width:.5rem}#datafront .w-3{width:.75rem}#datafront .w-3\\.5{width:.875rem}#datafront .w-32{width:8rem}#datafront .w-36{width:9rem}#datafront .w-4{width:1rem}#datafront .w-40{width:10rem}#datafront .w-44{width:11rem}#datafront .w-48{width:12rem}#datafront .w-5{width:1.25rem}#datafront .w-6{width:1.5rem}#datafront .w-7{width:1.75rem}#datafront .w-full{width:100%}#datafront .w-px{width:1px}#datafront .min-w-0{min-width:0}#datafront .min-w-\\[160px\\]{min-width:160px}#datafront .min-w-\\[200px\\]{min-width:200px}#datafront .min-w-\\[8rem\\]{min-width:8rem}#datafront .min-w-full{min-width:100%}#datafront .max-w-\\[10rem\\]{max-width:10rem}#datafront .max-w-full{max-width:100%}#datafront .max-w-xs{max-width:20rem}#datafront .flex-1{flex:1 1 0%}#datafront .shrink-0{flex-shrink:0}#datafront .border-collapse{border-collapse:collapse}#datafront .-translate-y-1{--tw-translate-y:-0.25rem}#datafront .-translate-y-1,#datafront .-translate-y-1\\/2{transform:translate(var(--tw-translate-x),var(--tw-translate-y)) rotate(var(--tw-rotate)) skewX(var(--tw-skew-x)) skewY(var(--tw-skew-y)) scaleX(var(--tw-scale-x)) scaleY(var(--tw-scale-y))}#datafront .-translate-y-1\\/2{--tw-translate-y:-50%}#datafront .translate-x-full{--tw-translate-x:100%;transform:translate(var(--tw-translate-x),var(--tw-translate-y)) rotate(var(--tw-rotate)) skewX(var(--tw-skew-x)) skewY(var(--tw-skew-y)) scaleX(var(--tw-scale-x)) scaleY(var(--tw-scale-y))}#datafront .\\!transform{transform:translate(var(--tw-translate-x),var(--tw-translate-y)) rotate(var(--tw-rotate)) skewX(var(--tw-skew-x)) skewY(var(--tw-skew-y)) scaleX(var(--tw-scale-x)) scaleY(var(--tw-scale-y))!important}#datafront .transform{transform:translate(var(--tw-translate-x),var(--tw-translate-y)) rotate(var(--tw-rotate)) skewX(var(--tw-skew-x)) skewY(var(--tw-skew-y)) scaleX(var(--tw-scale-x)) scaleY(var(--tw-scale-y))}#datafront .cursor-col-resize{cursor:col-resize}#datafront .cursor-default{cursor:default}#datafront .cursor-not-allowed{cursor:not-allowed}#datafront .cursor-pointer{cursor:pointer}#datafront .cursor-row-resize{cursor:row-resize}#datafront .select-none{-webkit-user-select:none;-moz-user-select:none;user-select:none}#datafront .resize{resize:both}#datafront .appearance-none{-webkit-appearance:none;-moz-appearance:none;appearance:none}#datafront .flex-row{flex-direction:row}#datafront .flex-col{flex-direction:column}#datafront .flex-wrap{flex-wrap:wrap}#datafront .items-start{align-items:flex-start}#datafront .items-end{align-items:flex-end}#datafront .items-center{align-items:center}#datafront .items-baseline{align-items:baseline}#datafront .justify-start{justify-content:flex-start}#datafront .justify-end{justify-content:flex-end}#datafront .justify-center{justify-content:center}#datafront .justify-between{justify-content:space-between}#datafront .gap-1{gap:.25rem}#datafront .gap-2{gap:.5rem}#datafront .gap-3{gap:.75rem}#datafront .gap-4{gap:1rem}#datafront .gap-6{gap:1.5rem}#datafront :is(.space-y-1>:not([hidden])~:not([hidden])){--tw-space-y-reverse:0;margin-top:calc(.25rem*(1 - var(--tw-space-y-reverse)));margin-bottom:calc(.25rem*var(--tw-space-y-reverse))}#datafront :is(.space-y-2>:not([hidden])~:not([hidden])){--tw-space-y-reverse:0;margin-top:calc(.5rem*(1 - var(--tw-space-y-reverse)));margin-bottom:calc(.5rem*var(--tw-space-y-reverse))}#datafront :is(.space-y-3>:not([hidden])~:not([hidden])){--tw-space-y-reverse:0;margin-top:calc(.75rem*(1 - var(--tw-space-y-reverse)));margin-bottom:calc(.75rem*var(--tw-space-y-reverse))}#datafront :is(.space-y-4>:not([hidden])~:not([hidden])){--tw-space-y-reverse:0;margin-top:calc(1rem*(1 - var(--tw-space-y-reverse)));margin-bottom:calc(1rem*var(--tw-space-y-reverse))}#datafront .overflow-auto{overflow:auto}#datafront .overflow-hidden{overflow:hidden}#datafront .overflow-x-auto{overflow-x:auto}#datafront .overflow-y-hidden{overflow-y:hidden}#datafront .truncate{overflow:hidden;text-overflow:ellipsis}#datafront .truncate,#datafront .whitespace-nowrap{white-space:nowrap}#datafront .whitespace-pre-wrap{white-space:pre-wrap}#datafront .break-words{overflow-wrap:break-word}#datafront .rounded{border-radius:.25rem}#datafront .rounded-full{border-radius:9999px}#datafront .rounded-lg{border-radius:.5rem}#datafront .rounded-md{border-radius:.375rem}#datafront .rounded-sm{border-radius:.125rem}#datafront .rounded-r-full{border-top-right-radius:9999px;border-bottom-right-radius:9999px}#datafront .border{border-width:1px}#datafront .border-b{border-bottom-width:1px}#datafront .border-r{border-right-width:1px}#datafront .border-t{border-top-width:1px}#datafront .border-none{border-style:none}#datafront .\\!border-rose-500{--tw-border-opacity:1!important;border-color:rgb(244 63 94/var(--tw-border-opacity,1))!important}#datafront .border-amber-400{--tw-border-opacity:1;border-color:rgb(251 191 36/var(--tw-border-opacity,1))}#datafront .border-amber-400\\/40{border-color:rgba(251,191,36,.4)}#datafront .border-emerald-400{--tw-border-opacity:1;border-color:rgb(52 211 153/var(--tw-border-opacity,1))}#datafront .border-emerald-400\\/60{border-color:rgba(52,211,153,.6)}#datafront .border-rose-500{--tw-border-opacity:1;border-color:rgb(244 63 94/var(--tw-border-opacity,1))}#datafront .border-rose-500\\/40{border-color:rgba(244,63,94,.4)}#datafront .border-rose-500\\/50{border-color:rgba(244,63,94,.5)}#datafront .border-sky-400{--tw-border-opacity:1;border-color:rgb(56 189 248/var(--tw-border-opacity,1))}#datafront .border-sky-400\\/40{border-color:rgba(56,189,248,.4)}#datafront .border-sky-500{--tw-border-opacity:1;border-color:rgb(14 165 233/var(--tw-border-opacity,1))}#datafront .border-sky-500\\/40{border-color:rgba(14,165,233,.4)}#datafront .border-sky-500\\/50{border-color:rgba(14,165,233,.5)}#datafront .border-sky-500\\/60{border-color:rgba(14,165,233,.6)}#datafront .border-sky-500\\/70{border-color:rgba(14,165,233,.7)}#datafront .border-slate-600{--tw-border-opacity:1;border-color:rgb(71 85 105/var(--tw-border-opacity,1))}#datafront .border-slate-600\\/50{border-color:rgba(71,85,105,.5)}#datafront .border-slate-700{--tw-border-opacity:1;border-color:rgb(51 65 85/var(--tw-border-opacity,1))}#datafront .border-slate-700\\/70{border-color:rgba(51,65,85,.7)}#datafront .border-slate-700\\/80{border-color:rgba(51,65,85,.8)}#datafront .border-slate-800{--tw-border-opacity:1;border-color:rgb(30 41 59/var(--tw-border-opacity,1))}#datafront .border-slate-800\\/60{border-color:rgba(30,41,59,.6)}#datafront .border-slate-800\\/70{border-color:rgba(30,41,59,.7)}#datafront .border-slate-800\\/80{border-color:rgba(30,41,59,.8)}#datafront .border-slate-900{--tw-border-opacity:1;border-color:rgb(15 23 42/var(--tw-border-opacity,1))}#datafront .border-slate-900\\/70{border-color:rgba(15,23,42,.7)}#datafront .border-slate-900\\/80{border-color:rgba(15,23,42,.8)}#datafront .bg-amber-400{--tw-bg-opacity:1;background-color:rgb(251 191 36/var(--tw-bg-opacity,1))}#datafront .bg-amber-400\\/15{background-color:rgba(251,191,36,.15)}#datafront .bg-amber-500{--tw-bg-opacity:1;background-color:rgb(245 158 11/var(--tw-bg-opacity,1))}#datafront .bg-amber-500\\/20{background-color:rgba(245,158,11,.2)}#datafront .bg-emerald-100{--tw-bg-opacity:1;background-color:rgb(209 250 229/var(--tw-bg-opacity,1))}#datafront .bg-emerald-500{--tw-bg-opacity:1;background-color:rgb(16 185 129/var(--tw-bg-opacity,1))}#datafront .bg-emerald-500\\/20{background-color:rgba(16,185,129,.2)}#datafront .bg-emerald-500\\/40{background-color:rgba(16,185,129,.4)}#datafront .bg-red-500{--tw-bg-opacity:1;background-color:rgb(239 68 68/var(--tw-bg-opacity,1))}#datafront .bg-rose-500{--tw-bg-opacity:1;background-color:rgb(244 63 94/var(--tw-bg-opacity,1))}#datafront .bg-rose-500\\/10{background-color:rgba(244,63,94,.1)}#datafront .bg-rose-500\\/15{background-color:rgba(244,63,94,.15)}#datafront .bg-rose-500\\/20{background-color:rgba(244,63,94,.2)}#datafront .bg-sky-400{--tw-bg-opacity:1;background-color:rgb(56 189 248/var(--tw-bg-opacity,1))}#datafront .bg-sky-400\\/15{background-color:rgba(56,189,248,.15)}#datafront .bg-sky-500{--tw-bg-opacity:1;background-color:rgb(14 165 233/var(--tw-bg-opacity,1))}#datafront .bg-sky-500\\/10{background-color:rgba(14,165,233,.1)}#datafront .bg-sky-500\\/20{background-color:rgba(14,165,233,.2)}#datafront .bg-slate-300{--tw-bg-opacity:1;background-color:rgb(203 213 225/var(--tw-bg-opacity,1))}#datafront .bg-slate-600{--tw-bg-opacity:1;background-color:rgb(71 85 105/var(--tw-bg-opacity,1))}#datafront .bg-slate-600\\/60{background-color:rgba(71,85,105,.6)}#datafront .bg-slate-700{--tw-bg-opacity:1;background-color:rgb(51 65 85/var(--tw-bg-opacity,1))}#datafront .bg-slate-700\\/60{background-color:rgba(51,65,85,.6)}#datafront .bg-slate-800{--tw-bg-opacity:1;background-color:rgb(30 41 59/var(--tw-bg-opacity,1))}#datafront .bg-slate-800\\/50{background-color:rgba(30,41,59,.5)}#datafront .bg-slate-800\\/60{background-color:rgba(30,41,59,.6)}#datafront .bg-slate-800\\/70{background-color:rgba(30,41,59,.7)}#datafront .bg-slate-800\\/80{background-color:rgba(30,41,59,.8)}#datafront .bg-slate-900{--tw-bg-opacity:1;background-color:rgb(15 23 42/var(--tw-bg-opacity,1))}#datafront .bg-slate-900\\/40{background-color:rgba(15,23,42,.4)}#datafront .bg-slate-900\\/70{background-color:rgba(15,23,42,.7)}#datafront .bg-slate-900\\/80{background-color:rgba(15,23,42,.8)}#datafront .bg-slate-900\\/90{background-color:rgba(15,23,42,.9)}#datafront .bg-slate-900\\/95{background-color:rgba(15,23,42,.95)}#datafront .bg-slate-950{--tw-bg-opacity:1;background-color:rgb(2 6 23/var(--tw-bg-opacity,1))}#datafront .bg-slate-950\\/40{background-color:rgba(2,6,23,.4)}#datafront .bg-slate-950\\/60{background-color:rgba(2,6,23,.6)}#datafront .bg-slate-950\\/70{background-color:rgba(2,6,23,.7)}#datafront .bg-slate-950\\/80{background-color:rgba(2,6,23,.8)}#datafront .bg-slate-950\\/95{background-color:rgba(2,6,23,.95)}#datafront .bg-transparent{background-color:transparent}#datafront .bg-none{background-image:none}#datafront .p-3{padding:.75rem}#datafront .p-4{padding:1rem}#datafront .p-6{padding:1.5rem}#datafront .px-0{padding-left:0;padding-right:0}#datafront .px-1{padding-left:.25rem;padding-right:.25rem}#datafront .px-1\\.5{padding-left:.375rem;padding-right:.375rem}#datafront .px-2{padding-left:.5rem;padding-right:.5rem}#datafront .px-2\\.5{padding-left:.625rem;padding-right:.625rem}#datafront .px-3{padding-left:.75rem;padding-right:.75rem}#datafront .px-4{padding-left:1rem;padding-right:1rem}#datafront .py-0{padding-top:0;padding-bottom:0}#datafront .py-0\\.5{padding-top:.125rem;padding-bottom:.125rem}#datafront .py-1{padding-top:.25rem;padding-bottom:.25rem}#datafront .py-1\\.5{padding-top:.375rem;padding-bottom:.375rem}#datafront .py-2{padding-top:.5rem;padding-bottom:.5rem}#datafront .py-4{padding-top:1rem;padding-bottom:1rem}#datafront .py-8{padding-top:2rem;padding-bottom:2rem}#datafront .pb-3{padding-bottom:.75rem}#datafront .pr-7{padding-right:1.75rem}#datafront .pt-4{padding-top:1rem}#datafront .text-left{text-align:left}#datafront .text-center{text-align:center}#datafront .text-right{text-align:right}#datafront .align-top{vertical-align:top}#datafront .font-mono{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,Liberation Mono,Courier New,monospace}#datafront .text-\\[0\\.65rem\\]{font-size:.65rem}#datafront .text-\\[0\\.6rem\\]{font-size:.6rem}#datafront .text-\\[0\\.75rem\\]{font-size:.75rem}#datafront .text-\\[0\\.7rem\\]{font-size:.7rem}#datafront .text-base{font-size:1rem;line-height:1.5rem}#datafront .text-lg{font-size:1.125rem;line-height:1.75rem}#datafront .text-sm{font-size:.875rem;line-height:1.25rem}#datafront .text-xs{font-size:.75rem;line-height:1rem}#datafront .font-medium{font-weight:500}#datafront .font-semibold{font-weight:600}#datafront .uppercase{text-transform:uppercase}#datafront .capitalize{text-transform:capitalize}#datafront .italic{font-style:italic}#datafront .leading-none{line-height:1}#datafront .tracking-wide{letter-spacing:.025em}#datafront .text-amber-200{--tw-text-opacity:1;color:rgb(253 230 138/var(--tw-text-opacity,1))}#datafront .text-amber-300{--tw-text-opacity:1;color:rgb(252 211 77/var(--tw-text-opacity,1))}#datafront .text-emerald-200{--tw-text-opacity:1;color:rgb(167 243 208/var(--tw-text-opacity,1))}#datafront .text-inherit{color:inherit}#datafront .text-rose-200{--tw-text-opacity:1;color:rgb(254 205 211/var(--tw-text-opacity,1))}#datafront .text-rose-400{--tw-text-opacity:1;color:rgb(251 113 133/var(--tw-text-opacity,1))}#datafront .text-sky-100{--tw-text-opacity:1;color:rgb(224 242 254/var(--tw-text-opacity,1))}#datafront .text-sky-200{--tw-text-opacity:1;color:rgb(186 230 253/var(--tw-text-opacity,1))}#datafront .text-sky-300{--tw-text-opacity:1;color:rgb(125 211 252/var(--tw-text-opacity,1))}#datafront .text-sky-400{--tw-text-opacity:1;color:rgb(56 189 248/var(--tw-text-opacity,1))}#datafront .text-slate-100{--tw-text-opacity:1;color:rgb(241 245 249/var(--tw-text-opacity,1))}#datafront .text-slate-200{--tw-text-opacity:1;color:rgb(226 232 240/var(--tw-text-opacity,1))}#datafront .text-slate-300{--tw-text-opacity:1;color:rgb(203 213 225/var(--tw-text-opacity,1))}#datafront .text-slate-400{--tw-text-opacity:1;color:rgb(148 163 184/var(--tw-text-opacity,1))}#datafront .text-slate-50{--tw-text-opacity:1;color:rgb(248 250 252/var(--tw-text-opacity,1))}#datafront .text-slate-500{--tw-text-opacity:1;color:rgb(100 116 139/var(--tw-text-opacity,1))}#datafront .text-white{--tw-text-opacity:1;color:rgb(255 255 255/var(--tw-text-opacity,1))}#datafront .opacity-40{opacity:.4}#datafront .opacity-50{opacity:.5}#datafront .shadow{--tw-shadow:0 1px 3px 0 rgba(0,0,0,.1),0 1px 2px -1px rgba(0,0,0,.1);--tw-shadow-colored:0 1px 3px 0 var(--tw-shadow-color),0 1px 2px -1px var(--tw-shadow-color)}#datafront .shadow,#datafront .shadow-2xl{box-shadow:var(--tw-ring-offset-shadow,0 0 #0000),var(--tw-ring-shadow,0 0 #0000),var(--tw-shadow)}#datafront .shadow-2xl{--tw-shadow:0 25px 50px -12px rgba(0,0,0,.25);--tw-shadow-colored:0 25px 50px -12px var(--tw-shadow-color)}#datafront .shadow-inner{--tw-shadow:inset 0 2px 4px 0 rgba(0,0,0,.05);--tw-shadow-colored:inset 0 2px 4px 0 var(--tw-shadow-color)}#datafront .shadow-inner,#datafront .shadow-xl{box-shadow:var(--tw-ring-offset-shadow,0 0 #0000),var(--tw-ring-shadow,0 0 #0000),var(--tw-shadow)}#datafront .shadow-xl{--tw-shadow:0 20px 25px -5px rgba(0,0,0,.1),0 8px 10px -6px rgba(0,0,0,.1);--tw-shadow-colored:0 20px 25px -5px var(--tw-shadow-color),0 8px 10px -6px var(--tw-shadow-color)}#datafront .ring-0{--tw-ring-offset-shadow:var(--tw-ring-inset) 0 0 0 var(--tw-ring-offset-width) var(--tw-ring-offset-color);--tw-ring-shadow:var(--tw-ring-inset) 0 0 0 calc(var(--tw-ring-offset-width)) var(--tw-ring-color);box-shadow:var(--tw-ring-offset-shadow),var(--tw-ring-shadow),var(--tw-shadow,0 0 #0000)}#datafront .ring-sky-500{--tw-ring-opacity:1;--tw-ring-color:rgb(14 165 233/var(--tw-ring-opacity,1))}#datafront .blur{--tw-blur:blur(8px);filter:var(--tw-blur) var(--tw-brightness) var(--tw-contrast) var(--tw-grayscale) var(--tw-hue-rotate) var(--tw-invert) var(--tw-saturate) var(--tw-sepia) var(--tw-drop-shadow)}#datafront .\\!filter{filter:var(--tw-blur) var(--tw-brightness) var(--tw-contrast) var(--tw-grayscale) var(--tw-hue-rotate) var(--tw-invert) var(--tw-saturate) var(--tw-sepia) var(--tw-drop-shadow)!important}#datafront .filter{filter:var(--tw-blur) var(--tw-brightness) var(--tw-contrast) var(--tw-grayscale) var(--tw-hue-rotate) var(--tw-invert) var(--tw-saturate) var(--tw-sepia) var(--tw-drop-shadow)}#datafront .backdrop-blur{--tw-backdrop-blur:blur(8px)}#datafront .backdrop-blur,#datafront .backdrop-blur-sm{backdrop-filter:var(--tw-backdrop-blur) var(--tw-backdrop-brightness) var(--tw-backdrop-contrast) var(--tw-backdrop-grayscale) var(--tw-backdrop-hue-rotate) var(--tw-backdrop-invert) var(--tw-backdrop-opacity) var(--tw-backdrop-saturate) var(--tw-backdrop-sepia)}#datafront .backdrop-blur-sm{--tw-backdrop-blur:blur(4px)}#datafront .transition{transition-property:color,background-color,border-color,text-decoration-color,fill,stroke,opacity,box-shadow,transform,filter,backdrop-filter;transition-timing-function:cubic-bezier(.4,0,.2,1);transition-duration:.15s}#datafront .transition-colors{transition-property:color,background-color,border-color,text-decoration-color,fill,stroke;transition-timing-function:cubic-bezier(.4,0,.2,1);transition-duration:.15s}#datafront .transition-transform{transition-property:transform;transition-timing-function:cubic-bezier(.4,0,.2,1);transition-duration:.15s}#datafront .duration-150{transition-duration:.15s}#datafront .ease-out{transition-timing-function:cubic-bezier(0,0,.2,1)}#datafront .placeholder\\:text-slate-500::-moz-placeholder{--tw-text-opacity:1;color:rgb(100 116 139/var(--tw-text-opacity,1))}#datafront .placeholder\\:text-slate-500::placeholder{--tw-text-opacity:1;color:rgb(100 116 139/var(--tw-text-opacity,1))}#datafront .last\\:border-r-0:last-child{border-right-width:0}#datafront .hover\\:\\!border-rose-500\\/70:hover{border-color:rgba(244,63,94,.7)!important}#datafront .hover\\:border-rose-500\\/60:hover{border-color:rgba(244,63,94,.6)}#datafront .hover\\:border-sky-500\\/60:hover{border-color:rgba(14,165,233,.6)}#datafront .hover\\:border-sky-500\\/70:hover{border-color:rgba(14,165,233,.7)}#datafront .hover\\:bg-emerald-500\\/50:hover{background-color:rgba(16,185,129,.5)}#datafront .hover\\:bg-rose-500\\/20:hover{background-color:rgba(244,63,94,.2)}#datafront .hover\\:bg-sky-500\\/10:hover{background-color:rgba(14,165,233,.1)}#datafront .hover\\:bg-sky-500\\/20:hover{background-color:rgba(14,165,233,.2)}#datafront .hover\\:bg-sky-500\\/30:hover{background-color:rgba(14,165,233,.3)}#datafront .hover\\:bg-slate-700\\/80:hover{background-color:rgba(51,65,85,.8)}#datafront .hover\\:bg-slate-800\\/40:hover{background-color:rgba(30,41,59,.4)}#datafront .hover\\:bg-slate-800\\/50:hover{background-color:rgba(30,41,59,.5)}#datafront .hover\\:bg-slate-800\\/60:hover{background-color:rgba(30,41,59,.6)}#datafront .hover\\:bg-slate-800\\/70:hover{background-color:rgba(30,41,59,.7)}#datafront .hover\\:bg-slate-800\\/80:hover{background-color:rgba(30,41,59,.8)}#datafront .hover\\:bg-slate-900\\/40:hover{background-color:rgba(15,23,42,.4)}#datafront .hover\\:bg-transparent:hover{background-color:transparent}#datafront .hover\\:\\!text-rose-200:hover{--tw-text-opacity:1!important;color:rgb(254 205 211/var(--tw-text-opacity,1))!important}#datafront .hover\\:text-rose-300:hover{--tw-text-opacity:1;color:rgb(253 164 175/var(--tw-text-opacity,1))}#datafront .hover\\:text-sky-100:hover{--tw-text-opacity:1;color:rgb(224 242 254/var(--tw-text-opacity,1))}#datafront .hover\\:text-sky-200:hover{--tw-text-opacity:1;color:rgb(186 230 253/var(--tw-text-opacity,1))}#datafront .hover\\:text-slate-50:hover{--tw-text-opacity:1;color:rgb(248 250 252/var(--tw-text-opacity,1))}#datafront .focus\\:border-transparent:focus{border-color:transparent}#datafront .focus\\:outline-none:focus{outline:2px solid transparent;outline-offset:2px}#datafront .focus\\:ring-0:focus{--tw-ring-offset-shadow:var(--tw-ring-inset) 0 0 0 var(--tw-ring-offset-width) var(--tw-ring-offset-color);--tw-ring-shadow:var(--tw-ring-inset) 0 0 0 calc(var(--tw-ring-offset-width)) var(--tw-ring-color)}#datafront .focus\\:ring-0:focus,#datafront .focus\\:ring-2:focus{box-shadow:var(--tw-ring-offset-shadow),var(--tw-ring-shadow),var(--tw-shadow,0 0 #0000)}#datafront .focus\\:ring-2:focus{--tw-ring-offset-shadow:var(--tw-ring-inset) 0 0 0 var(--tw-ring-offset-width) var(--tw-ring-offset-color);--tw-ring-shadow:var(--tw-ring-inset) 0 0 0 calc(2px + var(--tw-ring-offset-width)) var(--tw-ring-color)}#datafront .focus\\:ring-sky-500:focus{--tw-ring-opacity:1;--tw-ring-color:rgb(14 165 233/var(--tw-ring-opacity,1))}#datafront .focus\\:ring-sky-500\\/50:focus{--tw-ring-color:rgba(14,165,233,.5)}#datafront .focus\\:ring-sky-500\\/60:focus{--tw-ring-color:rgba(14,165,233,.6)}#datafront .focus\\:ring-sky-500\\/70:focus{--tw-ring-color:rgba(14,165,233,.7)}#datafront .focus-visible\\:ring-2:focus-visible{--tw-ring-offset-shadow:var(--tw-ring-inset) 0 0 0 var(--tw-ring-offset-width) var(--tw-ring-offset-color);--tw-ring-shadow:var(--tw-ring-inset) 0 0 0 calc(2px + var(--tw-ring-offset-width)) var(--tw-ring-color);box-shadow:var(--tw-ring-offset-shadow),var(--tw-ring-shadow),var(--tw-shadow,0 0 #0000)}#datafront .focus-visible\\:ring-sky-500\\/60:focus-visible{--tw-ring-color:rgba(14,165,233,.6)}#datafront :is(.group:hover .group-hover\\:bg-sky-400\\/60){background-color:rgba(56,189,248,.6)}@media (min-width:640px){#datafront .sm\\:grid-cols-3{grid-template-columns:repeat(3,minmax(0,1fr))}}@media (min-width:768px){#datafront .md\\:grid-cols-2{grid-template-columns:repeat(2,minmax(0,1fr))}}`;
 

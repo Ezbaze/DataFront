@@ -113,6 +113,7 @@ export interface AlliancePact {
 
 export interface PlayerRecord {
   id: string;
+  clientID?: string;
   /**
    * The public player id used for sharing / viewing stats (as exposed by the site via `userMeResponse`).
    */

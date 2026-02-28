@@ -65,6 +65,8 @@ const STRUCTURE_UNIT_TYPES = new Set<string>([
 const MISSILE_TRAJECTORY_OVERLAY_ID = "missile-trajectories";
 const HISTORICAL_MISSILE_OVERLAY_ID = "historical-missiles";
 const DONATION_DEDUP_TICK_WINDOW = 5;
+const WEB_SOCKET_DONATION_PENDING_MAX = 300;
+const WEB_SOCKET_DONATION_PENDING_TTL_MS = 30_000;
 const TROOP_DONATION_OVERLAY_ID = "troop-donations";
 const GOLD_DONATION_OVERLAY_ID = "gold-donations";
 const TRADE_ROUTE_OVERLAY_ID = "trade-routes";
@@ -203,6 +205,23 @@ interface DonationMessageCandidate {
   playerSmallId: number | null;
 }
 
+interface WebSocketDonationIntentCandidate {
+  kind: DonationKind;
+  senderClientId: string;
+  recipientPlayerId: string;
+  amountDisplay: string;
+  amountApprox: number | null;
+  observedAtMs: number;
+}
+
+interface StampedDonationIntentLike {
+  type: "donate_troops" | "donate_gold";
+  clientID: string | number;
+  recipient: string | number;
+  troops?: number | null;
+  gold?: number | null;
+}
+
 interface ActionGamePlayerInfo {
   id: string;
   name: string;
@@ -258,6 +277,26 @@ function hashString(value: string): number {
     hash |= 0;
   }
   return Math.abs(hash);
+}
+
+function formatOpenFrontNumber(value: number): string {
+  const num = Math.max(Number.isFinite(value) ? value : 0, 0);
+  if (num >= 10_000_000) {
+    return `${(Math.floor(num / 100_000) / 10).toFixed(1)}M`;
+  }
+  if (num >= 1_000_000) {
+    return `${(Math.floor(num / 10_000) / 100).toFixed(2)}M`;
+  }
+  if (num >= 100_000) {
+    return `${Math.floor(num / 1_000)}K`;
+  }
+  if (num >= 10_000) {
+    return `${(Math.floor(num / 100) / 10).toFixed(1)}K`;
+  }
+  if (num >= 1_000) {
+    return `${(Math.floor(num / 10) / 100).toFixed(2)}K`;
+  }
+  return Math.floor(num).toString();
 }
 
 class ActionEventManager implements SidebarActionEventsApi {
@@ -435,6 +474,7 @@ interface AllianceViewLike {
 
 interface PlayerViewLike {
   id(): string | number;
+  clientID?(): string | null;
   displayName(): string;
   smallID(): number;
   nameLocation(): { x: number; y: number; size: number } | undefined;
@@ -463,6 +503,8 @@ interface PlayerViewLike {
 interface GameConfigLike {
   allianceDuration(): number;
   tradeShipGold?(distance: number, numPorts: number): number | bigint;
+  defaultDonationAmount?(sender: PlayerViewLike): number;
+  maxTroops?(player: PlayerViewLike): number;
 }
 
 interface UnitViewLike {
@@ -498,6 +540,7 @@ interface GameViewLike {
   manhattanDist?(a: number, b: number): number;
   forEachTile(fn: (ref: number) => void): void;
   myPlayer?(): PlayerViewLike | null;
+  playerByClientID?(id: string | number): PlayerViewLike | null;
   updatesSinceLastTick?(): GameUpdatesLike;
 }
 
@@ -527,6 +570,15 @@ type AllianceMap = Map<string, Set<string>>;
 type TraitorHistory = Map<string, Set<string>>;
 
 export class DataStore {
+  private static wsDonationListeners = new Set<(message: unknown) => void>();
+  private static wsDonationHooksByWindow = new WeakMap<
+    Window,
+    {
+      refCount: number;
+      teardown: () => void;
+    }
+  >();
+
   private snapshot: GameSnapshot;
   private readonly listeners = new Set<SnapshotListener>();
   private refreshHandle: number | undefined;
@@ -575,7 +627,10 @@ export class DataStore {
   private lastProcessedDisplayEventArrayLength = 0;
   private readonly recentTroopDonations: Map<string, number> = new Map();
   private readonly recentGoldDonations: Map<string, number> = new Map();
+  private pendingWebSocketDonationIntents: WebSocketDonationIntentCandidate[] =
+    [];
   private readonly logSubscriptionCleanup: () => void;
+  private readonly webSocketDonationCleanup: (() => void) | null;
   private lobbyQueueRefreshHandle: number | undefined;
   private lobbyQueueRefreshPromise: Promise<void> | null = null;
   private readonly lobbyDetailsCache = new Map<
@@ -586,10 +641,14 @@ export class DataStore {
   private lastLobbyTeamLogKey: string | null = null;
   private lastLiveGameTeamLogKey: string | null = null;
   private readonly hostDocument: Document;
+  private readonly hostWindow: Window | null;
   private localPlayerPublicId: string | null = null;
   private readonly userMeHandler: (event: Event) => void;
 
   constructor(initialSnapshot?: GameSnapshot) {
+    this.hostWindow =
+      (globalThis as { unsafeWindow?: Window }).unsafeWindow ??
+      (typeof window !== "undefined" ? window : null);
     this.hostDocument =
       (globalThis as { unsafeWindow?: { document?: Document } }).unsafeWindow
         ?.document ?? globalThis.document;
@@ -610,6 +669,7 @@ export class DataStore {
           : null;
     };
     this.hostDocument.addEventListener("userMeResponse", this.userMeHandler);
+    this.webSocketDonationCleanup = this.installWebSocketDonationHook();
     this.actionsState = this.createInitialActionsState();
     this.sidebarOverlays = [
       {
@@ -671,7 +731,10 @@ export class DataStore {
     if (typeof window !== "undefined") {
       window.addEventListener(
         "beforeunload",
-        () => this.logSubscriptionCleanup(),
+        () => {
+          this.logSubscriptionCleanup();
+          this.webSocketDonationCleanup?.();
+        },
         { once: true },
       );
     }
@@ -684,6 +747,270 @@ export class DataStore {
 
     this.restoreSidebarState();
     this.ensureAllEventActionsRunning();
+  }
+
+  private installWebSocketDonationHook(): (() => void) | null {
+    const hostWindow = this.hostWindow as
+      | ({
+          WebSocket?: typeof WebSocket;
+        } & Window)
+      | null;
+    if (!hostWindow || typeof hostWindow.WebSocket !== "function") {
+      return null;
+    }
+
+    const messageListener = (message: unknown): void => {
+      const candidates =
+        this.extractWebSocketDonationIntentCandidatesFromMessage(message);
+      if (candidates.length > 0) {
+        this.enqueueWebSocketDonationIntentCandidates(candidates);
+      }
+    };
+
+    DataStore.wsDonationListeners.add(messageListener);
+
+    let hookState = DataStore.wsDonationHooksByWindow.get(hostWindow);
+    if (!hookState) {
+      const nativeWebSocket = hostWindow.WebSocket;
+      const observedSockets = new WeakSet<WebSocket>();
+      const dispatchMessage = (message: unknown): void => {
+        for (const listener of DataStore.wsDonationListeners) {
+          try {
+            listener(message);
+          } catch (error) {
+            console.warn("WebSocket donation listener failed", error);
+          }
+        }
+      };
+
+      const attachSocket = (socket: WebSocket): void => {
+        if (observedSockets.has(socket)) {
+          return;
+        }
+        observedSockets.add(socket);
+        socket.addEventListener("message", (event: MessageEvent) => {
+          if (typeof event.data !== "string") {
+            return;
+          }
+          try {
+            const parsed = JSON.parse(event.data) as unknown;
+            dispatchMessage(parsed);
+          } catch {
+            // Ignore non-JSON messages.
+          }
+        });
+      };
+
+      const originalSend = nativeWebSocket.prototype.send;
+      const patchedSend = function patchedWebSocketSend(
+        this: WebSocket,
+        data: string | ArrayBufferLike | Blob | ArrayBufferView,
+      ): void {
+        attachSocket(this);
+        originalSend.call(this, data);
+      };
+      nativeWebSocket.prototype.send = patchedSend;
+
+      const hostWindowMutable = hostWindow as {
+        WebSocket: typeof WebSocket;
+      };
+      const patchedWebSocket = function DataFrontWebSocket(
+        url: string | URL,
+        protocols?: string | string[],
+      ): WebSocket {
+        const socket =
+          protocols === undefined
+            ? new nativeWebSocket(url)
+            : new nativeWebSocket(url, protocols);
+        attachSocket(socket);
+        return socket;
+      } as unknown as typeof WebSocket;
+      hostWindowMutable.WebSocket = patchedWebSocket;
+      hostWindowMutable.WebSocket.prototype = nativeWebSocket.prototype;
+      Object.setPrototypeOf(hostWindowMutable.WebSocket, nativeWebSocket);
+
+      const teardown = (): void => {
+        if (nativeWebSocket.prototype.send === patchedSend) {
+          nativeWebSocket.prototype.send = originalSend;
+        }
+        if (hostWindowMutable.WebSocket === patchedWebSocket) {
+          hostWindowMutable.WebSocket = nativeWebSocket;
+        }
+      };
+
+      hookState = {
+        refCount: 0,
+        teardown,
+      };
+      DataStore.wsDonationHooksByWindow.set(hostWindow, hookState);
+    }
+    hookState.refCount += 1;
+
+    let cleanedUp = false;
+    return () => {
+      if (cleanedUp) {
+        return;
+      }
+      cleanedUp = true;
+      DataStore.wsDonationListeners.delete(messageListener);
+      const currentHook = DataStore.wsDonationHooksByWindow.get(hostWindow);
+      if (!currentHook) {
+        return;
+      }
+      currentHook.refCount = Math.max(0, currentHook.refCount - 1);
+      if (currentHook.refCount === 0) {
+        currentHook.teardown();
+        DataStore.wsDonationHooksByWindow.delete(hostWindow);
+      }
+    };
+  }
+
+  private extractWebSocketDonationIntentCandidatesFromMessage(
+    message: unknown,
+  ): WebSocketDonationIntentCandidate[] {
+    if (!message || typeof message !== "object") {
+      return [];
+    }
+    const payload = message as {
+      type?: unknown;
+      turn?: { intents?: unknown[] } | null;
+    };
+    if (payload.type !== "turn") {
+      return [];
+    }
+    const intents = payload.turn?.intents;
+    if (!Array.isArray(intents) || intents.length === 0) {
+      return [];
+    }
+
+    const candidates: WebSocketDonationIntentCandidate[] = [];
+    const now = Date.now();
+    for (const raw of intents) {
+      const intent = raw as Partial<StampedDonationIntentLike>;
+      if (intent.type !== "donate_gold" && intent.type !== "donate_troops") {
+        continue;
+      }
+      const senderClientId =
+        intent.clientID !== undefined && intent.clientID !== null
+          ? String(intent.clientID).trim()
+          : "";
+      const recipientPlayerId =
+        intent.recipient !== undefined && intent.recipient !== null
+          ? String(intent.recipient).trim()
+          : "";
+      if (!senderClientId || !recipientPlayerId) {
+        continue;
+      }
+
+      const kind: DonationKind =
+        intent.type === "donate_gold" ? "gold" : "troops";
+      const amount = this.resolveDonationIntentAmount(intent, kind);
+      if (amount === null || amount <= 0) {
+        continue;
+      }
+      const amountDisplay = this.formatDonationAmountDisplay(kind, amount);
+
+      candidates.push({
+        kind,
+        senderClientId,
+        recipientPlayerId,
+        amountDisplay,
+        amountApprox: amount,
+        observedAtMs: now,
+      });
+    }
+    return candidates;
+  }
+
+  private resolveDonationIntentAmount(
+    intent: Partial<StampedDonationIntentLike>,
+    kind: DonationKind,
+  ): number | null {
+    const rawAmount = kind === "gold" ? intent.gold : intent.troops;
+    if (typeof rawAmount === "number" && Number.isFinite(rawAmount)) {
+      return Math.max(0, Math.floor(rawAmount));
+    }
+
+    const senderClientId =
+      intent.clientID !== undefined && intent.clientID !== null
+        ? String(intent.clientID).trim()
+        : "";
+    const recipientPlayerId =
+      intent.recipient !== undefined && intent.recipient !== null
+        ? String(intent.recipient).trim()
+        : "";
+    if (!senderClientId || !recipientPlayerId || !this.game) {
+      return null;
+    }
+
+    const sender = this.resolvePlayerViewByClientId(senderClientId);
+    const recipient = this.resolvePlayerById(recipientPlayerId);
+    if (!sender || !recipient) {
+      return null;
+    }
+
+    if (kind === "gold") {
+      const senderGoldRaw = sender.gold();
+      const senderGold =
+        typeof senderGoldRaw === "bigint"
+          ? Number(senderGoldRaw)
+          : senderGoldRaw;
+      if (!Number.isFinite(senderGold) || senderGold <= 0) {
+        return null;
+      }
+      return Math.max(0, Math.floor(senderGold / 3));
+    }
+
+    const config = this.game.config();
+    const defaultDonation =
+      typeof config.defaultDonationAmount === "function"
+        ? config.defaultDonationAmount(sender)
+        : Math.floor(sender.troops() / 3);
+    if (!Number.isFinite(defaultDonation) || defaultDonation <= 0) {
+      return null;
+    }
+
+    let amount = Math.max(0, Math.floor(defaultDonation));
+    if (typeof config.maxTroops === "function") {
+      const maxTroops = config.maxTroops(recipient);
+      const capacityLeft = Math.floor(maxTroops - recipient.troops());
+      if (Number.isFinite(capacityLeft)) {
+        amount = Math.min(amount, Math.max(0, capacityLeft));
+      }
+    }
+
+    return amount > 0 ? amount : null;
+  }
+
+  private formatDonationAmountDisplay(
+    kind: DonationKind,
+    rawAmount: number,
+  ): string {
+    if (kind === "troops") {
+      return formatOpenFrontNumber(rawAmount / 10);
+    }
+    return formatOpenFrontNumber(rawAmount);
+  }
+
+  private enqueueWebSocketDonationIntentCandidates(
+    candidates: readonly WebSocketDonationIntentCandidate[],
+  ): void {
+    if (candidates.length === 0) {
+      return;
+    }
+    for (const candidate of candidates) {
+      this.pendingWebSocketDonationIntents.push(candidate);
+    }
+    if (
+      this.pendingWebSocketDonationIntents.length >
+      WEB_SOCKET_DONATION_PENDING_MAX
+    ) {
+      this.pendingWebSocketDonationIntents.splice(
+        0,
+        this.pendingWebSocketDonationIntents.length -
+          WEB_SOCKET_DONATION_PENDING_MAX,
+      );
+    }
   }
 
   private attachActionsState(snapshot: GameSnapshot): GameSnapshot {
@@ -3537,6 +3864,7 @@ export class DataStore {
     this.lastProcessedDisplayEventArrayLength = 0;
     this.recentTroopDonations.clear();
     this.recentGoldDonations.clear();
+    this.pendingWebSocketDonationIntents = [];
   }
 
   private processRecentDisplayEvents(
@@ -3553,6 +3881,9 @@ export class DataStore {
       console.warn("Failed to read recent game updates", error);
       return;
     }
+
+    const records = playerRecords ?? this.buildPlayerRecordLookupFromSnapshot();
+    this.processPendingWebSocketDonationIntents(records);
 
     const rawDisplayEvents = this.extractRawDisplayEvents(updates);
     if (!rawDisplayEvents) {
@@ -3581,7 +3912,6 @@ export class DataStore {
     this.lastProcessedDisplayEventArray = rawDisplayEvents;
     this.lastProcessedDisplayEventArrayLength = rawDisplayEvents.length;
 
-    const records = playerRecords ?? this.buildPlayerRecordLookupFromSnapshot();
     const displayEvents: DisplayMessageUpdateLike[] = [];
     for (
       let index = previousLength;
@@ -3604,29 +3934,70 @@ export class DataStore {
     );
 
     for (const troopDonation of troopDonations) {
-      if (!this.registerDonation(troopDonation, this.recentTroopDonations)) {
-        continue;
-      }
-      this.emitActionEvent("troopsDonated", troopDonation);
-      if (this.troopDonationOverlay?.isActive()) {
-        const senderView = this.resolvePlayerViewById(troopDonation.senderId);
-        this.troopDonationOverlay.registerDonation(troopDonation, {
-          fallbackColor: this.resolvePlayerColor(senderView),
-        });
-      }
+      this.handleResolvedDonation("troops", troopDonation);
     }
 
     for (const goldDonation of goldDonations) {
-      if (!this.registerDonation(goldDonation, this.recentGoldDonations)) {
+      this.handleResolvedDonation("gold", goldDonation);
+    }
+  }
+
+  private processPendingWebSocketDonationIntents(
+    playerRecords: Map<string, PlayerRecord>,
+  ): void {
+    if (this.pendingWebSocketDonationIntents.length === 0) {
+      return;
+    }
+
+    const unresolved: WebSocketDonationIntentCandidate[] = [];
+    const expirationThreshold = Date.now() - WEB_SOCKET_DONATION_PENDING_TTL_MS;
+    for (const candidate of this.pendingWebSocketDonationIntents) {
+      if (candidate.observedAtMs <= expirationThreshold) {
         continue;
       }
-      this.emitActionEvent("goldDonated", goldDonation);
-      if (this.goldDonationOverlay?.isActive()) {
-        const senderView = this.resolvePlayerViewById(goldDonation.senderId);
-        this.goldDonationOverlay.registerDonation(goldDonation, {
+
+      const senderRecord = this.resolvePlayerRecordByClientId(
+        candidate.senderClientId,
+        playerRecords,
+      );
+      const recipientRecord = playerRecords.get(candidate.recipientPlayerId);
+      if (!senderRecord || !recipientRecord) {
+        unresolved.push(candidate);
+      }
+    }
+
+    this.pendingWebSocketDonationIntents = unresolved;
+  }
+
+  private handleResolvedDonation(
+    kind: DonationKind,
+    donation: SidebarDonationEvent,
+  ): void {
+    const store =
+      kind === "troops" ? this.recentTroopDonations : this.recentGoldDonations;
+    if (!this.registerDonation(donation, store)) {
+      return;
+    }
+
+    if (kind === "troops") {
+      const event = donation as SidebarTroopDonationEvent;
+      this.emitActionEvent("troopsDonated", event);
+      if (this.troopDonationOverlay?.isActive()) {
+        const senderView = this.resolvePlayerViewById(event.senderId);
+        this.troopDonationOverlay.registerDonation(event, {
           fallbackColor: this.resolvePlayerColor(senderView),
         });
       }
+      return;
+    }
+
+    const event = donation as SidebarGoldDonationEvent;
+    this.emitActionEvent("goldDonated", event);
+    if (this.goldDonationOverlay?.isActive()) {
+      const senderView = this.resolvePlayerViewById(event.senderId);
+      this.goldDonationOverlay.registerDonation(event, {
+        fallbackColor: this.resolvePlayerColor(senderView),
+      });
     }
   }
 
@@ -3864,6 +4235,37 @@ export class DataStore {
     }
 
     return resolved;
+  }
+
+  private resolvePlayerRecordByClientId(
+    clientId: string,
+    records: Map<string, PlayerRecord>,
+  ): PlayerRecord | null {
+    const normalized = clientId.trim();
+    if (!normalized) {
+      return null;
+    }
+
+    for (const record of records.values()) {
+      if (record.clientID === normalized) {
+        return record;
+      }
+    }
+
+    if (this.game && typeof this.game.playerByClientID === "function") {
+      try {
+        const view = this.game.playerByClientID(normalized);
+        const id = view ? this.safePlayerId(view) : undefined;
+        if (!id) {
+          return null;
+        }
+        return records.get(id) ?? null;
+      } catch {
+        return null;
+      }
+    }
+
+    return null;
   }
 
   private createDonationEventFromSmallIds(
@@ -4557,6 +4959,64 @@ export class DataStore {
     return fallback !== null ? String(fallback) : undefined;
   }
 
+  private safePlayerClientId(player: PlayerViewLike): string | undefined {
+    try {
+      if (typeof player.clientID === "function") {
+        const raw = player.clientID();
+        if (typeof raw === "string" && raw.trim()) {
+          return raw.trim();
+        }
+      }
+    } catch (error) {
+      console.warn("Failed to resolve player clientID", error);
+    }
+
+    const rawClientId = (player as { data?: { clientID?: unknown } }).data
+      ?.clientID;
+    if (typeof rawClientId === "string" && rawClientId.trim()) {
+      return rawClientId.trim();
+    }
+    if (typeof rawClientId === "number" && Number.isFinite(rawClientId)) {
+      return String(rawClientId);
+    }
+
+    return undefined;
+  }
+
+  private resolvePlayerViewByClientId(clientId: string): PlayerViewLike | null {
+    if (!this.game) {
+      return null;
+    }
+    const normalized = clientId.trim();
+    if (!normalized) {
+      return null;
+    }
+
+    if (typeof this.game.playerByClientID === "function") {
+      try {
+        const direct = this.game.playerByClientID(normalized);
+        if (this.isPlayerViewLike(direct)) {
+          return direct;
+        }
+      } catch {
+        // Fall through to linear scan.
+      }
+    }
+
+    try {
+      const players = this.game.playerViews();
+      for (const player of players) {
+        if (this.safePlayerClientId(player) === normalized) {
+          return player;
+        }
+      }
+    } catch {
+      return null;
+    }
+
+    return null;
+  }
+
   private resolvePlayerColor(
     player: PlayerViewLike | null | undefined,
   ): string | undefined {
@@ -4756,9 +5216,11 @@ export class DataStore {
     const tradeStoppedBySelf = tradeStatus.stoppedBySelf;
     const tradeStoppedByOther = tradeStatus.stoppedByOther;
     const isSelf = this.isSamePlayer(localPlayer, playerId);
+    const clientID = this.safePlayerClientId(player);
 
     return {
       id: playerId,
+      clientID,
       publicId: isSelf ? (this.localPlayerPublicId ?? undefined) : undefined,
       name,
       clan,
