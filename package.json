@@ -8,7 +8,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "bench": "vitest bench --run",
-    "build": "node ./scripts/build-tailwind.cjs && tsc && cross-env GORILLA_BUILD=1 NODE_OPTIONS=\"--require ./scripts/alias-typescript.cjs\" gorilla --input ./build/sidebar/main.js --output ./dist/datafront.user.js --config ./gorilla.json",
+    "build": "node ./scripts/build-tailwind.cjs && tsc && cross-env GORILLA_BUILD=1 NODE_OPTIONS=\"--require ./scripts/alias-typescript.cjs\" gorilla --input ./build/sidebar/main.js --output ./dist/datafront.user.js --config ./gorilla.json && node ./scripts/normalize-lf.cjs ./dist/datafront.user.js",
     "prepare": "husky install"
   },
   "lint-staged": {

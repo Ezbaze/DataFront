@@ -10553,8 +10553,7 @@
           const now = Date.now();
           for (const raw of intents) {
               const intent = raw;
-              if (intent.type !== "donate_gold" &&
-                  intent.type !== "donate_troops") {
+              if (intent.type !== "donate_gold" && intent.type !== "donate_troops") {
                   continue;
               }
               const senderClientId = intent.clientID !== undefined && intent.clientID !== null
@@ -10604,7 +10603,9 @@
           }
           if (kind === "gold") {
               const senderGoldRaw = sender.gold();
-              const senderGold = typeof senderGoldRaw === "bigint" ? Number(senderGoldRaw) : senderGoldRaw;
+              const senderGold = typeof senderGoldRaw === "bigint"
+                  ? Number(senderGoldRaw)
+                  : senderGoldRaw;
               if (!Number.isFinite(senderGold) || senderGold <= 0) {
                   return null;
               }
@@ -10640,7 +10641,8 @@
           for (const candidate of candidates) {
               this.pendingWebSocketDonationIntents.push(candidate);
           }
-          if (this.pendingWebSocketDonationIntents.length > WEB_SOCKET_DONATION_PENDING_MAX) {
+          if (this.pendingWebSocketDonationIntents.length >
+              WEB_SOCKET_DONATION_PENDING_MAX) {
               this.pendingWebSocketDonationIntents.splice(0, this.pendingWebSocketDonationIntents.length -
                   WEB_SOCKET_DONATION_PENDING_MAX);
           }
@@ -13325,8 +13327,7 @@
                   return record;
               }
           }
-          if (this.game &&
-              typeof this.game.playerByClientID === "function") {
+          if (this.game && typeof this.game.playerByClientID === "function") {
               try {
                   const view = this.game.playerByClientID(normalized);
                   const id = view ? this.safePlayerId(view) : undefined;
@@ -13927,7 +13928,8 @@
           catch (error) {
               console.warn("Failed to resolve player clientID", error);
           }
-          const rawClientId = player.data?.clientID;
+          const rawClientId = player.data
+              ?.clientID;
           if (typeof rawClientId === "string" && rawClientId.trim()) {
               return rawClientId.trim();
           }
