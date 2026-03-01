@@ -56,6 +56,9 @@ const PANEL_ACTION_BUTTON_BASE_CLASS = [
   "focus:outline-none focus:ring-2 focus:ring-sky-500/50",
 ].join(" ");
 
+const PROJECT_DOCS_URL =
+  "https://github.com/Ezbaze/DataFront/blob/main/docs/README.md";
+
 function getPanelActionButtonClass(extra?: string): string {
   return extra
     ? `${PANEL_ACTION_BUTTON_BASE_CLASS} ${extra}`
@@ -885,6 +888,11 @@ export class SidebarApp {
       ),
     );
     list.appendChild(
+      this.createQuickActionItem("Docs", "external-link", () =>
+        this.openProjectDocs(),
+      ),
+    );
+    list.appendChild(
       this.createQuickActionItem("Save state", "save", () =>
         this.store.saveSidebarState(),
       ),
@@ -910,6 +918,10 @@ export class SidebarApp {
       this.runWithUiContext(() => onSelect?.());
     });
     return button;
+  }
+
+  private openProjectDocs(): void {
+    this.uiWindow.open(PROJECT_DOCS_URL, "_blank", "noopener,noreferrer");
   }
 
   private onQuickActionsPointerDown(event: PointerEvent): void {

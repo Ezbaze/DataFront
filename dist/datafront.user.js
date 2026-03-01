@@ -2,7 +2,7 @@
 // ==UserScript==
 // @name			DataFront
 // @namespace		https://openfront.io/
-// @version			0.1.1
+// @version			0.1.2
 // @description		Adds a resizable, splittable strategic sidebar for OpenFront players, clans, and teams.
 // @author			ezbaze
 // @match			https://*.openfront.io/*
@@ -5697,6 +5697,7 @@
       "hover:border-sky-500/60 hover:text-sky-200",
       "focus:outline-none focus:ring-2 focus:ring-sky-500/50",
   ].join(" ");
+  const PROJECT_DOCS_URL = "https://github.com/Ezbaze/DataFront/blob/main/docs/README.md";
   function getPanelActionButtonClass(extra) {
       return extra
           ? `${PANEL_ACTION_BUTTON_BASE_CLASS} ${extra}`
@@ -6315,6 +6316,7 @@
           menu.tabIndex = -1;
           const list = this.createUiElement("div", "py-1");
           list.appendChild(this.createQuickActionItem("New window", "external-link", () => this.onRequestNewWindow?.()));
+          list.appendChild(this.createQuickActionItem("Docs", "external-link", () => this.openProjectDocs()));
           list.appendChild(this.createQuickActionItem("Save state", "save", () => this.store.saveSidebarState()));
           menu.appendChild(list);
           return menu;
@@ -6328,6 +6330,9 @@
               this.runWithUiContext(() => onSelect?.());
           });
           return button;
+      }
+      openProjectDocs() {
+          this.uiWindow.open(PROJECT_DOCS_URL, "_blank", "noopener,noreferrer");
       }
       onQuickActionsPointerDown(event) {
           if (!this.isQuickActionsMenuOpen) {
