@@ -1,0 +1,17 @@
+// ==UserScript==
+// @name			DataFront
+// @namespace		https://openfront.io/
+// @version			0.1.3
+// @description		Adds a resizable, splittable strategic sidebar for OpenFront players, clans, and teams.
+// @author			ezbaze
+// @match			https://*.openfront.io/*
+// @match			https://openfront.io/*
+// @grant			GM_getValue
+// @grant			GM_setValue
+// @grant			unsafeWindow
+// @license			MIT
+// @updateURL		https://raw.githubusercontent.com/Ezbaze/DataFront/main/dist/datafront.user.js
+// @downloadURL		https://raw.githubusercontent.com/Ezbaze/DataFront/main/dist/datafront.user.js
+//
+// Created with love using Gorilla
+// ==/UserScript==
