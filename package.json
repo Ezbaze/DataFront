@@ -8,6 +8,10 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "bench": "vitest bench --run",
+    "scripts:build": "tsc -p ./scripts/tsconfig.json",
+    "preopenfront:live-version": "npm run scripts:build --silent",
+    "openfront:live-version": "node ./build/scripts/openfront-live-version.js",
+    "openfront:live-version:json": "npm run scripts:build --silent && node ./build/scripts/openfront-live-version.js --json",
     "build": "node ./scripts/build-tailwind.cjs && tsc && cross-env GORILLA_BUILD=1 NODE_OPTIONS=\"--require ./scripts/alias-typescript.cjs\" gorilla --input ./build/sidebar/main.js --output ./dist/datafront.user.js --config ./gorilla.json && node ./scripts/normalize-lf.cjs ./dist/datafront.user.js",
     "prepare": "husky install"
   },
@@ -35,7 +39,8 @@
     "prettier": "^3.5.3",
     "tailwindcss": "^3.4.17",
     "typescript": "^5.7.2",
-    "vitest": "^2.1.9"
+    "vitest": "^2.1.9",
+    "zod": "^4.0.5"
   },
   "dependencies": {
     "dompurify": "^3.1.7",
