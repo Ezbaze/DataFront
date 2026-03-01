@@ -11,9 +11,10 @@ A userscript that adds an enhanced sidebar to OpenFront, providing a wide range 
 
 ## 🎹 Hotkeys
 
-| Action                     | Hotkey             |
-| -------------------------- | ------------------ |
-| Toggle sidebar (show/hide) | **Ctrl + Alt + H** |
+| Action                      | Hotkey             |
+| --------------------------- | ------------------ |
+| Toggle sidebar (show/hide)  | **Ctrl + Alt + H** |
+| Toggle overlays (show/hide) | **Ctrl + Alt + O** |
 
 ## 🚀 Installation
 

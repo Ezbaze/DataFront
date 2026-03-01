@@ -5756,6 +5756,7 @@
           this.handleGlobalKeyDown = (event) => this.onGlobalKeyDown(event);
           this.searchFilter = "";
           this.isSidebarHidden = false;
+          this.areOverlaysHidden = false;
           this.sidebarResizer = null;
           this.sidebarDefaultWidth = "420px";
           this.hostSidebarWidth = "420px";
@@ -5919,16 +5920,19 @@
                   return;
               }
           }
-          const isToggleShortcut = event.code === "KeyH" &&
-              event.ctrlKey &&
-              event.altKey &&
-              !event.shiftKey &&
-              !event.metaKey;
+          const isToggleShortcut = event.ctrlKey && event.altKey && !event.shiftKey && !event.metaKey;
           if (!isToggleShortcut) {
               return;
           }
+          if (event.code !== "KeyH" && event.code !== "KeyO") {
+              return;
+          }
           event.preventDefault();
-          this.toggleSidebarVisibility();
+          if (event.code === "KeyH") {
+              this.toggleSidebarVisibility();
+              return;
+          }
+          this.toggleOverlaysVisibility();
       }
       createSidebarShell() {
           this.uiDocument.getElementById(SIDEBAR_ID)?.remove();
@@ -6150,6 +6154,14 @@
               delete this.sidebar.dataset.sidebarHidden;
           }
           this.repositionGameOverlay();
+      }
+      toggleOverlaysVisibility(force) {
+          const nextHidden = typeof force === "boolean" ? force : !this.areOverlaysHidden;
+          if (nextHidden === this.areOverlaysHidden) {
+              return;
+          }
+          this.areOverlaysHidden = nextHidden;
+          this.store.setOverlaysTemporarilyHidden(nextHidden);
       }
       resolveOverlayTarget(selector, root) {
           if (!root.isConnected) {
@@ -7517,6 +7529,7 @@
           this.pixelRatio = 1;
           this.offsetLeft = 0;
           this.offsetTop = 0;
+          this.visible = true;
           if (typeof document === "undefined") {
               throw new Error("MissileTrajectoryOverlay requires a browser environment");
           }
@@ -7543,11 +7556,18 @@
           }
           this.active = true;
           this.ensureAttached();
-          this.canvas.style.display = "block";
+          this.canvas.style.display = this.visible ? "block" : "none";
           this.updateCanvasSize();
           this.registerEventListeners();
           this.render();
           this.scheduleRender();
+      }
+      setVisible(visible) {
+          this.visible = visible;
+          if (!this.active) {
+              return;
+          }
+          this.canvas.style.display = this.visible ? "block" : "none";
       }
       disable() {
           if (!this.active) {
@@ -8104,6 +8124,7 @@
           this.pixelRatio = 1;
           this.offsetLeft = 0;
           this.offsetTop = 0;
+          this.visible = true;
           if (typeof document === "undefined") {
               throw new Error("HistoricalMissileTrajectoryOverlay requires a browser environment");
           }
@@ -8130,10 +8151,17 @@
           }
           this.active = true;
           this.ensureAttached();
-          this.canvas.style.display = "block";
+          this.canvas.style.display = this.visible ? "block" : "none";
           this.updateCanvasSize();
           this.render();
           this.scheduleRender();
+      }
+      setVisible(visible) {
+          this.visible = visible;
+          if (!this.active) {
+              return;
+          }
+          this.canvas.style.display = this.visible ? "block" : "none";
       }
       disable() {
           if (!this.active) {
@@ -8562,6 +8590,7 @@
               portsRevision: -1,
               localSmallId: null,
           };
+          this.visible = true;
           if (typeof document === "undefined") {
               throw new Error("TradeRouteOverlay requires a browser environment");
           }
@@ -8609,12 +8638,21 @@
           }
           this.active = true;
           this.ensureAttached();
-          this.canvas.style.display = "block";
-          this.labelContainer.style.display = "block";
+          this.canvas.style.display = this.visible ? "block" : "none";
+          this.labelContainer.style.display = this.visible ? "block" : "none";
           this.updateCanvasSize();
           this.registerEventListeners();
           this.render();
           this.scheduleRender();
+      }
+      setVisible(visible) {
+          this.visible = visible;
+          if (!this.active) {
+              return;
+          }
+          const display = this.visible ? "block" : "none";
+          this.canvas.style.display = display;
+          this.labelContainer.style.display = display;
       }
       disable() {
           if (!this.active) {
@@ -9478,6 +9516,7 @@
           this.cssWidth = 0;
           this.cssHeight = 0;
           this.nextEntryId = 0;
+          this.visible = true;
           if (typeof document === "undefined") {
               throw new Error("DonationOverlay requires a browser environment");
           }
@@ -9525,10 +9564,17 @@
           }
           this.active = true;
           this.ensureAttached();
-          this.container.style.display = "block";
+          this.container.style.display = this.visible ? "block" : "none";
           this.updateContainerFrame();
           this.render();
           this.scheduleRender();
+      }
+      setVisible(visible) {
+          this.visible = visible;
+          if (!this.active) {
+              return;
+          }
+          this.container.style.display = this.visible ? "block" : "none";
       }
       disable() {
           if (!this.active) {
@@ -10344,6 +10390,7 @@
           this.sidebarLogRevision = 0;
           this.sidebarOverlays = [];
           this.sidebarOverlayRevision = 0;
+          this.overlaysTemporarilyHidden = false;
           this.displayEventPollingActive = false;
           this.displayEventPollingLastTimestamp = 0;
           this.lastProcessedDisplayUpdates = null;
@@ -11813,6 +11860,13 @@
           });
           this.notify();
       }
+      setOverlaysTemporarilyHidden(hidden) {
+          if (this.overlaysTemporarilyHidden === hidden) {
+              return;
+          }
+          this.overlaysTemporarilyHidden = hidden;
+          this.applyOverlayVisibility();
+      }
       setOverlayEnabled(overlayId, enabled) {
           const overlay = this.sidebarOverlays.find((entry) => entry.id === overlayId);
           if (!overlay) {
@@ -11826,55 +11880,75 @@
           this.sidebarOverlayRevision += 1;
           this.snapshot = this.attachActionsState({ ...this.snapshot });
           this.notify();
+          this.syncOverlayRuntime(overlayId);
+      }
+      isOverlayEnabled(overlayId) {
+          return this.sidebarOverlays.some((overlay) => overlay.id === overlayId && overlay.enabled);
+      }
+      applyOverlayVisibility() {
+          const visible = !this.overlaysTemporarilyHidden;
+          this.missileOverlay?.setVisible(visible);
+          this.historicalMissileOverlay?.setVisible(visible);
+          this.troopDonationOverlay?.setVisible(visible);
+          this.goldDonationOverlay?.setVisible(visible);
+          this.tradeRouteOverlay?.setVisible(visible);
+      }
+      syncOverlayRuntime(overlayId) {
+          const shouldEnable = this.isOverlayEnabled(overlayId);
+          const visible = !this.overlaysTemporarilyHidden;
           if (overlayId === MISSILE_TRAJECTORY_OVERLAY_ID) {
-              if (enabled) {
-                  const effect = this.ensureMissileOverlay();
-                  effect.setSiloPositions(this.collectMissileSiloPositions());
-                  effect.enable();
+              if (!shouldEnable) {
+                  this.missileOverlay?.disable();
+                  return;
               }
-              else if (this.missileOverlay) {
-                  this.missileOverlay.disable();
-              }
+              const effect = this.ensureMissileOverlay();
+              effect.setVisible(visible);
+              effect.setSiloPositions(this.collectMissileSiloPositions());
+              effect.enable();
+              return;
           }
-          else if (overlayId === HISTORICAL_MISSILE_OVERLAY_ID) {
-              if (enabled) {
-                  const effect = this.ensureHistoricalMissileOverlay();
-                  effect.setTrajectories(this.collectHistoricalMissiles());
-                  effect.enable();
+          if (overlayId === HISTORICAL_MISSILE_OVERLAY_ID) {
+              if (!shouldEnable) {
+                  this.historicalMissileOverlay?.disable();
+                  return;
               }
-              else if (this.historicalMissileOverlay) {
-                  this.historicalMissileOverlay.disable();
-              }
+              const effect = this.ensureHistoricalMissileOverlay();
+              effect.setVisible(visible);
+              effect.setTrajectories(this.collectHistoricalMissiles());
+              effect.enable();
+              return;
           }
-          else if (overlayId === TROOP_DONATION_OVERLAY_ID) {
-              if (enabled) {
-                  const effect = this.ensureTroopDonationOverlay();
-                  this.syncTroopDonationOverlay();
-                  effect.enable();
+          if (overlayId === TROOP_DONATION_OVERLAY_ID) {
+              if (!shouldEnable) {
+                  this.troopDonationOverlay?.disable();
+                  return;
               }
-              else if (this.troopDonationOverlay) {
-                  this.troopDonationOverlay.disable();
-              }
+              const effect = this.ensureTroopDonationOverlay();
+              effect.setVisible(visible);
+              this.syncTroopDonationOverlay();
+              effect.enable();
+              return;
           }
-          else if (overlayId === GOLD_DONATION_OVERLAY_ID) {
-              if (enabled) {
-                  const effect = this.ensureGoldDonationOverlay();
-                  this.syncGoldDonationOverlay();
-                  effect.enable();
+          if (overlayId === GOLD_DONATION_OVERLAY_ID) {
+              if (!shouldEnable) {
+                  this.goldDonationOverlay?.disable();
+                  return;
               }
-              else if (this.goldDonationOverlay) {
-                  this.goldDonationOverlay.disable();
-              }
+              const effect = this.ensureGoldDonationOverlay();
+              effect.setVisible(visible);
+              this.syncGoldDonationOverlay();
+              effect.enable();
+              return;
           }
-          else if (overlayId === TRADE_ROUTE_OVERLAY_ID) {
-              if (enabled) {
-                  const effect = this.ensureTradeRouteOverlay();
-                  this.syncTradeRouteOverlay();
-                  effect.enable();
+          if (overlayId === TRADE_ROUTE_OVERLAY_ID) {
+              if (!shouldEnable) {
+                  this.tradeRouteOverlay?.disable();
+                  return;
               }
-              else if (this.tradeRouteOverlay) {
-                  this.tradeRouteOverlay.disable();
-              }
+              const effect = this.ensureTradeRouteOverlay();
+              effect.setVisible(visible);
+              this.syncTradeRouteOverlay();
+              effect.enable();
           }
       }
       setTradingStopped(targetPlayerIds, stopped) {

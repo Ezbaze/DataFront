@@ -82,6 +82,7 @@ export class MissileTrajectoryOverlay {
   private pixelRatio = 1;
   private offsetLeft = 0;
   private offsetTop = 0;
+  private visible = true;
 
   constructor(private readonly options: MissileTrajectoryOverlayOptions) {
     if (typeof document === "undefined") {
@@ -115,11 +116,19 @@ export class MissileTrajectoryOverlay {
     }
     this.active = true;
     this.ensureAttached();
-    this.canvas.style.display = "block";
+    this.canvas.style.display = this.visible ? "block" : "none";
     this.updateCanvasSize();
     this.registerEventListeners();
     this.render();
     this.scheduleRender();
+  }
+
+  setVisible(visible: boolean): void {
+    this.visible = visible;
+    if (!this.active) {
+      return;
+    }
+    this.canvas.style.display = this.visible ? "block" : "none";
   }
 
   disable(): void {
@@ -843,6 +852,7 @@ export class HistoricalMissileTrajectoryOverlay {
   private pixelRatio = 1;
   private offsetLeft = 0;
   private offsetTop = 0;
+  private visible = true;
 
   constructor(private readonly options: HistoricalMissileOverlayOptions) {
     if (typeof document === "undefined") {
@@ -876,10 +886,18 @@ export class HistoricalMissileTrajectoryOverlay {
     }
     this.active = true;
     this.ensureAttached();
-    this.canvas.style.display = "block";
+    this.canvas.style.display = this.visible ? "block" : "none";
     this.updateCanvasSize();
     this.render();
     this.scheduleRender();
+  }
+
+  setVisible(visible: boolean): void {
+    this.visible = visible;
+    if (!this.active) {
+      return;
+    }
+    this.canvas.style.display = this.visible ? "block" : "none";
   }
 
   disable(): void {
@@ -1462,6 +1480,7 @@ export class TradeRouteOverlay {
     portsRevision: -1,
     localSmallId: null as number | null,
   };
+  private visible = true;
 
   constructor(private readonly options: TradeRouteOverlayOptions) {
     if (typeof document === "undefined") {
@@ -1516,12 +1535,22 @@ export class TradeRouteOverlay {
     }
     this.active = true;
     this.ensureAttached();
-    this.canvas.style.display = "block";
-    this.labelContainer.style.display = "block";
+    this.canvas.style.display = this.visible ? "block" : "none";
+    this.labelContainer.style.display = this.visible ? "block" : "none";
     this.updateCanvasSize();
     this.registerEventListeners();
     this.render();
     this.scheduleRender();
+  }
+
+  setVisible(visible: boolean): void {
+    this.visible = visible;
+    if (!this.active) {
+      return;
+    }
+    const display = this.visible ? "block" : "none";
+    this.canvas.style.display = display;
+    this.labelContainer.style.display = display;
   }
 
   disable(): void {
@@ -2584,6 +2613,7 @@ class DonationOverlay<TDonation extends SidebarDonationEvent> {
   private cssWidth = 0;
   private cssHeight = 0;
   private nextEntryId = 0;
+  private visible = true;
 
   constructor(protected readonly options: DonationOverlayOptions) {
     if (typeof document === "undefined") {
@@ -2640,10 +2670,18 @@ class DonationOverlay<TDonation extends SidebarDonationEvent> {
     }
     this.active = true;
     this.ensureAttached();
-    this.container.style.display = "block";
+    this.container.style.display = this.visible ? "block" : "none";
     this.updateContainerFrame();
     this.render();
     this.scheduleRender();
+  }
+
+  setVisible(visible: boolean): void {
+    this.visible = visible;
+    if (!this.active) {
+      return;
+    }
+    this.container.style.display = this.visible ? "block" : "none";
   }
 
   disable(): void {

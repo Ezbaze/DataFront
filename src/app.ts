@@ -146,6 +146,7 @@ export class SidebarApp {
   private searchInput?: HTMLInputElement;
   private searchFilter = "";
   private isSidebarHidden = false;
+  private areOverlaysHidden = false;
   private sidebarResizer: HTMLElement | null = null;
   private sidebarDefaultWidth = "420px";
   private hostSidebarWidth = "420px";
@@ -353,18 +354,21 @@ export class SidebarApp {
     }
 
     const isToggleShortcut =
-      event.code === "KeyH" &&
-      event.ctrlKey &&
-      event.altKey &&
-      !event.shiftKey &&
-      !event.metaKey;
-
+      event.ctrlKey && event.altKey && !event.shiftKey && !event.metaKey;
     if (!isToggleShortcut) {
       return;
     }
 
+    if (event.code !== "KeyH" && event.code !== "KeyO") {
+      return;
+    }
+
     event.preventDefault();
-    this.toggleSidebarVisibility();
+    if (event.code === "KeyH") {
+      this.toggleSidebarVisibility();
+      return;
+    }
+    this.toggleOverlaysVisibility();
   }
 
   private createSidebarShell(): HTMLElement {
@@ -651,6 +655,17 @@ export class SidebarApp {
     }
 
     this.repositionGameOverlay();
+  }
+
+  private toggleOverlaysVisibility(force?: boolean): void {
+    const nextHidden =
+      typeof force === "boolean" ? force : !this.areOverlaysHidden;
+    if (nextHidden === this.areOverlaysHidden) {
+      return;
+    }
+
+    this.areOverlaysHidden = nextHidden;
+    this.store.setOverlaysTemporarilyHidden(nextHidden);
   }
 
   private resolveOverlayTarget(

@@ -614,6 +614,7 @@ export class DataStore {
   private sidebarLogRevision = 0;
   private sidebarOverlays: SidebarOverlayDefinition[] = [];
   private sidebarOverlayRevision = 0;
+  private overlaysTemporarilyHidden = false;
   private missileOverlay?: MissileTrajectoryOverlay;
   private historicalMissileOverlay?: HistoricalMissileTrajectoryOverlay;
   private troopDonationOverlay?: TroopDonationOverlay;
@@ -2392,6 +2393,15 @@ export class DataStore {
     this.notify();
   }
 
+  setOverlaysTemporarilyHidden(hidden: boolean): void {
+    if (this.overlaysTemporarilyHidden === hidden) {
+      return;
+    }
+
+    this.overlaysTemporarilyHidden = hidden;
+    this.applyOverlayVisibility();
+  }
+
   setOverlayEnabled(overlayId: string, enabled: boolean): void {
     const overlay = this.sidebarOverlays.find(
       (entry) => entry.id === overlayId,
@@ -2408,47 +2418,85 @@ export class DataStore {
     this.sidebarOverlayRevision += 1;
     this.snapshot = this.attachActionsState({ ...this.snapshot });
     this.notify();
+    this.syncOverlayRuntime(overlayId);
+  }
+
+  private isOverlayEnabled(overlayId: string): boolean {
+    return this.sidebarOverlays.some(
+      (overlay) => overlay.id === overlayId && overlay.enabled,
+    );
+  }
+
+  private applyOverlayVisibility(): void {
+    const visible = !this.overlaysTemporarilyHidden;
+    this.missileOverlay?.setVisible(visible);
+    this.historicalMissileOverlay?.setVisible(visible);
+    this.troopDonationOverlay?.setVisible(visible);
+    this.goldDonationOverlay?.setVisible(visible);
+    this.tradeRouteOverlay?.setVisible(visible);
+  }
+
+  private syncOverlayRuntime(overlayId: string): void {
+    const shouldEnable = this.isOverlayEnabled(overlayId);
+    const visible = !this.overlaysTemporarilyHidden;
 
     if (overlayId === MISSILE_TRAJECTORY_OVERLAY_ID) {
-      if (enabled) {
-        const effect = this.ensureMissileOverlay();
-        effect.setSiloPositions(this.collectMissileSiloPositions());
-        effect.enable();
-      } else if (this.missileOverlay) {
-        this.missileOverlay.disable();
+      if (!shouldEnable) {
+        this.missileOverlay?.disable();
+        return;
       }
-    } else if (overlayId === HISTORICAL_MISSILE_OVERLAY_ID) {
-      if (enabled) {
-        const effect = this.ensureHistoricalMissileOverlay();
-        effect.setTrajectories(this.collectHistoricalMissiles());
-        effect.enable();
-      } else if (this.historicalMissileOverlay) {
-        this.historicalMissileOverlay.disable();
+      const effect = this.ensureMissileOverlay();
+      effect.setVisible(visible);
+      effect.setSiloPositions(this.collectMissileSiloPositions());
+      effect.enable();
+      return;
+    }
+
+    if (overlayId === HISTORICAL_MISSILE_OVERLAY_ID) {
+      if (!shouldEnable) {
+        this.historicalMissileOverlay?.disable();
+        return;
       }
-    } else if (overlayId === TROOP_DONATION_OVERLAY_ID) {
-      if (enabled) {
-        const effect = this.ensureTroopDonationOverlay();
-        this.syncTroopDonationOverlay();
-        effect.enable();
-      } else if (this.troopDonationOverlay) {
-        this.troopDonationOverlay.disable();
+      const effect = this.ensureHistoricalMissileOverlay();
+      effect.setVisible(visible);
+      effect.setTrajectories(this.collectHistoricalMissiles());
+      effect.enable();
+      return;
+    }
+
+    if (overlayId === TROOP_DONATION_OVERLAY_ID) {
+      if (!shouldEnable) {
+        this.troopDonationOverlay?.disable();
+        return;
       }
-    } else if (overlayId === GOLD_DONATION_OVERLAY_ID) {
-      if (enabled) {
-        const effect = this.ensureGoldDonationOverlay();
-        this.syncGoldDonationOverlay();
-        effect.enable();
-      } else if (this.goldDonationOverlay) {
-        this.goldDonationOverlay.disable();
+      const effect = this.ensureTroopDonationOverlay();
+      effect.setVisible(visible);
+      this.syncTroopDonationOverlay();
+      effect.enable();
+      return;
+    }
+
+    if (overlayId === GOLD_DONATION_OVERLAY_ID) {
+      if (!shouldEnable) {
+        this.goldDonationOverlay?.disable();
+        return;
       }
-    } else if (overlayId === TRADE_ROUTE_OVERLAY_ID) {
-      if (enabled) {
-        const effect = this.ensureTradeRouteOverlay();
-        this.syncTradeRouteOverlay();
-        effect.enable();
-      } else if (this.tradeRouteOverlay) {
-        this.tradeRouteOverlay.disable();
+      const effect = this.ensureGoldDonationOverlay();
+      effect.setVisible(visible);
+      this.syncGoldDonationOverlay();
+      effect.enable();
+      return;
+    }
+
+    if (overlayId === TRADE_ROUTE_OVERLAY_ID) {
+      if (!shouldEnable) {
+        this.tradeRouteOverlay?.disable();
+        return;
       }
+      const effect = this.ensureTradeRouteOverlay();
+      effect.setVisible(visible);
+      this.syncTradeRouteOverlay();
+      effect.enable();
     }
   }
 
