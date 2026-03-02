@@ -2,7 +2,7 @@
 // ==UserScript==
 // @name			DataFront
 // @namespace		https://openfront.io/
-// @version			0.1.3
+// @version			0.1.4
 // @description		Adds a resizable, splittable strategic sidebar for OpenFront players, clans, and teams.
 // @author			ezbaze
 // @match			https://*.openfront.io/*
@@ -9137,9 +9137,11 @@
               entry.container.style.display = "inline-flex";
           }
           for (const [key, entry] of this.labelPool.entries()) {
-              if (!used.has(key)) {
-                  entry.container.style.display = "none";
+              if (used.has(key)) {
+                  continue;
               }
+              entry.container.remove();
+              this.labelPool.delete(key);
           }
       }
       ensureLabelEntry(key) {
@@ -9507,6 +9509,303 @@
       }
   }
   const SVG_NS = "http://www.w3.org/2000/svg";
+  class AttackBorderOverlay {
+      constructor(options) {
+          this.options = options;
+          this.labelPool = new Map();
+          this.labelSummaries = [];
+          this.rafHandle = null;
+          this.attached = false;
+          this.active = false;
+          this.hostElement = null;
+          this.offsetLeft = 0;
+          this.offsetTop = 0;
+          this.cssWidth = 0;
+          this.cssHeight = 0;
+          this.visible = true;
+          if (typeof document === "undefined") {
+              throw new Error("AttackBorderOverlay requires a browser environment");
+          }
+          this.container = document.createElement("div");
+          this.container.style.position = "fixed";
+          this.container.style.left = "0";
+          this.container.style.top = "0";
+          this.container.style.width = "100%";
+          this.container.style.height = "100%";
+          this.container.style.pointerEvents = "none";
+          this.container.style.zIndex = "31";
+          this.container.style.display = "none";
+          this.container.style.fontFamily =
+              'Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+          this.labelLayer = document.createElement("div");
+          this.labelLayer.style.position = "absolute";
+          this.labelLayer.style.left = "0";
+          this.labelLayer.style.top = "0";
+          this.labelLayer.style.width = "100%";
+          this.labelLayer.style.height = "100%";
+          this.labelLayer.style.pointerEvents = "none";
+          this.container.appendChild(this.labelLayer);
+      }
+      setLabels(summaries) {
+          this.labelSummaries = summaries.map((summary) => ({ ...summary }));
+      }
+      enable() {
+          if (typeof document === "undefined" || typeof window === "undefined") {
+              return;
+          }
+          if (this.active) {
+              return;
+          }
+          this.active = true;
+          this.ensureAttached();
+          this.container.style.display = this.visible ? "block" : "none";
+          this.updateContainerFrame();
+          this.render();
+          this.scheduleRender();
+      }
+      setVisible(visible) {
+          this.visible = visible;
+          if (!this.active) {
+              return;
+          }
+          this.container.style.display = this.visible ? "block" : "none";
+      }
+      disable() {
+          if (!this.active) {
+              return;
+          }
+          this.active = false;
+          this.container.style.display = "none";
+          this.cancelRender();
+          this.hideAllLabels();
+      }
+      dispose() {
+          this.disable();
+          if (this.attached) {
+              this.container.remove();
+              this.attached = false;
+              this.hostElement = null;
+          }
+      }
+      isActive() {
+          return this.active;
+      }
+      clear() {
+          this.labelSummaries = [];
+          for (const entry of this.labelPool.values()) {
+              entry.container.remove();
+          }
+          this.labelPool.clear();
+      }
+      scheduleRender() {
+          if (typeof window === "undefined") {
+              return;
+          }
+          if (this.rafHandle !== null) {
+              return;
+          }
+          const loop = () => {
+              this.rafHandle = window.requestAnimationFrame(loop);
+              this.render();
+          };
+          this.rafHandle = window.requestAnimationFrame(loop);
+      }
+      cancelRender() {
+          if (typeof window === "undefined") {
+              return;
+          }
+          if (this.rafHandle !== null) {
+              window.cancelAnimationFrame(this.rafHandle);
+              this.rafHandle = null;
+          }
+      }
+      updateContainerFrame() {
+          if (typeof window === "undefined") {
+              return;
+          }
+          this.ensureAttached();
+          const transform = this.options.resolveTransform?.();
+          const rect = transform?.boundingRect?.();
+          const width = rect?.width ?? window.innerWidth;
+          const height = rect?.height ?? window.innerHeight;
+          const left = rect?.left ?? 0;
+          const top = rect?.top ?? 0;
+          if (this.cssWidth !== width) {
+              this.container.style.width = `${width}px`;
+              this.cssWidth = width;
+          }
+          if (this.cssHeight !== height) {
+              this.container.style.height = `${height}px`;
+              this.cssHeight = height;
+          }
+          let relativeLeft = left;
+          let relativeTop = top;
+          const host = this.hostElement;
+          if (host && host !== document.body) {
+              const hostRect = host.getBoundingClientRect();
+              relativeLeft = left - hostRect.left;
+              relativeTop = top - hostRect.top;
+              if (this.container.style.position !== "absolute") {
+                  this.container.style.position = "absolute";
+              }
+              this.ensureContainerPositioned(host);
+          }
+          else if (this.container.style.position !== "fixed") {
+              this.container.style.position = "fixed";
+          }
+          if (this.container.style.left !== `${relativeLeft}px`) {
+              this.container.style.left = `${relativeLeft}px`;
+          }
+          if (this.container.style.top !== `${relativeTop}px`) {
+              this.container.style.top = `${relativeTop}px`;
+          }
+          this.offsetLeft = left;
+          this.offsetTop = top;
+      }
+      ensureAttached() {
+          if (typeof document === "undefined") {
+              return;
+          }
+          let container = this.resolveHostElement();
+          if (!container) {
+              return;
+          }
+          if (container instanceof HTMLCanvasElement) {
+              container = container.parentElement ?? document.body;
+          }
+          if (!(container instanceof HTMLElement)) {
+              return;
+          }
+          if (this.container.parentElement !== container) {
+              this.container.remove();
+              container.appendChild(this.container);
+          }
+          this.hostElement = container;
+          this.attached = true;
+      }
+      resolveHostElement() {
+          if (typeof document === "undefined") {
+              return null;
+          }
+          const transform = this.options.resolveTransform?.();
+          const candidateCanvas = transform?.canvas;
+          if (candidateCanvas instanceof HTMLCanvasElement) {
+              return candidateCanvas.parentElement ?? candidateCanvas;
+          }
+          const fallbackCanvas = document.querySelector("canvas");
+          if (fallbackCanvas instanceof HTMLCanvasElement) {
+              return fallbackCanvas.parentElement ?? fallbackCanvas;
+          }
+          return document.body;
+      }
+      ensureContainerPositioned(container) {
+          if (typeof window === "undefined") {
+              return;
+          }
+          if (container === document.body) {
+              return;
+          }
+          const position = window.getComputedStyle(container).position;
+          if (position === "static") {
+              container.style.position = "relative";
+          }
+      }
+      render() {
+          if (!this.active) {
+              return;
+          }
+          const transform = this.options.resolveTransform?.();
+          if (!transform) {
+              this.hideAllLabels();
+              return;
+          }
+          this.updateContainerFrame();
+          this.updateLabels(transform);
+      }
+      updateLabels(transform) {
+          const used = new Set();
+          for (const summary of this.labelSummaries) {
+              if (!Number.isFinite(summary.x) || !Number.isFinite(summary.y)) {
+                  continue;
+              }
+              const entry = this.ensureLabelEntry(summary.id);
+              used.add(summary.id);
+              entry.text.textContent = summary.text;
+              entry.container.style.color = summary.color ?? "#e2e8f0";
+              const minScale = summary.minScale ?? 0;
+              if (transform.scale < minScale) {
+                  entry.container.style.display = "none";
+                  continue;
+              }
+              const screen = transform.worldToScreenCoordinates({
+                  x: summary.x,
+                  y: summary.y,
+              });
+              if (!this.isFinitePoint(screen)) {
+                  entry.container.style.display = "none";
+                  continue;
+              }
+              const localX = screen.x - this.offsetLeft;
+              const localY = screen.y - this.offsetTop;
+              entry.container.style.left = `${localX}px`;
+              entry.container.style.top = `${localY}px`;
+              entry.container.style.display = "inline-flex";
+          }
+          for (const [key, entry] of this.labelPool.entries()) {
+              if (used.has(key)) {
+                  continue;
+              }
+              entry.container.remove();
+              this.labelPool.delete(key);
+          }
+      }
+      ensureLabelEntry(key) {
+          let entry = this.labelPool.get(key);
+          if (!entry) {
+              entry = this.createLabel();
+              this.labelPool.set(key, entry);
+          }
+          return entry;
+      }
+      createLabel() {
+          const container = document.createElement("div");
+          container.style.position = "absolute";
+          container.style.padding = "3px 6px";
+          container.style.borderRadius = "5px";
+          container.style.fontSize = "clamp(0.52rem, 0.62vw, 0.62rem)";
+          container.style.lineHeight = "1";
+          container.style.fontWeight = "600";
+          container.style.letterSpacing = "0.02em";
+          container.style.color = "#e2e8f0";
+          container.style.background = "rgba(15, 23, 42, 0.85)";
+          container.style.boxShadow = "0 4px 12px rgba(2, 6, 23, 0.35)";
+          container.style.whiteSpace = "nowrap";
+          container.style.transform = "translate(-50%, -50%)";
+          container.style.display = "none";
+          container.style.alignItems = "center";
+          container.style.gap = "5px";
+          const icon = createElement$9(Users);
+          icon.setAttribute("aria-hidden", "true");
+          icon.style.width = "9px";
+          icon.style.height = "9px";
+          icon.style.flexShrink = "0";
+          icon.style.color = "inherit";
+          const text = document.createElement("span");
+          text.textContent = "";
+          container.appendChild(icon);
+          container.appendChild(text);
+          this.labelLayer.appendChild(container);
+          return { container, icon, text };
+      }
+      hideAllLabels() {
+          for (const entry of this.labelPool.values()) {
+              entry.container.style.display = "none";
+          }
+      }
+      isFinitePoint(point) {
+          return Boolean(point && Number.isFinite(point.x) && Number.isFinite(point.y));
+      }
+  }
   class DonationOverlay {
       constructor(options) {
           this.options = options;
@@ -10197,6 +10496,22 @@
   const TROOP_DONATION_OVERLAY_ID = "troop-donations";
   const GOLD_DONATION_OVERLAY_ID = "gold-donations";
   const TRADE_ROUTE_OVERLAY_ID = "trade-routes";
+  const ATTACK_BORDER_OVERLAY_ID = "attack-borders";
+  const ATTACK_BORDER_TROOP_COMPACT_THRESHOLD = 100000;
+  const ATTACK_BORDER_TROOP_COMPACT_FORMATTER = new Intl.NumberFormat("en-US", {
+      notation: "compact",
+      compactDisplay: "short",
+      maximumFractionDigits: 1,
+  });
+  const ATTACK_FRONT_EDGE_GAP_MERGE_TILES = 2;
+  const ATTACK_BORDER_ZOOM_EDGE_TINY_MAX = 1;
+  const ATTACK_BORDER_ZOOM_EDGE_SMALL_MAX = 2;
+  const ATTACK_BORDER_ZOOM_EDGE_MEDIUM_MAX = 4;
+  const ATTACK_BORDER_ZOOM_EDGE_LARGE_MAX = 7;
+  const ATTACK_BORDER_ZOOM_MIN_SCALE_TINY = 2.7;
+  const ATTACK_BORDER_ZOOM_MIN_SCALE_SMALL = 2.3;
+  const ATTACK_BORDER_ZOOM_MIN_SCALE_MEDIUM = 1.9;
+  const ATTACK_BORDER_ZOOM_MIN_SCALE_LARGE = 1.45;
   const PUBLIC_LOBBY_POLL_INTERVAL_MS = 2000;
   const LOBBY_DETAILS_CACHE_MS = 1500;
   const DEFAULT_WORKER_COUNT = 20;
@@ -10396,6 +10711,8 @@
           this.sidebarOverlays = [];
           this.sidebarOverlayRevision = 0;
           this.overlaysTemporarilyHidden = false;
+          this.attackBorderSyncInFlight = false;
+          this.attackBorderSyncQueued = false;
           this.displayEventPollingActive = false;
           this.displayEventPollingLastTimestamp = 0;
           this.lastProcessedDisplayUpdates = null;
@@ -10459,6 +10776,12 @@
                   id: TRADE_ROUTE_OVERLAY_ID,
                   label: "Trade ship routes",
                   description: "Displays projected trade ship paths, distances, and base gold when placing a new port.",
+                  enabled: false,
+              },
+              {
+                  id: ATTACK_BORDER_OVERLAY_ID,
+                  label: "Attack border labels",
+                  description: "Shows active attack labels centered on the attacker side of shared territory borders.",
                   enabled: false,
               },
           ];
@@ -10789,6 +11112,14 @@
                       resolveLocalPlayerSmallId: () => this.resolveLocalPlayerSmallId(),
                   });
           return this.tradeRouteOverlay;
+      }
+      ensureAttackBorderOverlay() {
+          this.attackBorderOverlay =
+              this.attackBorderOverlay ??
+                  new AttackBorderOverlay({
+                      resolveTransform: () => this.resolveTransformHandler(),
+                  });
+          return this.attackBorderOverlay;
       }
       collectMissileSiloPositions() {
           if (!this.game) {
@@ -11222,6 +11553,545 @@
           const localSmallId = this.resolveLocalPlayerSmallId();
           this.tradeRouteOverlay.setLocalPlayerSmallId(localSmallId);
           this.tradeRouteOverlay.setPortSummaries(ports);
+      }
+      syncAttackBorderOverlay(players) {
+          if (!this.attackBorderOverlay || !this.attackBorderOverlay.isActive()) {
+              return;
+          }
+          if (this.attackBorderSyncInFlight) {
+              this.attackBorderSyncQueued = true;
+              return;
+          }
+          this.attackBorderSyncInFlight = true;
+          void this.computeAttackBorderLabels(players)
+              .then((labels) => {
+              if (!this.attackBorderOverlay || !this.attackBorderOverlay.isActive()) {
+                  return;
+              }
+              this.attackBorderOverlay.setLabels(labels);
+          })
+              .catch((error) => {
+              console.warn("Failed to refresh attack border overlay", error);
+          })
+              .finally(() => {
+              this.attackBorderSyncInFlight = false;
+              if (this.attackBorderSyncQueued) {
+                  this.attackBorderSyncQueued = false;
+                  this.syncAttackBorderOverlay();
+              }
+          });
+      }
+      async computeAttackBorderLabels(players) {
+          const game = this.game;
+          if (!game) {
+              return [];
+          }
+          let sourcePlayers = players;
+          if (!sourcePlayers) {
+              try {
+                  sourcePlayers = game.playerViews();
+              }
+              catch (error) {
+                  console.warn("Failed to refresh players for attack overlay", error);
+                  sourcePlayers = [];
+              }
+          }
+          sourcePlayers = sourcePlayers ?? [];
+          if (sourcePlayers.length === 0) {
+              return [];
+          }
+          const attackerPairs = new Map();
+          const attackers = new Map();
+          for (const player of sourcePlayers) {
+              const attackerSmallId = player.smallID();
+              const outgoing = player.outgoingAttacks();
+              if (!Array.isArray(outgoing) || outgoing.length === 0) {
+                  continue;
+              }
+              for (const attack of outgoing) {
+                  if (attack.retreating || attack.targetID <= 0) {
+                      continue;
+                  }
+                  if (attack.targetID === attackerSmallId) {
+                      continue;
+                  }
+                  const resolvedTroops = Math.max(0, this.resolveAttackTroops(attack));
+                  if (resolvedTroops <= 0) {
+                      continue;
+                  }
+                  let targetMap = attackerPairs.get(attackerSmallId);
+                  if (!targetMap) {
+                      targetMap = new Map();
+                      attackerPairs.set(attackerSmallId, targetMap);
+                  }
+                  const existing = targetMap.get(attack.targetID) ?? [];
+                  existing.push({
+                      id: String(attack.id),
+                      troops: resolvedTroops,
+                      averagePosition: null,
+                  });
+                  targetMap.set(attack.targetID, existing);
+                  attackers.set(attackerSmallId, player);
+              }
+          }
+          if (attackerPairs.size === 0) {
+              return [];
+          }
+          const borderRefsByAttacker = new Map();
+          await Promise.all(Array.from(attackerPairs.keys()).map(async (attackerSmallId) => {
+              const attacker = attackers.get(attackerSmallId);
+              if (!attacker) {
+                  return;
+              }
+              const refs = await this.resolvePlayerBorderTileRefs(attacker);
+              borderRefsByAttacker.set(attackerSmallId, refs);
+          }));
+          await Promise.all(Array.from(attackerPairs.entries()).flatMap(([attackerSmallId, targetMap]) => {
+              const attacker = attackers.get(attackerSmallId);
+              return Array.from(targetMap.values()).flatMap((pairAttacks) => pairAttacks.map(async (attack) => {
+                  attack.averagePosition = await this.resolveAttackAveragePosition(game, attacker, attackerSmallId, attack.id);
+              }));
+          }));
+          const labels = [];
+          for (const [attackerSmallId, targetMap] of attackerPairs.entries()) {
+              const borderRefs = borderRefsByAttacker.get(attackerSmallId) ?? [];
+              if (borderRefs.length === 0) {
+                  continue;
+              }
+              const attackerBorderSet = new Set();
+              for (const ref of borderRefs) {
+                  if (game.ownerID(ref) === attackerSmallId) {
+                      attackerBorderSet.add(ref);
+                  }
+              }
+              if (attackerBorderSet.size === 0) {
+                  continue;
+              }
+              const attacker = attackers.get(attackerSmallId);
+              for (const [targetSmallId, pairAttacks] of targetMap.entries()) {
+                  if (pairAttacks.length <= 0) {
+                      continue;
+                  }
+                  const edges = [];
+                  for (const ref of attackerBorderSet) {
+                      const attackerX = game.x(ref);
+                      const attackerY = game.y(ref);
+                      const neighbors = game.neighbors(ref) ?? [];
+                      for (const neighbor of neighbors) {
+                          if (game.ownerID(neighbor) !== targetSmallId) {
+                              continue;
+                          }
+                          const targetX = game.x(neighbor);
+                          const targetY = game.y(neighbor);
+                          const vertices = this.resolveSharedEdgeVertices(attackerX, attackerY, targetX, targetY);
+                          if (!vertices) {
+                              continue;
+                          }
+                          edges.push({
+                              attackerRef: ref,
+                              midpoint: {
+                                  x: (attackerX + targetX + 1) / 2,
+                                  y: (attackerY + targetY + 1) / 2,
+                              },
+                              vertexAKey: `${vertices[0].x},${vertices[0].y}`,
+                              vertexBKey: `${vertices[1].x},${vertices[1].y}`,
+                          });
+                      }
+                  }
+                  if (edges.length <= 0) {
+                      continue;
+                  }
+                  const vertexToEdges = new Map();
+                  for (let index = 0; index < edges.length; index += 1) {
+                      const edge = edges[index];
+                      const aBucket = vertexToEdges.get(edge.vertexAKey) ?? [];
+                      aBucket.push(index);
+                      vertexToEdges.set(edge.vertexAKey, aBucket);
+                      const bBucket = vertexToEdges.get(edge.vertexBKey) ?? [];
+                      bBucket.push(index);
+                      vertexToEdges.set(edge.vertexBKey, bBucket);
+                  }
+                  const visited = new Set();
+                  const rawComponents = [];
+                  for (let startIndex = 0; startIndex < edges.length; startIndex += 1) {
+                      if (visited.has(startIndex)) {
+                          continue;
+                      }
+                      const componentIndices = [];
+                      const queue = [startIndex];
+                      visited.add(startIndex);
+                      while (queue.length > 0) {
+                          const edgeIndex = queue.pop();
+                          componentIndices.push(edgeIndex);
+                          const edge = edges[edgeIndex];
+                          const adjacent = [
+                              ...(vertexToEdges.get(edge.vertexAKey) ?? []),
+                              ...(vertexToEdges.get(edge.vertexBKey) ?? []),
+                          ];
+                          for (const nextIndex of adjacent) {
+                              if (visited.has(nextIndex)) {
+                                  continue;
+                              }
+                              visited.add(nextIndex);
+                              queue.push(nextIndex);
+                          }
+                      }
+                      if (componentIndices.length <= 0) {
+                          continue;
+                      }
+                      const edgeMidpoints = componentIndices.map((edgeIndex) => edges[edgeIndex].midpoint);
+                      const attackerRefs = componentIndices.map((edgeIndex) => edges[edgeIndex].attackerRef);
+                      let minX = Number.POSITIVE_INFINITY;
+                      let maxX = Number.NEGATIVE_INFINITY;
+                      let minY = Number.POSITIVE_INFINITY;
+                      let maxY = Number.NEGATIVE_INFINITY;
+                      for (const midpoint of edgeMidpoints) {
+                          if (midpoint.x < minX)
+                              minX = midpoint.x;
+                          if (midpoint.x > maxX)
+                              maxX = midpoint.x;
+                          if (midpoint.y < minY)
+                              minY = midpoint.y;
+                          if (midpoint.y > maxY)
+                              maxY = midpoint.y;
+                      }
+                      rawComponents.push({
+                          edgeIndices: componentIndices,
+                          edgeMidpoints,
+                          attackerRefs,
+                          minX,
+                          maxX,
+                          minY,
+                          maxY,
+                      });
+                  }
+                  if (rawComponents.length <= 0) {
+                      continue;
+                  }
+                  const componentsCanMerge = (a, b) => {
+                      const dx = a.minX > b.maxX
+                          ? a.minX - b.maxX
+                          : b.minX > a.maxX
+                              ? b.minX - a.maxX
+                              : 0;
+                      const dy = a.minY > b.maxY
+                          ? a.minY - b.maxY
+                          : b.minY > a.maxY
+                              ? b.minY - a.maxY
+                              : 0;
+                      if (dx * dx + dy * dy >
+                          ATTACK_FRONT_EDGE_GAP_MERGE_TILES *
+                              ATTACK_FRONT_EDGE_GAP_MERGE_TILES) {
+                          return false;
+                      }
+                      for (const aPoint of a.edgeMidpoints) {
+                          for (const bPoint of b.edgeMidpoints) {
+                              const ddx = aPoint.x - bPoint.x;
+                              const ddy = aPoint.y - bPoint.y;
+                              if (ddx * ddx + ddy * ddy <=
+                                  ATTACK_FRONT_EDGE_GAP_MERGE_TILES *
+                                      ATTACK_FRONT_EDGE_GAP_MERGE_TILES) {
+                                  return true;
+                              }
+                          }
+                      }
+                      return false;
+                  };
+                  const components = [...rawComponents];
+                  let merged = true;
+                  while (merged) {
+                      merged = false;
+                      for (let i = 0; i < components.length; i += 1) {
+                          for (let j = i + 1; j < components.length; j += 1) {
+                              if (!componentsCanMerge(components[i], components[j])) {
+                                  continue;
+                              }
+                              const mergedMidpoints = [
+                                  ...components[i].edgeMidpoints,
+                                  ...components[j].edgeMidpoints,
+                              ];
+                              const mergedRefs = [
+                                  ...components[i].attackerRefs,
+                                  ...components[j].attackerRefs,
+                              ];
+                              components[i] = {
+                                  edgeIndices: [
+                                      ...components[i].edgeIndices,
+                                      ...components[j].edgeIndices,
+                                  ],
+                                  edgeMidpoints: mergedMidpoints,
+                                  attackerRefs: mergedRefs,
+                                  minX: Math.min(components[i].minX, components[j].minX),
+                                  maxX: Math.max(components[i].maxX, components[j].maxX),
+                                  minY: Math.min(components[i].minY, components[j].minY),
+                                  maxY: Math.max(components[i].maxY, components[j].maxY),
+                              };
+                              components.splice(j, 1);
+                              merged = true;
+                              break;
+                          }
+                          if (merged) {
+                              break;
+                          }
+                      }
+                  }
+                  const frontComponents = [];
+                  for (const component of components) {
+                      const edgeMidpoints = component.edgeMidpoints;
+                      let centroidX = 0;
+                      let centroidY = 0;
+                      for (const midpoint of edgeMidpoints) {
+                          centroidX += midpoint.x;
+                          centroidY += midpoint.y;
+                      }
+                      centroidX /= edgeMidpoints.length;
+                      centroidY /= edgeMidpoints.length;
+                      // Pin the label to an actual shared-edge midpoint nearest the front center.
+                      let anchor = edgeMidpoints[0];
+                      let bestDist2 = Number.POSITIVE_INFINITY;
+                      for (const midpoint of edgeMidpoints) {
+                          const dx = midpoint.x - centroidX;
+                          const dy = midpoint.y - centroidY;
+                          const dist2 = dx * dx + dy * dy;
+                          if (dist2 < bestDist2) {
+                              bestDist2 = dist2;
+                              anchor = midpoint;
+                          }
+                      }
+                      let componentKey = Number.POSITIVE_INFINITY;
+                      for (const candidate of component.attackerRefs) {
+                          if (candidate < componentKey) {
+                              componentKey = candidate;
+                          }
+                      }
+                      frontComponents.push({
+                          anchor,
+                          edgeCount: edgeMidpoints.length,
+                          componentKey,
+                      });
+                  }
+                  const hasPositionedAttacks = pairAttacks.some((attack) => attack.averagePosition &&
+                      Number.isFinite(attack.averagePosition.x) &&
+                      Number.isFinite(attack.averagePosition.y));
+                  if (hasPositionedAttacks) {
+                      const troopsByFrontIndex = new Map();
+                      for (const attack of pairAttacks) {
+                          const position = attack.averagePosition;
+                          if (!position ||
+                              !Number.isFinite(position.x) ||
+                              !Number.isFinite(position.y)) {
+                              continue;
+                          }
+                          let nearestFrontIndex = -1;
+                          let nearestDistanceSquared = Number.POSITIVE_INFINITY;
+                          for (let componentIndex = 0; componentIndex < frontComponents.length; componentIndex += 1) {
+                              const component = frontComponents[componentIndex];
+                              const dx = position.x - component.anchor.x;
+                              const dy = position.y - component.anchor.y;
+                              const distanceSquared = dx * dx + dy * dy;
+                              if (distanceSquared < nearestDistanceSquared) {
+                                  nearestDistanceSquared = distanceSquared;
+                                  nearestFrontIndex = componentIndex;
+                              }
+                          }
+                          if (nearestFrontIndex < 0) {
+                              continue;
+                          }
+                          const existing = troopsByFrontIndex.get(nearestFrontIndex);
+                          if (!existing) {
+                              troopsByFrontIndex.set(nearestFrontIndex, {
+                                  troops: attack.troops,
+                                  attackId: attack.id,
+                              });
+                              continue;
+                          }
+                          existing.troops += attack.troops;
+                          if (attack.id.localeCompare(existing.attackId) < 0) {
+                              existing.attackId = attack.id;
+                          }
+                      }
+                      for (const [frontIndex, aggregate] of troopsByFrontIndex.entries()) {
+                          const component = frontComponents[frontIndex];
+                          if (!component) {
+                              continue;
+                          }
+                          const troopText = this.formatAttackBorderTroopCount(aggregate.troops);
+                          if (!troopText) {
+                              continue;
+                          }
+                          const minScale = this.resolveAttackBorderLabelMinScale(component.edgeCount);
+                          labels.push({
+                              id: `attack-border-${attackerSmallId}-${targetSmallId}-${aggregate.attackId}-${component.componentKey}`,
+                              x: component.anchor.x,
+                              y: component.anchor.y,
+                              text: troopText,
+                              color: attacker
+                                  ? (this.resolvePlayerColor(attacker) ?? undefined)
+                                  : undefined,
+                              minScale: minScale > 0 ? minScale : undefined,
+                          });
+                      }
+                      continue;
+                  }
+                  const unassignedAttackIndices = new Set(pairAttacks.map((_, index) => index));
+                  for (const component of frontComponents) {
+                      const matchedAttack = this.selectAttackForFront(component.anchor, pairAttacks, unassignedAttackIndices);
+                      if (!matchedAttack) {
+                          continue;
+                      }
+                      const troopText = this.formatAttackBorderTroopCount(matchedAttack.troops);
+                      if (!troopText) {
+                          continue;
+                      }
+                      const minScale = this.resolveAttackBorderLabelMinScale(component.edgeCount);
+                      labels.push({
+                          id: `attack-border-${attackerSmallId}-${targetSmallId}-${matchedAttack.id}-${component.componentKey}`,
+                          x: component.anchor.x,
+                          y: component.anchor.y,
+                          text: troopText,
+                          color: attacker
+                              ? (this.resolvePlayerColor(attacker) ?? undefined)
+                              : undefined,
+                          minScale: minScale > 0 ? minScale : undefined,
+                      });
+                  }
+              }
+          }
+          labels.sort((a, b) => a.id.localeCompare(b.id));
+          return labels;
+      }
+      async resolveAttackAveragePosition(game, attacker, attackerSmallId, attackId) {
+          const extractPosition = (raw) => {
+              if (!raw || typeof raw !== "object") {
+                  return null;
+              }
+              const x = Number(raw.x);
+              const y = Number(raw.y);
+              if (!Number.isFinite(x) || !Number.isFinite(y)) {
+                  return null;
+              }
+              return { x, y };
+          };
+          const attackerResolver = attacker?.attackAveragePosition;
+          if (typeof attackerResolver === "function") {
+              try {
+                  const resolved = await attackerResolver.call(attacker, attackerSmallId, attackId);
+                  const normalized = extractPosition(resolved);
+                  if (normalized) {
+                      return normalized;
+                  }
+              }
+              catch (error) {
+                  console.warn("Failed to resolve attack average position", error);
+              }
+          }
+          const gameResolver = game.attackAveragePosition;
+          if (typeof gameResolver !== "function") {
+              return null;
+          }
+          try {
+              const resolved = await gameResolver.call(game, attackerSmallId, attackId);
+              return extractPosition(resolved);
+          }
+          catch (error) {
+              console.warn("Failed to resolve attack average position", error);
+              return null;
+          }
+      }
+      selectAttackForFront(anchor, attacks, unassignedIndices) {
+          if (attacks.length === 0) {
+              return null;
+          }
+          const candidateIndices = unassignedIndices.size > 0
+              ? [...unassignedIndices]
+              : attacks.map((_, index) => index);
+          if (candidateIndices.length === 0) {
+              return null;
+          }
+          let nearestIndex = null;
+          let nearestDistanceSquared = Number.POSITIVE_INFINITY;
+          for (const index of candidateIndices) {
+              const candidate = attacks[index];
+              const position = candidate.averagePosition;
+              if (!position ||
+                  !Number.isFinite(position.x) ||
+                  !Number.isFinite(position.y)) {
+                  continue;
+              }
+              const dx = position.x - anchor.x;
+              const dy = position.y - anchor.y;
+              const distanceSquared = dx * dx + dy * dy;
+              if (distanceSquared < nearestDistanceSquared) {
+                  nearestDistanceSquared = distanceSquared;
+                  nearestIndex = index;
+              }
+          }
+          const selectedIndex = nearestIndex ?? candidateIndices[0];
+          unassignedIndices.delete(selectedIndex);
+          return attacks[selectedIndex] ?? null;
+      }
+      resolveSharedEdgeVertices(attackerX, attackerY, targetX, targetY) {
+          if (targetX === attackerX + 1 && targetY === attackerY) {
+              return [
+                  { x: attackerX + 1, y: attackerY },
+                  { x: attackerX + 1, y: attackerY + 1 },
+              ];
+          }
+          if (targetX === attackerX - 1 && targetY === attackerY) {
+              return [
+                  { x: attackerX, y: attackerY },
+                  { x: attackerX, y: attackerY + 1 },
+              ];
+          }
+          if (targetX === attackerX && targetY === attackerY + 1) {
+              return [
+                  { x: attackerX, y: attackerY + 1 },
+                  { x: attackerX + 1, y: attackerY + 1 },
+              ];
+          }
+          if (targetX === attackerX && targetY === attackerY - 1) {
+              return [
+                  { x: attackerX, y: attackerY },
+                  { x: attackerX + 1, y: attackerY },
+              ];
+          }
+          return null;
+      }
+      async resolvePlayerBorderTileRefs(player) {
+          const borderTilesGetter = player.borderTiles;
+          if (typeof borderTilesGetter !== "function") {
+              return [];
+          }
+          try {
+              const payload = await borderTilesGetter.call(player);
+              if (!payload || typeof payload !== "object") {
+                  return [];
+              }
+              const refs = payload.borderTiles;
+              return this.normalizeBorderTileRefs(refs);
+          }
+          catch (error) {
+              console.warn("Failed to resolve player border tiles", error);
+              return [];
+          }
+      }
+      normalizeBorderTileRefs(raw) {
+          if (!raw || typeof raw !== "object") {
+              return [];
+          }
+          const iterable = raw[Symbol.iterator];
+          if (typeof iterable !== "function") {
+              return [];
+          }
+          const refs = [];
+          for (const value of raw) {
+              const numeric = Number(value);
+              if (!Number.isFinite(numeric)) {
+                  continue;
+              }
+              refs.push(numeric);
+          }
+          return refs;
       }
       resolveTransformHandler() {
           if (typeof document === "undefined") {
@@ -11897,6 +12767,7 @@
           this.troopDonationOverlay?.setVisible(visible);
           this.goldDonationOverlay?.setVisible(visible);
           this.tradeRouteOverlay?.setVisible(visible);
+          this.attackBorderOverlay?.setVisible(visible);
       }
       syncOverlayRuntime(overlayId) {
           const shouldEnable = this.isOverlayEnabled(overlayId);
@@ -11954,6 +12825,19 @@
               effect.setVisible(visible);
               this.syncTradeRouteOverlay();
               effect.enable();
+              return;
+          }
+          if (overlayId === ATTACK_BORDER_OVERLAY_ID) {
+              if (!shouldEnable) {
+                  this.attackBorderSyncQueued = false;
+                  this.attackBorderOverlay?.disable();
+                  this.attackBorderOverlay?.clear();
+                  return;
+              }
+              const effect = this.ensureAttackBorderOverlay();
+              effect.setVisible(visible);
+              effect.enable();
+              this.syncAttackBorderOverlay();
           }
       }
       setTradingStopped(targetPlayerIds, stopped) {
@@ -12702,6 +13586,7 @@
           this.lastProcessedDisplayUpdates = null;
           this.troopDonationOverlay?.clear();
           this.goldDonationOverlay?.clear();
+          this.attackBorderOverlay?.clear();
           this.lastLiveGameTeamLogKey = null;
       }
       getCurrentGameTick() {
@@ -12932,6 +13817,7 @@
               this.syncTroopDonationOverlay(players);
               this.syncGoldDonationOverlay(players);
               this.syncTradeRouteOverlay(players, recordLookup);
+              this.syncAttackBorderOverlay(players);
               this.notify();
           }
           catch (error) {
@@ -12943,6 +13829,7 @@
               this.troopDonationOverlay?.clear();
               this.goldDonationOverlay?.clear();
               this.tradeRouteOverlay?.clear();
+              this.attackBorderOverlay?.clear();
               if (this.refreshHandle !== undefined) {
                   window.clearInterval(this.refreshHandle);
                   this.refreshHandle = undefined;
@@ -14260,6 +15147,39 @@
           }
           const manifest = this.shipManifests.get(String(attack.id));
           return manifest ?? attack.troops;
+      }
+      formatAttackBorderTroopCount(rawTroops) {
+          const normalized = Math.floor(Math.max(rawTroops, 0) / 10);
+          if (normalized <= 0) {
+              return null;
+          }
+          if (normalized < ATTACK_BORDER_TROOP_COMPACT_THRESHOLD) {
+              return formatTroopCount(rawTroops);
+          }
+          try {
+              return ATTACK_BORDER_TROOP_COMPACT_FORMATTER.format(normalized);
+          }
+          catch {
+              return formatTroopCount(rawTroops);
+          }
+      }
+      resolveAttackBorderLabelMinScale(edgeCount) {
+          if (!Number.isFinite(edgeCount) || edgeCount <= 0) {
+              return 0;
+          }
+          if (edgeCount <= ATTACK_BORDER_ZOOM_EDGE_TINY_MAX) {
+              return ATTACK_BORDER_ZOOM_MIN_SCALE_TINY;
+          }
+          if (edgeCount <= ATTACK_BORDER_ZOOM_EDGE_SMALL_MAX) {
+              return ATTACK_BORDER_ZOOM_MIN_SCALE_SMALL;
+          }
+          if (edgeCount <= ATTACK_BORDER_ZOOM_EDGE_MEDIUM_MAX) {
+              return ATTACK_BORDER_ZOOM_MIN_SCALE_MEDIUM;
+          }
+          if (edgeCount <= ATTACK_BORDER_ZOOM_EDGE_LARGE_MAX) {
+              return ATTACK_BORDER_ZOOM_MIN_SCALE_LARGE;
+          }
+          return 0;
       }
       mapActiveAlliances(player) {
           const nowTicks = this.game?.ticks() ?? 0;

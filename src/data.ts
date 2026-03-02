@@ -4,6 +4,8 @@ import {
   subscribeToSidebarLogs,
 } from "./logger";
 import {
+  AttackBorderLabelSummary,
+  AttackBorderOverlay,
   GoldDonationOverlay,
   HistoricalMissileTrajectoryOverlay,
   MissileFlightSummary,
@@ -49,7 +51,7 @@ import {
 } from "./types";
 import { LOBBY_TEAM_KICKED, predictLobbyTeams } from "./lobbyTeams";
 import { readPersistedString, writePersistedString } from "./storage";
-import { extractClanTag } from "./utils";
+import { extractClanTag, formatTroopCount } from "./utils";
 
 const TICK_MILLISECONDS = 100;
 const MAX_LOG_ENTRIES = 500;
@@ -70,6 +72,22 @@ const WEB_SOCKET_DONATION_PENDING_TTL_MS = 30_000;
 const TROOP_DONATION_OVERLAY_ID = "troop-donations";
 const GOLD_DONATION_OVERLAY_ID = "gold-donations";
 const TRADE_ROUTE_OVERLAY_ID = "trade-routes";
+const ATTACK_BORDER_OVERLAY_ID = "attack-borders";
+const ATTACK_BORDER_TROOP_COMPACT_THRESHOLD = 100_000;
+const ATTACK_BORDER_TROOP_COMPACT_FORMATTER = new Intl.NumberFormat("en-US", {
+  notation: "compact",
+  compactDisplay: "short",
+  maximumFractionDigits: 1,
+});
+const ATTACK_FRONT_EDGE_GAP_MERGE_TILES = 2;
+const ATTACK_BORDER_ZOOM_EDGE_TINY_MAX = 1;
+const ATTACK_BORDER_ZOOM_EDGE_SMALL_MAX = 2;
+const ATTACK_BORDER_ZOOM_EDGE_MEDIUM_MAX = 4;
+const ATTACK_BORDER_ZOOM_EDGE_LARGE_MAX = 7;
+const ATTACK_BORDER_ZOOM_MIN_SCALE_TINY = 2.7;
+const ATTACK_BORDER_ZOOM_MIN_SCALE_SMALL = 2.3;
+const ATTACK_BORDER_ZOOM_MIN_SCALE_MEDIUM = 1.9;
+const ATTACK_BORDER_ZOOM_MIN_SCALE_LARGE = 1.45;
 const PUBLIC_LOBBY_POLL_INTERVAL_MS = 2000;
 const LOBBY_DETAILS_CACHE_MS = 1500;
 const DEFAULT_WORKER_COUNT = 20;
@@ -477,6 +495,11 @@ interface PlayerViewLike {
   clientID?(): string | null;
   displayName(): string;
   smallID(): number;
+  borderTiles?(): Promise<unknown>;
+  attackAveragePosition?(
+    playerID: number,
+    attackID: string,
+  ): Promise<{ x: number; y: number } | null>;
   nameLocation(): { x: number; y: number; size: number } | undefined;
   team(): string | null | undefined;
   numTilesOwned(): number;
@@ -524,6 +547,10 @@ interface GameViewLike {
   playerViews(): PlayerViewLike[];
   ticks(): number;
   config(): GameConfigLike;
+  attackAveragePosition?(
+    playerID: number,
+    attackID: string,
+  ): Promise<{ x: number; y: number } | null>;
   playerBySmallID(id: number): PlayerViewLike | Record<string, unknown>;
   player(id: string | number): PlayerViewLike;
   units(...types: string[]): UnitViewLike[];
@@ -620,6 +647,9 @@ export class DataStore {
   private troopDonationOverlay?: TroopDonationOverlay;
   private goldDonationOverlay?: GoldDonationOverlay;
   private tradeRouteOverlay?: TradeRouteOverlay;
+  private attackBorderOverlay?: AttackBorderOverlay;
+  private attackBorderSyncInFlight = false;
+  private attackBorderSyncQueued = false;
   private displayEventPollingHandle: number | undefined;
   private displayEventPollingActive = false;
   private displayEventPollingLastTimestamp = 0;
@@ -706,6 +736,13 @@ export class DataStore {
         label: "Trade ship routes",
         description:
           "Displays projected trade ship paths, distances, and base gold when placing a new port.",
+        enabled: false,
+      },
+      {
+        id: ATTACK_BORDER_OVERLAY_ID,
+        label: "Attack border labels",
+        description:
+          "Shows active attack labels centered on the attacker side of shared territory borders.",
         enabled: false,
       },
     ];
@@ -1115,6 +1152,15 @@ export class DataStore {
         resolveLocalPlayerSmallId: () => this.resolveLocalPlayerSmallId(),
       });
     return this.tradeRouteOverlay;
+  }
+
+  private ensureAttackBorderOverlay(): AttackBorderOverlay {
+    this.attackBorderOverlay =
+      this.attackBorderOverlay ??
+      new AttackBorderOverlay({
+        resolveTransform: () => this.resolveTransformHandler(),
+      });
+    return this.attackBorderOverlay;
   }
 
   private collectMissileSiloPositions(): MissileSiloSummary[] {
@@ -1646,6 +1692,698 @@ export class DataStore {
     const localSmallId = this.resolveLocalPlayerSmallId();
     this.tradeRouteOverlay.setLocalPlayerSmallId(localSmallId);
     this.tradeRouteOverlay.setPortSummaries(ports);
+  }
+
+  private syncAttackBorderOverlay(players?: PlayerViewLike[]): void {
+    if (!this.attackBorderOverlay || !this.attackBorderOverlay.isActive()) {
+      return;
+    }
+
+    if (this.attackBorderSyncInFlight) {
+      this.attackBorderSyncQueued = true;
+      return;
+    }
+
+    this.attackBorderSyncInFlight = true;
+    void this.computeAttackBorderLabels(players)
+      .then((labels) => {
+        if (!this.attackBorderOverlay || !this.attackBorderOverlay.isActive()) {
+          return;
+        }
+        this.attackBorderOverlay.setLabels(labels);
+      })
+      .catch((error) => {
+        console.warn("Failed to refresh attack border overlay", error);
+      })
+      .finally(() => {
+        this.attackBorderSyncInFlight = false;
+        if (this.attackBorderSyncQueued) {
+          this.attackBorderSyncQueued = false;
+          this.syncAttackBorderOverlay();
+        }
+      });
+  }
+
+  private async computeAttackBorderLabels(
+    players?: PlayerViewLike[],
+  ): Promise<AttackBorderLabelSummary[]> {
+    const game = this.game;
+    if (!game) {
+      return [];
+    }
+
+    let sourcePlayers = players;
+    if (!sourcePlayers) {
+      try {
+        sourcePlayers = game.playerViews();
+      } catch (error) {
+        console.warn("Failed to refresh players for attack overlay", error);
+        sourcePlayers = [];
+      }
+    }
+    sourcePlayers = sourcePlayers ?? [];
+
+    if (sourcePlayers.length === 0) {
+      return [];
+    }
+
+    type PairAttackSummary = {
+      id: string;
+      troops: number;
+      averagePosition: { x: number; y: number } | null;
+    };
+
+    const attackerPairs = new Map<number, Map<number, PairAttackSummary[]>>();
+    const attackers = new Map<number, PlayerViewLike>();
+
+    for (const player of sourcePlayers) {
+      const attackerSmallId = player.smallID();
+      const outgoing = player.outgoingAttacks();
+      if (!Array.isArray(outgoing) || outgoing.length === 0) {
+        continue;
+      }
+      for (const attack of outgoing) {
+        if (attack.retreating || attack.targetID <= 0) {
+          continue;
+        }
+        if (attack.targetID === attackerSmallId) {
+          continue;
+        }
+        const resolvedTroops = Math.max(0, this.resolveAttackTroops(attack));
+        if (resolvedTroops <= 0) {
+          continue;
+        }
+        let targetMap = attackerPairs.get(attackerSmallId);
+        if (!targetMap) {
+          targetMap = new Map<number, PairAttackSummary[]>();
+          attackerPairs.set(attackerSmallId, targetMap);
+        }
+        const existing = targetMap.get(attack.targetID) ?? [];
+        existing.push({
+          id: String(attack.id),
+          troops: resolvedTroops,
+          averagePosition: null,
+        });
+        targetMap.set(attack.targetID, existing);
+        attackers.set(attackerSmallId, player);
+      }
+    }
+
+    if (attackerPairs.size === 0) {
+      return [];
+    }
+
+    const borderRefsByAttacker = new Map<number, number[]>();
+    await Promise.all(
+      Array.from(attackerPairs.keys()).map(async (attackerSmallId) => {
+        const attacker = attackers.get(attackerSmallId);
+        if (!attacker) {
+          return;
+        }
+        const refs = await this.resolvePlayerBorderTileRefs(attacker);
+        borderRefsByAttacker.set(attackerSmallId, refs);
+      }),
+    );
+    await Promise.all(
+      Array.from(attackerPairs.entries()).flatMap(
+        ([attackerSmallId, targetMap]) => {
+          const attacker = attackers.get(attackerSmallId);
+          return Array.from(targetMap.values()).flatMap((pairAttacks) =>
+            pairAttacks.map(async (attack) => {
+              attack.averagePosition = await this.resolveAttackAveragePosition(
+                game,
+                attacker,
+                attackerSmallId,
+                attack.id,
+              );
+            }),
+          );
+        },
+      ),
+    );
+
+    const labels: AttackBorderLabelSummary[] = [];
+
+    for (const [attackerSmallId, targetMap] of attackerPairs.entries()) {
+      const borderRefs = borderRefsByAttacker.get(attackerSmallId) ?? [];
+      if (borderRefs.length === 0) {
+        continue;
+      }
+
+      const attackerBorderSet = new Set<number>();
+      for (const ref of borderRefs) {
+        if (game.ownerID(ref) === attackerSmallId) {
+          attackerBorderSet.add(ref);
+        }
+      }
+      if (attackerBorderSet.size === 0) {
+        continue;
+      }
+
+      const attacker = attackers.get(attackerSmallId);
+      for (const [targetSmallId, pairAttacks] of targetMap.entries()) {
+        if (pairAttacks.length <= 0) {
+          continue;
+        }
+        type FrontEdge = {
+          attackerRef: number;
+          midpoint: { x: number; y: number };
+          vertexAKey: string;
+          vertexBKey: string;
+        };
+
+        const edges: FrontEdge[] = [];
+        for (const ref of attackerBorderSet) {
+          const attackerX = game.x(ref);
+          const attackerY = game.y(ref);
+          const neighbors = game.neighbors(ref) ?? [];
+          for (const neighbor of neighbors) {
+            if (game.ownerID(neighbor) !== targetSmallId) {
+              continue;
+            }
+            const targetX = game.x(neighbor);
+            const targetY = game.y(neighbor);
+            const vertices = this.resolveSharedEdgeVertices(
+              attackerX,
+              attackerY,
+              targetX,
+              targetY,
+            );
+            if (!vertices) {
+              continue;
+            }
+            edges.push({
+              attackerRef: ref,
+              midpoint: {
+                x: (attackerX + targetX + 1) / 2,
+                y: (attackerY + targetY + 1) / 2,
+              },
+              vertexAKey: `${vertices[0].x},${vertices[0].y}`,
+              vertexBKey: `${vertices[1].x},${vertices[1].y}`,
+            });
+          }
+        }
+
+        if (edges.length <= 0) {
+          continue;
+        }
+
+        const vertexToEdges = new Map<string, number[]>();
+        for (let index = 0; index < edges.length; index += 1) {
+          const edge = edges[index];
+          const aBucket = vertexToEdges.get(edge.vertexAKey) ?? [];
+          aBucket.push(index);
+          vertexToEdges.set(edge.vertexAKey, aBucket);
+
+          const bBucket = vertexToEdges.get(edge.vertexBKey) ?? [];
+          bBucket.push(index);
+          vertexToEdges.set(edge.vertexBKey, bBucket);
+        }
+
+        const visited = new Set<number>();
+        type EdgeComponent = {
+          edgeIndices: number[];
+          edgeMidpoints: Array<{ x: number; y: number }>;
+          attackerRefs: number[];
+          minX: number;
+          maxX: number;
+          minY: number;
+          maxY: number;
+        };
+        const rawComponents: EdgeComponent[] = [];
+        for (let startIndex = 0; startIndex < edges.length; startIndex += 1) {
+          if (visited.has(startIndex)) {
+            continue;
+          }
+
+          const componentIndices: number[] = [];
+          const queue: number[] = [startIndex];
+          visited.add(startIndex);
+
+          while (queue.length > 0) {
+            const edgeIndex = queue.pop()!;
+            componentIndices.push(edgeIndex);
+            const edge = edges[edgeIndex];
+            const adjacent = [
+              ...(vertexToEdges.get(edge.vertexAKey) ?? []),
+              ...(vertexToEdges.get(edge.vertexBKey) ?? []),
+            ];
+            for (const nextIndex of adjacent) {
+              if (visited.has(nextIndex)) {
+                continue;
+              }
+              visited.add(nextIndex);
+              queue.push(nextIndex);
+            }
+          }
+
+          if (componentIndices.length <= 0) {
+            continue;
+          }
+
+          const edgeMidpoints = componentIndices.map(
+            (edgeIndex) => edges[edgeIndex].midpoint,
+          );
+          const attackerRefs = componentIndices.map(
+            (edgeIndex) => edges[edgeIndex].attackerRef,
+          );
+          let minX = Number.POSITIVE_INFINITY;
+          let maxX = Number.NEGATIVE_INFINITY;
+          let minY = Number.POSITIVE_INFINITY;
+          let maxY = Number.NEGATIVE_INFINITY;
+          for (const midpoint of edgeMidpoints) {
+            if (midpoint.x < minX) minX = midpoint.x;
+            if (midpoint.x > maxX) maxX = midpoint.x;
+            if (midpoint.y < minY) minY = midpoint.y;
+            if (midpoint.y > maxY) maxY = midpoint.y;
+          }
+          rawComponents.push({
+            edgeIndices: componentIndices,
+            edgeMidpoints,
+            attackerRefs,
+            minX,
+            maxX,
+            minY,
+            maxY,
+          });
+        }
+
+        if (rawComponents.length <= 0) {
+          continue;
+        }
+
+        const componentsCanMerge = (
+          a: EdgeComponent,
+          b: EdgeComponent,
+        ): boolean => {
+          const dx =
+            a.minX > b.maxX
+              ? a.minX - b.maxX
+              : b.minX > a.maxX
+                ? b.minX - a.maxX
+                : 0;
+          const dy =
+            a.minY > b.maxY
+              ? a.minY - b.maxY
+              : b.minY > a.maxY
+                ? b.minY - a.maxY
+                : 0;
+          if (
+            dx * dx + dy * dy >
+            ATTACK_FRONT_EDGE_GAP_MERGE_TILES *
+              ATTACK_FRONT_EDGE_GAP_MERGE_TILES
+          ) {
+            return false;
+          }
+          for (const aPoint of a.edgeMidpoints) {
+            for (const bPoint of b.edgeMidpoints) {
+              const ddx = aPoint.x - bPoint.x;
+              const ddy = aPoint.y - bPoint.y;
+              if (
+                ddx * ddx + ddy * ddy <=
+                ATTACK_FRONT_EDGE_GAP_MERGE_TILES *
+                  ATTACK_FRONT_EDGE_GAP_MERGE_TILES
+              ) {
+                return true;
+              }
+            }
+          }
+          return false;
+        };
+
+        const components = [...rawComponents];
+        let merged = true;
+        while (merged) {
+          merged = false;
+          for (let i = 0; i < components.length; i += 1) {
+            for (let j = i + 1; j < components.length; j += 1) {
+              if (!componentsCanMerge(components[i], components[j])) {
+                continue;
+              }
+              const mergedMidpoints = [
+                ...components[i].edgeMidpoints,
+                ...components[j].edgeMidpoints,
+              ];
+              const mergedRefs = [
+                ...components[i].attackerRefs,
+                ...components[j].attackerRefs,
+              ];
+              components[i] = {
+                edgeIndices: [
+                  ...components[i].edgeIndices,
+                  ...components[j].edgeIndices,
+                ],
+                edgeMidpoints: mergedMidpoints,
+                attackerRefs: mergedRefs,
+                minX: Math.min(components[i].minX, components[j].minX),
+                maxX: Math.max(components[i].maxX, components[j].maxX),
+                minY: Math.min(components[i].minY, components[j].minY),
+                maxY: Math.max(components[i].maxY, components[j].maxY),
+              };
+              components.splice(j, 1);
+              merged = true;
+              break;
+            }
+            if (merged) {
+              break;
+            }
+          }
+        }
+
+        type FrontComponentSummary = {
+          anchor: { x: number; y: number };
+          edgeCount: number;
+          componentKey: number;
+        };
+
+        const frontComponents: FrontComponentSummary[] = [];
+        for (const component of components) {
+          const edgeMidpoints = component.edgeMidpoints;
+          let centroidX = 0;
+          let centroidY = 0;
+          for (const midpoint of edgeMidpoints) {
+            centroidX += midpoint.x;
+            centroidY += midpoint.y;
+          }
+          centroidX /= edgeMidpoints.length;
+          centroidY /= edgeMidpoints.length;
+
+          // Pin the label to an actual shared-edge midpoint nearest the front center.
+          let anchor = edgeMidpoints[0];
+          let bestDist2 = Number.POSITIVE_INFINITY;
+          for (const midpoint of edgeMidpoints) {
+            const dx = midpoint.x - centroidX;
+            const dy = midpoint.y - centroidY;
+            const dist2 = dx * dx + dy * dy;
+            if (dist2 < bestDist2) {
+              bestDist2 = dist2;
+              anchor = midpoint;
+            }
+          }
+
+          let componentKey = Number.POSITIVE_INFINITY;
+          for (const candidate of component.attackerRefs) {
+            if (candidate < componentKey) {
+              componentKey = candidate;
+            }
+          }
+
+          frontComponents.push({
+            anchor,
+            edgeCount: edgeMidpoints.length,
+            componentKey,
+          });
+        }
+
+        const hasPositionedAttacks = pairAttacks.some(
+          (attack) =>
+            attack.averagePosition &&
+            Number.isFinite(attack.averagePosition.x) &&
+            Number.isFinite(attack.averagePosition.y),
+        );
+        if (hasPositionedAttacks) {
+          const troopsByFrontIndex = new Map<
+            number,
+            { troops: number; attackId: string }
+          >();
+          for (const attack of pairAttacks) {
+            const position = attack.averagePosition;
+            if (
+              !position ||
+              !Number.isFinite(position.x) ||
+              !Number.isFinite(position.y)
+            ) {
+              continue;
+            }
+            let nearestFrontIndex = -1;
+            let nearestDistanceSquared = Number.POSITIVE_INFINITY;
+            for (
+              let componentIndex = 0;
+              componentIndex < frontComponents.length;
+              componentIndex += 1
+            ) {
+              const component = frontComponents[componentIndex];
+              const dx = position.x - component.anchor.x;
+              const dy = position.y - component.anchor.y;
+              const distanceSquared = dx * dx + dy * dy;
+              if (distanceSquared < nearestDistanceSquared) {
+                nearestDistanceSquared = distanceSquared;
+                nearestFrontIndex = componentIndex;
+              }
+            }
+            if (nearestFrontIndex < 0) {
+              continue;
+            }
+            const existing = troopsByFrontIndex.get(nearestFrontIndex);
+            if (!existing) {
+              troopsByFrontIndex.set(nearestFrontIndex, {
+                troops: attack.troops,
+                attackId: attack.id,
+              });
+              continue;
+            }
+            existing.troops += attack.troops;
+            if (attack.id.localeCompare(existing.attackId) < 0) {
+              existing.attackId = attack.id;
+            }
+          }
+
+          for (const [frontIndex, aggregate] of troopsByFrontIndex.entries()) {
+            const component = frontComponents[frontIndex];
+            if (!component) {
+              continue;
+            }
+            const troopText = this.formatAttackBorderTroopCount(
+              aggregate.troops,
+            );
+            if (!troopText) {
+              continue;
+            }
+            const minScale = this.resolveAttackBorderLabelMinScale(
+              component.edgeCount,
+            );
+            labels.push({
+              id: `attack-border-${attackerSmallId}-${targetSmallId}-${aggregate.attackId}-${component.componentKey}`,
+              x: component.anchor.x,
+              y: component.anchor.y,
+              text: troopText,
+              color: attacker
+                ? (this.resolvePlayerColor(attacker) ?? undefined)
+                : undefined,
+              minScale: minScale > 0 ? minScale : undefined,
+            });
+          }
+          continue;
+        }
+
+        const unassignedAttackIndices = new Set<number>(
+          pairAttacks.map((_, index) => index),
+        );
+        for (const component of frontComponents) {
+          const matchedAttack = this.selectAttackForFront(
+            component.anchor,
+            pairAttacks,
+            unassignedAttackIndices,
+          );
+          if (!matchedAttack) {
+            continue;
+          }
+          const troopText = this.formatAttackBorderTroopCount(
+            matchedAttack.troops,
+          );
+          if (!troopText) {
+            continue;
+          }
+          const minScale = this.resolveAttackBorderLabelMinScale(
+            component.edgeCount,
+          );
+          labels.push({
+            id: `attack-border-${attackerSmallId}-${targetSmallId}-${matchedAttack.id}-${component.componentKey}`,
+            x: component.anchor.x,
+            y: component.anchor.y,
+            text: troopText,
+            color: attacker
+              ? (this.resolvePlayerColor(attacker) ?? undefined)
+              : undefined,
+            minScale: minScale > 0 ? minScale : undefined,
+          });
+        }
+      }
+    }
+
+    labels.sort((a, b) => a.id.localeCompare(b.id));
+    return labels;
+  }
+
+  private async resolveAttackAveragePosition(
+    game: GameViewLike,
+    attacker: PlayerViewLike | undefined,
+    attackerSmallId: number,
+    attackId: string,
+  ): Promise<{ x: number; y: number } | null> {
+    const extractPosition = (raw: unknown): { x: number; y: number } | null => {
+      if (!raw || typeof raw !== "object") {
+        return null;
+      }
+      const x = Number((raw as { x?: unknown }).x);
+      const y = Number((raw as { y?: unknown }).y);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) {
+        return null;
+      }
+      return { x, y };
+    };
+
+    const attackerResolver = attacker?.attackAveragePosition;
+    if (typeof attackerResolver === "function") {
+      try {
+        const resolved = await attackerResolver.call(
+          attacker,
+          attackerSmallId,
+          attackId,
+        );
+        const normalized = extractPosition(resolved);
+        if (normalized) {
+          return normalized;
+        }
+      } catch (error) {
+        console.warn("Failed to resolve attack average position", error);
+      }
+    }
+
+    const gameResolver = game.attackAveragePosition;
+    if (typeof gameResolver !== "function") {
+      return null;
+    }
+    try {
+      const resolved = await gameResolver.call(game, attackerSmallId, attackId);
+      return extractPosition(resolved);
+    } catch (error) {
+      console.warn("Failed to resolve attack average position", error);
+      return null;
+    }
+  }
+
+  private selectAttackForFront(
+    anchor: { x: number; y: number },
+    attacks: ReadonlyArray<{
+      id: string;
+      troops: number;
+      averagePosition: { x: number; y: number } | null;
+    }>,
+    unassignedIndices: Set<number>,
+  ): {
+    id: string;
+    troops: number;
+    averagePosition: { x: number; y: number } | null;
+  } | null {
+    if (attacks.length === 0) {
+      return null;
+    }
+
+    const candidateIndices =
+      unassignedIndices.size > 0
+        ? [...unassignedIndices]
+        : attacks.map((_, index) => index);
+    if (candidateIndices.length === 0) {
+      return null;
+    }
+
+    let nearestIndex: number | null = null;
+    let nearestDistanceSquared = Number.POSITIVE_INFINITY;
+    for (const index of candidateIndices) {
+      const candidate = attacks[index];
+      const position = candidate.averagePosition;
+      if (
+        !position ||
+        !Number.isFinite(position.x) ||
+        !Number.isFinite(position.y)
+      ) {
+        continue;
+      }
+      const dx = position.x - anchor.x;
+      const dy = position.y - anchor.y;
+      const distanceSquared = dx * dx + dy * dy;
+      if (distanceSquared < nearestDistanceSquared) {
+        nearestDistanceSquared = distanceSquared;
+        nearestIndex = index;
+      }
+    }
+
+    const selectedIndex = nearestIndex ?? candidateIndices[0];
+    unassignedIndices.delete(selectedIndex);
+    return attacks[selectedIndex] ?? null;
+  }
+
+  private resolveSharedEdgeVertices(
+    attackerX: number,
+    attackerY: number,
+    targetX: number,
+    targetY: number,
+  ): [{ x: number; y: number }, { x: number; y: number }] | null {
+    if (targetX === attackerX + 1 && targetY === attackerY) {
+      return [
+        { x: attackerX + 1, y: attackerY },
+        { x: attackerX + 1, y: attackerY + 1 },
+      ];
+    }
+    if (targetX === attackerX - 1 && targetY === attackerY) {
+      return [
+        { x: attackerX, y: attackerY },
+        { x: attackerX, y: attackerY + 1 },
+      ];
+    }
+    if (targetX === attackerX && targetY === attackerY + 1) {
+      return [
+        { x: attackerX, y: attackerY + 1 },
+        { x: attackerX + 1, y: attackerY + 1 },
+      ];
+    }
+    if (targetX === attackerX && targetY === attackerY - 1) {
+      return [
+        { x: attackerX, y: attackerY },
+        { x: attackerX + 1, y: attackerY },
+      ];
+    }
+    return null;
+  }
+
+  private async resolvePlayerBorderTileRefs(
+    player: PlayerViewLike,
+  ): Promise<number[]> {
+    const borderTilesGetter = player.borderTiles;
+    if (typeof borderTilesGetter !== "function") {
+      return [];
+    }
+    try {
+      const payload = await borderTilesGetter.call(player);
+      if (!payload || typeof payload !== "object") {
+        return [];
+      }
+      const refs = (payload as { borderTiles?: unknown }).borderTiles;
+      return this.normalizeBorderTileRefs(refs);
+    } catch (error) {
+      console.warn("Failed to resolve player border tiles", error);
+      return [];
+    }
+  }
+
+  private normalizeBorderTileRefs(raw: unknown): number[] {
+    if (!raw || typeof raw !== "object") {
+      return [];
+    }
+    const iterable = (raw as Iterable<unknown>)[Symbol.iterator];
+    if (typeof iterable !== "function") {
+      return [];
+    }
+    const refs: number[] = [];
+    for (const value of raw as Iterable<unknown>) {
+      const numeric = Number(value);
+      if (!Number.isFinite(numeric)) {
+        continue;
+      }
+      refs.push(numeric);
+    }
+    return refs;
   }
 
   private resolveTransformHandler(): TransformHandlerLike | null {
@@ -2434,6 +3172,7 @@ export class DataStore {
     this.troopDonationOverlay?.setVisible(visible);
     this.goldDonationOverlay?.setVisible(visible);
     this.tradeRouteOverlay?.setVisible(visible);
+    this.attackBorderOverlay?.setVisible(visible);
   }
 
   private syncOverlayRuntime(overlayId: string): void {
@@ -2497,6 +3236,20 @@ export class DataStore {
       effect.setVisible(visible);
       this.syncTradeRouteOverlay();
       effect.enable();
+      return;
+    }
+
+    if (overlayId === ATTACK_BORDER_OVERLAY_ID) {
+      if (!shouldEnable) {
+        this.attackBorderSyncQueued = false;
+        this.attackBorderOverlay?.disable();
+        this.attackBorderOverlay?.clear();
+        return;
+      }
+      const effect = this.ensureAttackBorderOverlay();
+      effect.setVisible(visible);
+      effect.enable();
+      this.syncAttackBorderOverlay();
     }
   }
 
@@ -3422,6 +4175,7 @@ export class DataStore {
     this.lastProcessedDisplayUpdates = null;
     this.troopDonationOverlay?.clear();
     this.goldDonationOverlay?.clear();
+    this.attackBorderOverlay?.clear();
     this.lastLiveGameTeamLogKey = null;
   }
 
@@ -3691,6 +4445,7 @@ export class DataStore {
       this.syncTroopDonationOverlay(players);
       this.syncGoldDonationOverlay(players);
       this.syncTradeRouteOverlay(players, recordLookup);
+      this.syncAttackBorderOverlay(players);
       this.notify();
     } catch (error) {
       // If the game context changes while we're reading from it, try attaching again.
@@ -3701,6 +4456,7 @@ export class DataStore {
       this.troopDonationOverlay?.clear();
       this.goldDonationOverlay?.clear();
       this.tradeRouteOverlay?.clear();
+      this.attackBorderOverlay?.clear();
       if (this.refreshHandle !== undefined) {
         window.clearInterval(this.refreshHandle);
         this.refreshHandle = undefined;
@@ -5319,6 +6075,40 @@ export class DataStore {
 
     const manifest = this.shipManifests.get(String(attack.id));
     return manifest ?? attack.troops;
+  }
+
+  private formatAttackBorderTroopCount(rawTroops: number): string | null {
+    const normalized = Math.floor(Math.max(rawTroops, 0) / 10);
+    if (normalized <= 0) {
+      return null;
+    }
+    if (normalized < ATTACK_BORDER_TROOP_COMPACT_THRESHOLD) {
+      return formatTroopCount(rawTroops);
+    }
+    try {
+      return ATTACK_BORDER_TROOP_COMPACT_FORMATTER.format(normalized);
+    } catch {
+      return formatTroopCount(rawTroops);
+    }
+  }
+
+  private resolveAttackBorderLabelMinScale(edgeCount: number): number {
+    if (!Number.isFinite(edgeCount) || edgeCount <= 0) {
+      return 0;
+    }
+    if (edgeCount <= ATTACK_BORDER_ZOOM_EDGE_TINY_MAX) {
+      return ATTACK_BORDER_ZOOM_MIN_SCALE_TINY;
+    }
+    if (edgeCount <= ATTACK_BORDER_ZOOM_EDGE_SMALL_MAX) {
+      return ATTACK_BORDER_ZOOM_MIN_SCALE_SMALL;
+    }
+    if (edgeCount <= ATTACK_BORDER_ZOOM_EDGE_MEDIUM_MAX) {
+      return ATTACK_BORDER_ZOOM_MIN_SCALE_MEDIUM;
+    }
+    if (edgeCount <= ATTACK_BORDER_ZOOM_EDGE_LARGE_MAX) {
+      return ATTACK_BORDER_ZOOM_MIN_SCALE_LARGE;
+    }
+    return 0;
   }
 
   private mapActiveAlliances(player: PlayerViewLike): AlliancePact[] {

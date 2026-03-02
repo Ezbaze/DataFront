@@ -1385,6 +1385,25 @@ interface RouteLabelEntry {
   goldText: HTMLSpanElement;
 }
 
+export interface AttackBorderLabelSummary {
+  id: string;
+  x: number;
+  y: number;
+  text: string;
+  color?: string;
+  minScale?: number;
+}
+
+interface AttackBorderOverlayOptions {
+  resolveTransform: () => TransformHandlerLike | null;
+}
+
+interface AttackBorderLabelEntry {
+  container: HTMLDivElement;
+  icon: SVGSVGElement;
+  text: HTMLSpanElement;
+}
+
 class MinPriorityQueue<T extends { fScore: number }> {
   private readonly heap: T[] = [];
 
@@ -2108,9 +2127,11 @@ export class TradeRouteOverlay {
     }
 
     for (const [key, entry] of this.labelPool.entries()) {
-      if (!used.has(key)) {
-        entry.container.style.display = "none";
+      if (used.has(key)) {
+        continue;
       }
+      entry.container.remove();
+      this.labelPool.delete(key);
     }
   }
 
@@ -2557,6 +2578,343 @@ export class TradeRouteOverlay {
 }
 
 const SVG_NS = "http://www.w3.org/2000/svg";
+
+export class AttackBorderOverlay {
+  private readonly container: HTMLDivElement;
+  private readonly labelLayer: HTMLDivElement;
+  private readonly labelPool: Map<string, AttackBorderLabelEntry> = new Map();
+  private labelSummaries: AttackBorderLabelSummary[] = [];
+  private rafHandle: number | null = null;
+  private attached = false;
+  private active = false;
+  private hostElement: HTMLElement | null = null;
+  private offsetLeft = 0;
+  private offsetTop = 0;
+  private cssWidth = 0;
+  private cssHeight = 0;
+  private visible = true;
+
+  constructor(private readonly options: AttackBorderOverlayOptions) {
+    if (typeof document === "undefined") {
+      throw new Error("AttackBorderOverlay requires a browser environment");
+    }
+
+    this.container = document.createElement("div");
+    this.container.style.position = "fixed";
+    this.container.style.left = "0";
+    this.container.style.top = "0";
+    this.container.style.width = "100%";
+    this.container.style.height = "100%";
+    this.container.style.pointerEvents = "none";
+    this.container.style.zIndex = "31";
+    this.container.style.display = "none";
+    this.container.style.fontFamily =
+      'Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+
+    this.labelLayer = document.createElement("div");
+    this.labelLayer.style.position = "absolute";
+    this.labelLayer.style.left = "0";
+    this.labelLayer.style.top = "0";
+    this.labelLayer.style.width = "100%";
+    this.labelLayer.style.height = "100%";
+    this.labelLayer.style.pointerEvents = "none";
+    this.container.appendChild(this.labelLayer);
+  }
+
+  setLabels(summaries: readonly AttackBorderLabelSummary[]): void {
+    this.labelSummaries = summaries.map((summary) => ({ ...summary }));
+  }
+
+  enable(): void {
+    if (typeof document === "undefined" || typeof window === "undefined") {
+      return;
+    }
+    if (this.active) {
+      return;
+    }
+    this.active = true;
+    this.ensureAttached();
+    this.container.style.display = this.visible ? "block" : "none";
+    this.updateContainerFrame();
+    this.render();
+    this.scheduleRender();
+  }
+
+  setVisible(visible: boolean): void {
+    this.visible = visible;
+    if (!this.active) {
+      return;
+    }
+    this.container.style.display = this.visible ? "block" : "none";
+  }
+
+  disable(): void {
+    if (!this.active) {
+      return;
+    }
+    this.active = false;
+    this.container.style.display = "none";
+    this.cancelRender();
+    this.hideAllLabels();
+  }
+
+  dispose(): void {
+    this.disable();
+    if (this.attached) {
+      this.container.remove();
+      this.attached = false;
+      this.hostElement = null;
+    }
+  }
+
+  isActive(): boolean {
+    return this.active;
+  }
+
+  clear(): void {
+    this.labelSummaries = [];
+    for (const entry of this.labelPool.values()) {
+      entry.container.remove();
+    }
+    this.labelPool.clear();
+  }
+
+  private scheduleRender(): void {
+    if (typeof window === "undefined") {
+      return;
+    }
+    if (this.rafHandle !== null) {
+      return;
+    }
+    const loop = () => {
+      this.rafHandle = window.requestAnimationFrame(loop);
+      this.render();
+    };
+    this.rafHandle = window.requestAnimationFrame(loop);
+  }
+
+  private cancelRender(): void {
+    if (typeof window === "undefined") {
+      return;
+    }
+    if (this.rafHandle !== null) {
+      window.cancelAnimationFrame(this.rafHandle);
+      this.rafHandle = null;
+    }
+  }
+
+  private updateContainerFrame(): void {
+    if (typeof window === "undefined") {
+      return;
+    }
+    this.ensureAttached();
+    const transform = this.options.resolveTransform?.();
+    const rect = transform?.boundingRect?.();
+    const width = rect?.width ?? window.innerWidth;
+    const height = rect?.height ?? window.innerHeight;
+    const left = rect?.left ?? 0;
+    const top = rect?.top ?? 0;
+
+    if (this.cssWidth !== width) {
+      this.container.style.width = `${width}px`;
+      this.cssWidth = width;
+    }
+    if (this.cssHeight !== height) {
+      this.container.style.height = `${height}px`;
+      this.cssHeight = height;
+    }
+
+    let relativeLeft = left;
+    let relativeTop = top;
+    const host = this.hostElement;
+    if (host && host !== document.body) {
+      const hostRect = host.getBoundingClientRect();
+      relativeLeft = left - hostRect.left;
+      relativeTop = top - hostRect.top;
+      if (this.container.style.position !== "absolute") {
+        this.container.style.position = "absolute";
+      }
+      this.ensureContainerPositioned(host);
+    } else if (this.container.style.position !== "fixed") {
+      this.container.style.position = "fixed";
+    }
+
+    if (this.container.style.left !== `${relativeLeft}px`) {
+      this.container.style.left = `${relativeLeft}px`;
+    }
+    if (this.container.style.top !== `${relativeTop}px`) {
+      this.container.style.top = `${relativeTop}px`;
+    }
+
+    this.offsetLeft = left;
+    this.offsetTop = top;
+  }
+
+  private ensureAttached(): void {
+    if (typeof document === "undefined") {
+      return;
+    }
+    let container = this.resolveHostElement();
+    if (!container) {
+      return;
+    }
+    if (container instanceof HTMLCanvasElement) {
+      container = container.parentElement ?? document.body;
+    }
+    if (!(container instanceof HTMLElement)) {
+      return;
+    }
+    if (this.container.parentElement !== container) {
+      this.container.remove();
+      container.appendChild(this.container);
+    }
+    this.hostElement = container;
+    this.attached = true;
+  }
+
+  private resolveHostElement(): HTMLElement | null {
+    if (typeof document === "undefined") {
+      return null;
+    }
+    const transform = this.options.resolveTransform?.();
+    const candidateCanvas = (
+      transform as unknown as { canvas?: HTMLCanvasElement | null } | undefined
+    )?.canvas;
+    if (candidateCanvas instanceof HTMLCanvasElement) {
+      return candidateCanvas.parentElement ?? candidateCanvas;
+    }
+    const fallbackCanvas = document.querySelector("canvas");
+    if (fallbackCanvas instanceof HTMLCanvasElement) {
+      return fallbackCanvas.parentElement ?? fallbackCanvas;
+    }
+    return document.body;
+  }
+
+  private ensureContainerPositioned(container: HTMLElement): void {
+    if (typeof window === "undefined") {
+      return;
+    }
+    if (container === document.body) {
+      return;
+    }
+    const position = window.getComputedStyle(container).position;
+    if (position === "static") {
+      container.style.position = "relative";
+    }
+  }
+
+  private render(): void {
+    if (!this.active) {
+      return;
+    }
+    const transform = this.options.resolveTransform?.();
+    if (!transform) {
+      this.hideAllLabels();
+      return;
+    }
+
+    this.updateContainerFrame();
+    this.updateLabels(transform);
+  }
+
+  private updateLabels(transform: TransformHandlerLike): void {
+    const used = new Set<string>();
+
+    for (const summary of this.labelSummaries) {
+      if (!Number.isFinite(summary.x) || !Number.isFinite(summary.y)) {
+        continue;
+      }
+      const entry = this.ensureLabelEntry(summary.id);
+      used.add(summary.id);
+
+      entry.text.textContent = summary.text;
+      entry.container.style.color = summary.color ?? "#e2e8f0";
+      const minScale = summary.minScale ?? 0;
+      if (transform.scale < minScale) {
+        entry.container.style.display = "none";
+        continue;
+      }
+      const screen = transform.worldToScreenCoordinates({
+        x: summary.x,
+        y: summary.y,
+      });
+      if (!this.isFinitePoint(screen)) {
+        entry.container.style.display = "none";
+        continue;
+      }
+      const localX = screen.x - this.offsetLeft;
+      const localY = screen.y - this.offsetTop;
+      entry.container.style.left = `${localX}px`;
+      entry.container.style.top = `${localY}px`;
+      entry.container.style.display = "inline-flex";
+    }
+
+    for (const [key, entry] of this.labelPool.entries()) {
+      if (used.has(key)) {
+        continue;
+      }
+      entry.container.remove();
+      this.labelPool.delete(key);
+    }
+  }
+
+  private ensureLabelEntry(key: string): AttackBorderLabelEntry {
+    let entry = this.labelPool.get(key);
+    if (!entry) {
+      entry = this.createLabel();
+      this.labelPool.set(key, entry);
+    }
+    return entry;
+  }
+
+  private createLabel(): AttackBorderLabelEntry {
+    const container = document.createElement("div");
+    container.style.position = "absolute";
+    container.style.padding = "3px 6px";
+    container.style.borderRadius = "5px";
+    container.style.fontSize = "clamp(0.52rem, 0.62vw, 0.62rem)";
+    container.style.lineHeight = "1";
+    container.style.fontWeight = "600";
+    container.style.letterSpacing = "0.02em";
+    container.style.color = "#e2e8f0";
+    container.style.background = "rgba(15, 23, 42, 0.85)";
+    container.style.boxShadow = "0 4px 12px rgba(2, 6, 23, 0.35)";
+    container.style.whiteSpace = "nowrap";
+    container.style.transform = "translate(-50%, -50%)";
+    container.style.display = "none";
+    container.style.alignItems = "center";
+    container.style.gap = "5px";
+
+    const icon = createElement(Users) as SVGSVGElement;
+    icon.setAttribute("aria-hidden", "true");
+    icon.style.width = "9px";
+    icon.style.height = "9px";
+    icon.style.flexShrink = "0";
+    icon.style.color = "inherit";
+
+    const text = document.createElement("span");
+    text.textContent = "";
+    container.appendChild(icon);
+    container.appendChild(text);
+    this.labelLayer.appendChild(container);
+
+    return { container, icon, text };
+  }
+
+  private hideAllLabels(): void {
+    for (const entry of this.labelPool.values()) {
+      entry.container.style.display = "none";
+    }
+  }
+
+  private isFinitePoint(
+    point: { x: number; y: number } | null | undefined,
+  ): point is Point {
+    return Boolean(
+      point && Number.isFinite(point.x) && Number.isFinite(point.y),
+    );
+  }
+}
 
 export interface TroopDonationOverlayPlayerSnapshot {
   id: string;
