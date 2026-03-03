@@ -8,6 +8,7 @@ import {
   AttackBorderOverlay,
   GoldDonationOverlay,
   HistoricalMissileTrajectoryOverlay,
+  MissileImpactOverlay,
   MissileFlightSummary,
   MissileSiloSummary,
   MissileTrajectoryOverlay,
@@ -66,6 +67,8 @@ const STRUCTURE_UNIT_TYPES = new Set<string>([
 
 const MISSILE_TRAJECTORY_OVERLAY_ID = "missile-trajectories";
 const HISTORICAL_MISSILE_OVERLAY_ID = "historical-missiles";
+const MISSILE_IMPACT_OVERLAY_ID = "missile-impact";
+const LEGACY_MISSILE_IMPACT_OVERLAY_ID = "missile-impact-telegraphs";
 const DONATION_DEDUP_TICK_WINDOW = 5;
 const WEB_SOCKET_DONATION_PENDING_MAX = 300;
 const WEB_SOCKET_DONATION_PENDING_TTL_MS = 30_000;
@@ -644,6 +647,7 @@ export class DataStore {
   private overlaysTemporarilyHidden = false;
   private missileOverlay?: MissileTrajectoryOverlay;
   private historicalMissileOverlay?: HistoricalMissileTrajectoryOverlay;
+  private missileImpactOverlay?: MissileImpactOverlay;
   private troopDonationOverlay?: TroopDonationOverlay;
   private goldDonationOverlay?: GoldDonationOverlay;
   private tradeRouteOverlay?: TradeRouteOverlay;
@@ -715,6 +719,13 @@ export class DataStore {
         label: "Active missile trajectories",
         description:
           "Shows the live flight paths for missiles currently in the air, colored by their owners.",
+        enabled: false,
+      },
+      {
+        id: MISSILE_IMPACT_OVERLAY_ID,
+        label: "Missile impact",
+        description:
+          "Shows rotating impact circles for active missiles, colored per team.",
         enabled: false,
       },
       {
@@ -1081,11 +1092,28 @@ export class DataStore {
       return;
     }
     for (const overlay of this.sidebarOverlays) {
-      const enabled = overlays[overlay.id];
+      const enabled = this.resolvePersistedOverlayEnabled(overlays, overlay.id);
       if (typeof enabled === "boolean") {
         this.setOverlayEnabled(overlay.id, enabled);
       }
     }
+  }
+
+  private resolvePersistedOverlayEnabled(
+    overlays: Record<string, boolean>,
+    overlayId: string,
+  ): boolean | undefined {
+    const currentValue = overlays[overlayId];
+    if (typeof currentValue === "boolean") {
+      return currentValue;
+    }
+    if (overlayId === MISSILE_IMPACT_OVERLAY_ID) {
+      const legacyValue = overlays[LEGACY_MISSILE_IMPACT_OVERLAY_ID];
+      if (typeof legacyValue === "boolean") {
+        return legacyValue;
+      }
+    }
+    return undefined;
   }
 
   saveSidebarState(): void {
@@ -1122,6 +1150,15 @@ export class DataStore {
         resolveTransform: () => this.resolveTransformHandler(),
       });
     return this.historicalMissileOverlay;
+  }
+
+  private ensureMissileImpactOverlay(): MissileImpactOverlay {
+    this.missileImpactOverlay =
+      this.missileImpactOverlay ??
+      new MissileImpactOverlay({
+        resolveTransform: () => this.resolveTransformHandler(),
+      });
+    return this.missileImpactOverlay;
   }
 
   private ensureTroopDonationOverlay(): TroopDonationOverlay {
@@ -1247,6 +1284,21 @@ export class DataStore {
     }
 
     const mirvLaunchOrigins = this.collectMissileSiloOrigins();
+    const localPlayer = this.resolveLocalPlayer();
+    const localPlayerId = localPlayer
+      ? this.safePlayerId(localPlayer)
+      : undefined;
+    const localTeam = (() => {
+      if (!localPlayer) {
+        return null;
+      }
+      try {
+        const team = localPlayer.team?.();
+        return team ?? null;
+      } catch {
+        return null;
+      }
+    })();
 
     let units: UnitViewLike[];
     try {
@@ -1272,6 +1324,17 @@ export class DataStore {
       }
 
       const ownerId = owner ? this.safePlayerId(owner) : undefined;
+      let ownerTeam: string | undefined;
+      if (owner) {
+        try {
+          const team = owner.team?.();
+          if (team) {
+            ownerTeam = team;
+          }
+        } catch (error) {
+          console.warn("Failed to resolve missile owner team", error);
+        }
+      }
 
       let unitType = "Missile";
       try {
@@ -1408,6 +1471,9 @@ export class DataStore {
         split: isMirvWarhead ? null : undefined,
         color: this.resolvePlayerColor(owner),
         ownerId,
+        ownerTeam,
+        isLocalOwner: !!ownerId && !!localPlayerId && ownerId === localPlayerId,
+        isLocalTeam: !!localTeam && !!ownerTeam && ownerTeam === localTeam,
         unitType,
       };
 
@@ -1594,12 +1660,20 @@ export class DataStore {
   }
 
   private syncHistoricalMissileOverlay(): void {
-    if (!this.historicalMissileOverlay) {
+    const historicalEnabled = this.isOverlayEnabled(
+      HISTORICAL_MISSILE_OVERLAY_ID,
+    );
+    const impactEnabled = this.isOverlayEnabled(MISSILE_IMPACT_OVERLAY_ID);
+    if (!historicalEnabled && !impactEnabled) {
       return;
     }
-    this.historicalMissileOverlay.setTrajectories(
-      this.collectHistoricalMissiles(),
-    );
+    const flights = this.collectHistoricalMissiles();
+    if (historicalEnabled) {
+      this.historicalMissileOverlay?.setTrajectories(flights);
+    }
+    if (impactEnabled) {
+      this.missileImpactOverlay?.setTrajectories(flights);
+    }
   }
 
   private syncDonationOverlay(
@@ -3169,6 +3243,7 @@ export class DataStore {
     const visible = !this.overlaysTemporarilyHidden;
     this.missileOverlay?.setVisible(visible);
     this.historicalMissileOverlay?.setVisible(visible);
+    this.missileImpactOverlay?.setVisible(visible);
     this.troopDonationOverlay?.setVisible(visible);
     this.goldDonationOverlay?.setVisible(visible);
     this.tradeRouteOverlay?.setVisible(visible);
@@ -3197,6 +3272,18 @@ export class DataStore {
         return;
       }
       const effect = this.ensureHistoricalMissileOverlay();
+      effect.setVisible(visible);
+      effect.setTrajectories(this.collectHistoricalMissiles());
+      effect.enable();
+      return;
+    }
+
+    if (overlayId === MISSILE_IMPACT_OVERLAY_ID) {
+      if (!shouldEnable) {
+        this.missileImpactOverlay?.disable();
+        return;
+      }
+      const effect = this.ensureMissileImpactOverlay();
       effect.setVisible(visible);
       effect.setTrajectories(this.collectHistoricalMissiles());
       effect.enable();

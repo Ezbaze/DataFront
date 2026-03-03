@@ -2,7 +2,7 @@
 // ==UserScript==
 // @name			DataFront
 // @namespace		https://openfront.io/
-// @version			0.1.4
+// @version			0.1.5
 // @description		Adds a resizable, splittable strategic sidebar for OpenFront players, clans, and teams.
 // @author			ezbaze
 // @match			https://*.openfront.io/*
@@ -8490,10 +8490,7 @@
           return { control1, control2 };
       }
       resolveTrajectoryVariant(trajectory) {
-          const normalized = trajectory.unitType
-              ?.toString()
-              .replace(/\s+/g, "")
-              .toLowerCase();
+          const normalized = this.normalizeUnitType(trajectory.unitType);
           if (normalized === "mirvwarhead") {
               return "mirv-warhead";
           }
@@ -8501,6 +8498,389 @@
               return "mirv";
           }
           return "standard";
+      }
+      normalizeUnitType(unitType) {
+          if (typeof unitType !== "string") {
+              return null;
+          }
+          const normalized = unitType.replace(/\s+/g, "").toLowerCase();
+          return normalized.length > 0 ? normalized : null;
+      }
+      normalizeColor(color) {
+          if (color && color.trim()) {
+              return color.trim();
+          }
+          return "rgb(56, 189, 248)";
+      }
+  }
+  class MissileImpactOverlay {
+      constructor(options) {
+          this.options = options;
+          this.rafHandle = null;
+          this.trajectories = [];
+          this.teamColors = new Map();
+          this.attached = false;
+          this.active = false;
+          this.hostElement = null;
+          this.cssWidth = 0;
+          this.cssHeight = 0;
+          this.pixelRatio = 1;
+          this.offsetLeft = 0;
+          this.offsetTop = 0;
+          this.visible = true;
+          if (typeof document === "undefined") {
+              throw new Error("MissileImpactOverlay requires a browser environment");
+          }
+          this.canvas = document.createElement("canvas");
+          this.canvas.style.position = "fixed";
+          this.canvas.style.left = "0";
+          this.canvas.style.top = "0";
+          this.canvas.style.width = "100%";
+          this.canvas.style.height = "100%";
+          this.canvas.style.pointerEvents = "none";
+          this.canvas.style.zIndex = "28";
+          this.canvas.style.display = "none";
+          this.context = this.canvas.getContext("2d");
+      }
+      setTrajectories(trajectories) {
+          this.trajectories = trajectories.map((entry) => ({ ...entry }));
+          for (const trajectory of this.trajectories) {
+              const teamKey = this.normalizeTeamKey(trajectory.ownerTeam);
+              if (!teamKey || this.teamColors.has(teamKey)) {
+                  continue;
+              }
+              this.teamColors.set(teamKey, this.normalizeColor(trajectory.color));
+          }
+      }
+      enable() {
+          if (typeof document === "undefined" || typeof window === "undefined") {
+              return;
+          }
+          if (this.active) {
+              return;
+          }
+          this.active = true;
+          this.ensureAttached();
+          this.canvas.style.display = this.visible ? "block" : "none";
+          this.updateCanvasSize();
+          this.render();
+          this.scheduleRender();
+      }
+      setVisible(visible) {
+          this.visible = visible;
+          if (!this.active) {
+              return;
+          }
+          this.canvas.style.display = this.visible ? "block" : "none";
+      }
+      disable() {
+          if (!this.active) {
+              return;
+          }
+          this.active = false;
+          this.canvas.style.display = "none";
+          this.cancelRender();
+          this.clearCanvas();
+      }
+      dispose() {
+          this.disable();
+          if (this.attached) {
+              this.canvas.remove();
+              this.attached = false;
+              this.hostElement = null;
+          }
+      }
+      scheduleRender() {
+          if (typeof window === "undefined") {
+              return;
+          }
+          if (this.rafHandle !== null) {
+              return;
+          }
+          const loop = () => {
+              this.rafHandle = window.requestAnimationFrame(loop);
+              this.render();
+          };
+          this.rafHandle = window.requestAnimationFrame(loop);
+      }
+      cancelRender() {
+          if (typeof window === "undefined") {
+              return;
+          }
+          if (this.rafHandle !== null) {
+              window.cancelAnimationFrame(this.rafHandle);
+              this.rafHandle = null;
+          }
+      }
+      updateCanvasSize() {
+          if (!this.context || typeof window === "undefined") {
+              return;
+          }
+          this.ensureAttached();
+          const transform = this.options.resolveTransform?.();
+          const rect = transform?.boundingRect?.();
+          const width = rect?.width ?? window.innerWidth;
+          const height = rect?.height ?? window.innerHeight;
+          const left = rect?.left ?? 0;
+          const top = rect?.top ?? 0;
+          const ratio = window.devicePixelRatio || 1;
+          const pixelWidth = Math.round(width * ratio);
+          const pixelHeight = Math.round(height * ratio);
+          if (this.canvas.width !== pixelWidth ||
+              this.canvas.height !== pixelHeight) {
+              this.canvas.width = pixelWidth;
+              this.canvas.height = pixelHeight;
+          }
+          if (this.canvas.style.width !== `${width}px`) {
+              this.canvas.style.width = `${width}px`;
+          }
+          if (this.canvas.style.height !== `${height}px`) {
+              this.canvas.style.height = `${height}px`;
+          }
+          const host = this.hostElement;
+          let relativeLeft = left;
+          let relativeTop = top;
+          if (host && host !== document.body) {
+              const hostRect = host.getBoundingClientRect();
+              relativeLeft = left - hostRect.left;
+              relativeTop = top - hostRect.top;
+              if (this.canvas.style.position !== "absolute") {
+                  this.canvas.style.position = "absolute";
+              }
+              this.ensureContainerPositioned(host);
+          }
+          else {
+              if (this.canvas.style.position !== "fixed") {
+                  this.canvas.style.position = "fixed";
+              }
+          }
+          if (this.canvas.style.left !== `${relativeLeft}px`) {
+              this.canvas.style.left = `${relativeLeft}px`;
+          }
+          if (this.canvas.style.top !== `${relativeTop}px`) {
+              this.canvas.style.top = `${relativeTop}px`;
+          }
+          this.context.setTransform(ratio, 0, 0, ratio, -left * ratio, -top * ratio);
+          this.cssWidth = width;
+          this.cssHeight = height;
+          this.pixelRatio = ratio;
+          this.offsetLeft = left;
+          this.offsetTop = top;
+      }
+      clearCanvas() {
+          if (!this.context) {
+              return;
+          }
+          this.updateCanvasSize();
+          this.context.save();
+          this.context.setTransform(1, 0, 0, 1, 0, 0);
+          this.context.clearRect(0, 0, this.canvas.width, this.canvas.height);
+          this.context.restore();
+          this.maskSidebarRegion();
+      }
+      resolveHostElement() {
+          if (typeof document === "undefined") {
+              return null;
+          }
+          const transform = this.options.resolveTransform?.();
+          const candidateCanvas = transform?.canvas;
+          if (candidateCanvas instanceof HTMLCanvasElement) {
+              return candidateCanvas.parentElement ?? candidateCanvas;
+          }
+          const fallbackCanvas = document.querySelector("canvas");
+          if (fallbackCanvas instanceof HTMLCanvasElement) {
+              return fallbackCanvas.parentElement ?? fallbackCanvas;
+          }
+          return document.body;
+      }
+      ensureAttached() {
+          if (typeof document === "undefined") {
+              return;
+          }
+          let container = this.resolveHostElement();
+          if (!container) {
+              return;
+          }
+          if (container instanceof HTMLCanvasElement) {
+              container = container.parentElement ?? document.body;
+          }
+          if (!(container instanceof HTMLElement)) {
+              return;
+          }
+          if (this.canvas.parentElement !== container) {
+              this.canvas.remove();
+              container.appendChild(this.canvas);
+          }
+          this.hostElement = container;
+          this.attached = true;
+      }
+      ensureContainerPositioned(container) {
+          if (typeof window === "undefined") {
+              return;
+          }
+          if (container === document.body) {
+              return;
+          }
+          const position = window.getComputedStyle(container).position;
+          if (position === "static") {
+              container.style.position = "relative";
+          }
+      }
+      render() {
+          const ctx = this.context;
+          if (!ctx) {
+              return;
+          }
+          this.updateCanvasSize();
+          ctx.save();
+          ctx.setTransform(1, 0, 0, 1, 0, 0);
+          ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+          ctx.restore();
+          this.maskSidebarRegion();
+          if (!this.active || this.trajectories.length === 0) {
+              return;
+          }
+          const transform = this.options.resolveTransform();
+          if (!transform) {
+              return;
+          }
+          const nowMs = performance.now();
+          const renderedTargets = new Set();
+          for (const trajectory of this.trajectories) {
+              if (trajectory.isLocalOwner || trajectory.isLocalTeam) {
+                  // OpenFront already shows local/team impact rings.
+                  continue;
+              }
+              const impact = this.resolveImpactRadii(trajectory.unitType);
+              if (!impact) {
+                  continue;
+              }
+              const teamKey = this.normalizeTeamKey(trajectory.ownerTeam) ??
+                  (trajectory.ownerId ? `player:${trajectory.ownerId}` : "unknown");
+              const dedupeKey = `${teamKey}:${impact.inner}:${impact.outer}:${trajectory.target.x}:${trajectory.target.y}`;
+              if (renderedTargets.has(dedupeKey)) {
+                  continue;
+              }
+              renderedTargets.add(dedupeKey);
+              const target = this.toCellCenter(trajectory.target);
+              const color = this.resolveTeamColor(teamKey, trajectory.color);
+              this.drawImpactRing(ctx, transform, target, impact, color, this.hashString(teamKey) % 360, nowMs);
+          }
+          this.maskSidebarRegion();
+      }
+      maskSidebarRegion() {
+          if (!this.context || typeof document === "undefined") {
+              return;
+          }
+          const sidebar = document.getElementById(SIDEBAR_ID);
+          if (!sidebar) {
+              return;
+          }
+          const rect = sidebar.getBoundingClientRect();
+          if (rect.width <= 0 || rect.height <= 0) {
+              return;
+          }
+          const ratio = this.pixelRatio || 1;
+          const offsetLeft = this.offsetLeft || 0;
+          const offsetTop = this.offsetTop || 0;
+          const x = (rect.left - offsetLeft) * ratio;
+          const y = (rect.top - offsetTop) * ratio;
+          const width = rect.width * ratio;
+          const height = rect.height * ratio;
+          if (!Number.isFinite(x) || !Number.isFinite(y)) {
+              return;
+          }
+          this.context.save();
+          this.context.setTransform(1, 0, 0, 1, 0, 0);
+          this.context.clearRect(x, y, width, height);
+          this.context.restore();
+      }
+      resolveImpactRadii(unitType) {
+          const normalized = this.normalizeUnitType(unitType);
+          if (!normalized) {
+              return null;
+          }
+          switch (normalized) {
+              case "atombomb":
+                  return { inner: 12, outer: 30 };
+              case "hydrogenbomb":
+                  return { inner: 80, outer: 100 };
+              case "mirvwarhead":
+              case "mirv":
+                  return { inner: 12, outer: 18 };
+              default:
+                  return null;
+          }
+      }
+      drawImpactRing(ctx, transform, targetWorld, radii, color, dashSeed, nowMs) {
+          const center = transform.worldToScreenCoordinates(targetWorld);
+          if (!this.isFinitePoint(center)) {
+              return;
+          }
+          const scale = Math.max(transform.scale, 0.01);
+          const innerRadius = Math.max(3, radii.inner * scale);
+          const outerRadius = Math.max(innerRadius + 2, radii.outer * scale);
+          const circumference = 2 * Math.PI * outerRadius;
+          const numDash = Math.max(12, Math.floor(outerRadius / 6));
+          const dashSize = circumference / (numDash * 2);
+          const dashPeriod = dashSize * 2;
+          const animatedOffset = ((nowMs / 1000) * 20 * scale) % dashPeriod;
+          const seededOffset = ((dashSeed % 360) / 360) * dashPeriod;
+          ctx.save();
+          ctx.beginPath();
+          ctx.lineWidth = 1;
+          ctx.strokeStyle = color;
+          ctx.fillStyle = color;
+          ctx.globalAlpha = 0.9;
+          ctx.arc(center.x, center.y, innerRadius, 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.globalAlpha = 0.24;
+          ctx.fill();
+          ctx.beginPath();
+          ctx.lineWidth = Math.max(2, scale);
+          ctx.strokeStyle = color;
+          ctx.globalAlpha = 0.85;
+          ctx.setLineDash([dashSize, dashSize]);
+          ctx.lineDashOffset = seededOffset + animatedOffset;
+          ctx.arc(center.x, center.y, outerRadius, 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.restore();
+      }
+      normalizeUnitType(unitType) {
+          if (typeof unitType !== "string") {
+              return null;
+          }
+          const normalized = unitType.replace(/\s+/g, "").toLowerCase();
+          return normalized.length > 0 ? normalized : null;
+      }
+      normalizeTeamKey(teamId) {
+          if (typeof teamId !== "string") {
+              return null;
+          }
+          const normalized = teamId.trim().toLowerCase();
+          return normalized.length > 0 ? normalized : null;
+      }
+      resolveTeamColor(teamKey, fallbackColor) {
+          const known = this.teamColors.get(teamKey);
+          if (known) {
+              return known;
+          }
+          const normalizedFallback = this.normalizeColor(fallbackColor);
+          this.teamColors.set(teamKey, normalizedFallback);
+          return normalizedFallback;
+      }
+      hashString(input) {
+          let hash = 0;
+          for (let i = 0; i < input.length; i += 1) {
+              hash = (hash * 31 + input.charCodeAt(i)) >>> 0;
+          }
+          return hash;
+      }
+      isFinitePoint(point) {
+          return !!point && Number.isFinite(point.x) && Number.isFinite(point.y);
+      }
+      toCellCenter(point) {
+          return { x: point.x + 0.5, y: point.y + 0.5 };
       }
       normalizeColor(color) {
           if (color && color.trim()) {
@@ -10490,6 +10870,8 @@
   ]);
   const MISSILE_TRAJECTORY_OVERLAY_ID = "missile-trajectories";
   const HISTORICAL_MISSILE_OVERLAY_ID = "historical-missiles";
+  const MISSILE_IMPACT_OVERLAY_ID = "missile-impact";
+  const LEGACY_MISSILE_IMPACT_OVERLAY_ID = "missile-impact-telegraphs";
   const DONATION_DEDUP_TICK_WINDOW = 5;
   const WEB_SOCKET_DONATION_PENDING_MAX = 300;
   const WEB_SOCKET_DONATION_PENDING_TTL_MS = 30000;
@@ -10758,6 +11140,12 @@
                   id: HISTORICAL_MISSILE_OVERLAY_ID,
                   label: "Active missile trajectories",
                   description: "Shows the live flight paths for missiles currently in the air, colored by their owners.",
+                  enabled: false,
+              },
+              {
+                  id: MISSILE_IMPACT_OVERLAY_ID,
+                  label: "Missile impact",
+                  description: "Shows rotating impact circles for active missiles, colored per team.",
                   enabled: false,
               },
               {
@@ -11049,11 +11437,24 @@
               return;
           }
           for (const overlay of this.sidebarOverlays) {
-              const enabled = overlays[overlay.id];
+              const enabled = this.resolvePersistedOverlayEnabled(overlays, overlay.id);
               if (typeof enabled === "boolean") {
                   this.setOverlayEnabled(overlay.id, enabled);
               }
           }
+      }
+      resolvePersistedOverlayEnabled(overlays, overlayId) {
+          const currentValue = overlays[overlayId];
+          if (typeof currentValue === "boolean") {
+              return currentValue;
+          }
+          if (overlayId === MISSILE_IMPACT_OVERLAY_ID) {
+              const legacyValue = overlays[LEGACY_MISSILE_IMPACT_OVERLAY_ID];
+              if (typeof legacyValue === "boolean") {
+                  return legacyValue;
+              }
+          }
+          return undefined;
       }
       saveSidebarState() {
           const overlays = {};
@@ -11085,6 +11486,14 @@
                       resolveTransform: () => this.resolveTransformHandler(),
                   });
           return this.historicalMissileOverlay;
+      }
+      ensureMissileImpactOverlay() {
+          this.missileImpactOverlay =
+              this.missileImpactOverlay ??
+                  new MissileImpactOverlay({
+                      resolveTransform: () => this.resolveTransformHandler(),
+                  });
+          return this.missileImpactOverlay;
       }
       ensureTroopDonationOverlay() {
           this.troopDonationOverlay =
@@ -11197,6 +11606,22 @@
               return [];
           }
           const mirvLaunchOrigins = this.collectMissileSiloOrigins();
+          const localPlayer = this.resolveLocalPlayer();
+          const localPlayerId = localPlayer
+              ? this.safePlayerId(localPlayer)
+              : undefined;
+          const localTeam = (() => {
+              if (!localPlayer) {
+                  return null;
+              }
+              try {
+                  const team = localPlayer.team?.();
+                  return team ?? null;
+              }
+              catch {
+                  return null;
+              }
+          })();
           let units;
           try {
               units = this.game.units("Atom Bomb", "Hydrogen Bomb", "MIRV", "MIRV Warhead");
@@ -11215,6 +11640,18 @@
                   console.warn("Failed to resolve missile owner", error);
               }
               const ownerId = owner ? this.safePlayerId(owner) : undefined;
+              let ownerTeam;
+              if (owner) {
+                  try {
+                      const team = owner.team?.();
+                      if (team) {
+                          ownerTeam = team;
+                      }
+                  }
+                  catch (error) {
+                      console.warn("Failed to resolve missile owner team", error);
+                  }
+              }
               let unitType = "Missile";
               try {
                   const resolved = unit.type();
@@ -11333,6 +11770,9 @@
                   split: isMirvWarhead ? null : undefined,
                   color: this.resolvePlayerColor(owner),
                   ownerId,
+                  ownerTeam,
+                  isLocalOwner: !!ownerId && !!localPlayerId && ownerId === localPlayerId,
+                  isLocalTeam: !!localTeam && !!ownerTeam && ownerTeam === localTeam,
                   unitType,
               };
               flights.push(flight);
@@ -11470,10 +11910,18 @@
           return `missile-${normalizedType}-${target.x}-${target.y}-${ownerSegment}`;
       }
       syncHistoricalMissileOverlay() {
-          if (!this.historicalMissileOverlay) {
+          const historicalEnabled = this.isOverlayEnabled(HISTORICAL_MISSILE_OVERLAY_ID);
+          const impactEnabled = this.isOverlayEnabled(MISSILE_IMPACT_OVERLAY_ID);
+          if (!historicalEnabled && !impactEnabled) {
               return;
           }
-          this.historicalMissileOverlay.setTrajectories(this.collectHistoricalMissiles());
+          const flights = this.collectHistoricalMissiles();
+          if (historicalEnabled) {
+              this.historicalMissileOverlay?.setTrajectories(flights);
+          }
+          if (impactEnabled) {
+              this.missileImpactOverlay?.setTrajectories(flights);
+          }
       }
       syncDonationOverlay(overlay, players) {
           if (!overlay) {
@@ -12764,6 +13212,7 @@
           const visible = !this.overlaysTemporarilyHidden;
           this.missileOverlay?.setVisible(visible);
           this.historicalMissileOverlay?.setVisible(visible);
+          this.missileImpactOverlay?.setVisible(visible);
           this.troopDonationOverlay?.setVisible(visible);
           this.goldDonationOverlay?.setVisible(visible);
           this.tradeRouteOverlay?.setVisible(visible);
@@ -12789,6 +13238,17 @@
                   return;
               }
               const effect = this.ensureHistoricalMissileOverlay();
+              effect.setVisible(visible);
+              effect.setTrajectories(this.collectHistoricalMissiles());
+              effect.enable();
+              return;
+          }
+          if (overlayId === MISSILE_IMPACT_OVERLAY_ID) {
+              if (!shouldEnable) {
+                  this.missileImpactOverlay?.disable();
+                  return;
+              }
+              const effect = this.ensureMissileImpactOverlay();
               effect.setVisible(visible);
               effect.setTrajectories(this.collectHistoricalMissiles());
               effect.enable();
