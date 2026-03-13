@@ -14,6 +14,8 @@ import {
   MissileTrajectoryOverlay,
   TradeRouteOverlay,
   TradeRoutePortSummary,
+  TransportDestinationOverlay,
+  TransportDestinationSummary,
   TransformHandlerLike,
   TroopDonationOverlay,
   TroopDonationOverlayPlayerSnapshot,
@@ -75,6 +77,7 @@ const WEB_SOCKET_DONATION_PENDING_TTL_MS = 30_000;
 const TROOP_DONATION_OVERLAY_ID = "troop-donations";
 const GOLD_DONATION_OVERLAY_ID = "gold-donations";
 const TRADE_ROUTE_OVERLAY_ID = "trade-routes";
+const TRANSPORT_DESTINATION_OVERLAY_ID = "transport-destinations";
 const ATTACK_BORDER_OVERLAY_ID = "attack-borders";
 const ATTACK_BORDER_TROOP_COMPACT_THRESHOLD = 100_000;
 const ATTACK_BORDER_TROOP_COMPACT_FORMATTER = new Intl.NumberFormat("en-US", {
@@ -651,6 +654,7 @@ export class DataStore {
   private troopDonationOverlay?: TroopDonationOverlay;
   private goldDonationOverlay?: GoldDonationOverlay;
   private tradeRouteOverlay?: TradeRouteOverlay;
+  private transportDestinationOverlay?: TransportDestinationOverlay;
   private attackBorderOverlay?: AttackBorderOverlay;
   private attackBorderSyncInFlight = false;
   private attackBorderSyncQueued = false;
@@ -747,6 +751,13 @@ export class DataStore {
         label: "Trade ship routes",
         description:
           "Displays projected trade ship paths, distances, and base gold when placing a new port.",
+        enabled: false,
+      },
+      {
+        id: TRANSPORT_DESTINATION_OVERLAY_ID,
+        label: "Transport destinations",
+        description:
+          "Highlights destination tiles for transport ships currently moving across the map.",
         enabled: false,
       },
       {
@@ -1189,6 +1200,15 @@ export class DataStore {
         resolveLocalPlayerSmallId: () => this.resolveLocalPlayerSmallId(),
       });
     return this.tradeRouteOverlay;
+  }
+
+  private ensureTransportDestinationOverlay(): TransportDestinationOverlay {
+    this.transportDestinationOverlay =
+      this.transportDestinationOverlay ??
+      new TransportDestinationOverlay({
+        resolveTransform: () => this.resolveTransformHandler(),
+      });
+    return this.transportDestinationOverlay;
   }
 
   private ensureAttackBorderOverlay(): AttackBorderOverlay {
@@ -1766,6 +1786,127 @@ export class DataStore {
     const localSmallId = this.resolveLocalPlayerSmallId();
     this.tradeRouteOverlay.setLocalPlayerSmallId(localSmallId);
     this.tradeRouteOverlay.setPortSummaries(ports);
+  }
+
+  private collectTransportDestinations(
+    ships: readonly ShipRecord[],
+    players: readonly PlayerRecord[],
+  ): TransportDestinationSummary[] {
+    const ownerColors = new Map<string, string>();
+    const ownerNames = new Map<string, string>();
+    for (const player of players) {
+      if (player.name.trim().length > 0) {
+        ownerNames.set(player.id, player.name.trim());
+      }
+      if (typeof player.color === "string" && player.color.trim().length > 0) {
+        ownerColors.set(player.id, player.color.trim());
+      }
+    }
+
+    interface TransportDestinationAggregate
+      extends TransportDestinationSummary {
+      ownerNames: Set<string>;
+    }
+
+    const byDestination = new Map<string, TransportDestinationAggregate>();
+
+    for (const ship of ships) {
+      if (
+        ship.type !== "Transport" ||
+        ship.reachedTarget ||
+        !ship.destination
+      ) {
+        continue;
+      }
+
+      const current = ship.current;
+      if (
+        current &&
+        ((current.ref !== undefined &&
+          ship.destination.ref !== undefined &&
+          current.ref === ship.destination.ref) ||
+          (current.x === ship.destination.x &&
+            current.y === ship.destination.y))
+      ) {
+        continue;
+      }
+
+      const key =
+        ship.destination.ref !== undefined
+          ? `ref:${ship.destination.ref}`
+          : `xy:${ship.destination.x},${ship.destination.y}`;
+      const existing = byDestination.get(key);
+      const ownerColor = ownerColors.get(ship.ownerId);
+      const ownerName =
+        ownerNames.get(ship.ownerId) ??
+        (ship.ownerName.trim().length > 0 ? ship.ownerName.trim() : null);
+
+      if (existing) {
+        existing.count += 1;
+        if (ownerName) {
+          existing.ownerNames.add(ownerName);
+        }
+        if (existing.ownerId !== ship.ownerId) {
+          existing.ownerId = undefined;
+          existing.color = undefined;
+        } else if (!existing.color && ownerColor) {
+          existing.color = ownerColor;
+        }
+        continue;
+      }
+
+      byDestination.set(key, {
+        x: ship.destination.x,
+        y: ship.destination.y,
+        count: 1,
+        ownerId: ship.ownerId,
+        color: ownerColor,
+        ownerNames: new Set(ownerName ? [ownerName] : []),
+      });
+    }
+
+    const summaries: TransportDestinationSummary[] = [];
+    for (const aggregate of byDestination.values()) {
+      const uniqueOwnerNames = Array.from(aggregate.ownerNames.values()).sort(
+        (a, b) => a.localeCompare(b),
+      );
+      summaries.push({
+        x: aggregate.x,
+        y: aggregate.y,
+        count: aggregate.count,
+        ownerId: aggregate.ownerId,
+        color: aggregate.color,
+        label: this.formatTransportIncomingLabel(uniqueOwnerNames),
+      });
+    }
+    return summaries.sort((a, b) => b.count - a.count);
+  }
+
+  private formatTransportIncomingLabel(ownerNames: readonly string[]): string {
+    if (ownerNames.length === 0) {
+      return "Incoming";
+    }
+    if (ownerNames.length === 1) {
+      return ownerNames[0];
+    }
+    if (ownerNames.length === 2) {
+      return `${ownerNames[0]} + ${ownerNames[1]}`;
+    }
+    const preview = ownerNames.slice(0, 2).join(", ");
+    return `${preview} +${ownerNames.length - 2}`;
+  }
+
+  private syncTransportDestinationOverlay(
+    ships: readonly ShipRecord[] = this.snapshot.ships,
+    players: readonly PlayerRecord[] = this.snapshot.players,
+  ): void {
+    if (!this.transportDestinationOverlay) {
+      return;
+    }
+
+    this.transportDestinationOverlay.setDestinations(
+      this.collectTransportDestinations(ships, players),
+    );
   }
 
   private syncAttackBorderOverlay(players?: PlayerViewLike[]): void {
@@ -3247,6 +3388,7 @@ export class DataStore {
     this.troopDonationOverlay?.setVisible(visible);
     this.goldDonationOverlay?.setVisible(visible);
     this.tradeRouteOverlay?.setVisible(visible);
+    this.transportDestinationOverlay?.setVisible(visible);
     this.attackBorderOverlay?.setVisible(visible);
   }
 
@@ -3322,6 +3464,18 @@ export class DataStore {
       const effect = this.ensureTradeRouteOverlay();
       effect.setVisible(visible);
       this.syncTradeRouteOverlay();
+      effect.enable();
+      return;
+    }
+
+    if (overlayId === TRANSPORT_DESTINATION_OVERLAY_ID) {
+      if (!shouldEnable) {
+        this.transportDestinationOverlay?.disable();
+        return;
+      }
+      const effect = this.ensureTransportDestinationOverlay();
+      effect.setVisible(visible);
+      this.syncTransportDestinationOverlay();
       effect.enable();
       return;
     }
@@ -4532,6 +4686,7 @@ export class DataStore {
       this.syncTroopDonationOverlay(players);
       this.syncGoldDonationOverlay(players);
       this.syncTradeRouteOverlay(players, recordLookup);
+      this.syncTransportDestinationOverlay(ships, records);
       this.syncAttackBorderOverlay(players);
       this.notify();
     } catch (error) {
@@ -4543,6 +4698,7 @@ export class DataStore {
       this.troopDonationOverlay?.clear();
       this.goldDonationOverlay?.clear();
       this.tradeRouteOverlay?.clear();
+      this.transportDestinationOverlay?.clear();
       this.attackBorderOverlay?.clear();
       if (this.refreshHandle !== undefined) {
         window.clearInterval(this.refreshHandle);

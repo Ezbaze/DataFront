@@ -2,7 +2,7 @@
 // ==UserScript==
 // @name			DataFront
 // @namespace		https://openfront.io/
-// @version			0.1.5
+// @version			0.1.6
 // @description		Adds a resizable, splittable strategic sidebar for OpenFront players, clans, and teams.
 // @author			ezbaze
 // @match			https://*.openfront.io/*
@@ -8889,6 +8889,501 @@
           return "rgb(56, 189, 248)";
       }
   }
+  class TransportDestinationOverlay {
+      constructor(options) {
+          this.options = options;
+          this.rafHandle = null;
+          this.destinations = [];
+          this.attached = false;
+          this.active = false;
+          this.hostElement = null;
+          this.cssWidth = 0;
+          this.cssHeight = 0;
+          this.pixelRatio = 1;
+          this.offsetLeft = 0;
+          this.offsetTop = 0;
+          this.visible = true;
+          if (typeof document === "undefined") {
+              throw new Error("TransportDestinationOverlay requires a browser environment");
+          }
+          this.canvas = document.createElement("canvas");
+          this.canvas.style.position = "fixed";
+          this.canvas.style.left = "0";
+          this.canvas.style.top = "0";
+          this.canvas.style.width = "100%";
+          this.canvas.style.height = "100%";
+          this.canvas.style.pointerEvents = "none";
+          this.canvas.style.zIndex = "29";
+          this.canvas.style.display = "none";
+          this.context = this.canvas.getContext("2d");
+          this.colorContext = document.createElement("canvas").getContext("2d");
+      }
+      setDestinations(destinations) {
+          this.destinations = destinations
+              .filter((entry) => Number.isFinite(entry.x) &&
+              Number.isFinite(entry.y) &&
+              Number.isFinite(entry.count) &&
+              entry.count > 0)
+              .map((entry) => ({
+              ...entry,
+              count: Math.max(1, Math.floor(entry.count)),
+          }));
+      }
+      clear() {
+          this.destinations = [];
+      }
+      enable() {
+          if (typeof document === "undefined" || typeof window === "undefined") {
+              return;
+          }
+          if (this.active) {
+              return;
+          }
+          this.active = true;
+          this.ensureAttached();
+          this.canvas.style.display = this.visible ? "block" : "none";
+          this.updateCanvasSize();
+          this.render();
+          this.scheduleRender();
+      }
+      setVisible(visible) {
+          this.visible = visible;
+          if (!this.active) {
+              return;
+          }
+          this.canvas.style.display = this.visible ? "block" : "none";
+      }
+      disable() {
+          if (!this.active) {
+              return;
+          }
+          this.active = false;
+          this.canvas.style.display = "none";
+          this.cancelRender();
+          this.clearCanvas();
+      }
+      dispose() {
+          this.disable();
+          if (this.attached) {
+              this.canvas.remove();
+              this.attached = false;
+              this.hostElement = null;
+          }
+      }
+      scheduleRender() {
+          if (typeof window === "undefined") {
+              return;
+          }
+          if (this.rafHandle !== null) {
+              return;
+          }
+          const loop = () => {
+              this.rafHandle = window.requestAnimationFrame(loop);
+              this.render();
+          };
+          this.rafHandle = window.requestAnimationFrame(loop);
+      }
+      cancelRender() {
+          if (typeof window === "undefined") {
+              return;
+          }
+          if (this.rafHandle !== null) {
+              window.cancelAnimationFrame(this.rafHandle);
+              this.rafHandle = null;
+          }
+      }
+      updateCanvasSize() {
+          if (!this.context || typeof window === "undefined") {
+              return;
+          }
+          this.ensureAttached();
+          const transform = this.options.resolveTransform?.();
+          const rect = transform?.boundingRect?.();
+          const width = rect?.width ?? window.innerWidth;
+          const height = rect?.height ?? window.innerHeight;
+          const left = rect?.left ?? 0;
+          const top = rect?.top ?? 0;
+          const ratio = window.devicePixelRatio || 1;
+          const pixelWidth = Math.round(width * ratio);
+          const pixelHeight = Math.round(height * ratio);
+          if (this.canvas.width !== pixelWidth ||
+              this.canvas.height !== pixelHeight) {
+              this.canvas.width = pixelWidth;
+              this.canvas.height = pixelHeight;
+          }
+          if (this.canvas.style.width !== `${width}px`) {
+              this.canvas.style.width = `${width}px`;
+          }
+          if (this.canvas.style.height !== `${height}px`) {
+              this.canvas.style.height = `${height}px`;
+          }
+          const host = this.hostElement;
+          let relativeLeft = left;
+          let relativeTop = top;
+          if (host && host !== document.body) {
+              const hostRect = host.getBoundingClientRect();
+              relativeLeft = left - hostRect.left;
+              relativeTop = top - hostRect.top;
+              if (this.canvas.style.position !== "absolute") {
+                  this.canvas.style.position = "absolute";
+              }
+              this.ensureContainerPositioned(host);
+          }
+          else if (this.canvas.style.position !== "fixed") {
+              this.canvas.style.position = "fixed";
+          }
+          if (this.canvas.style.left !== `${relativeLeft}px`) {
+              this.canvas.style.left = `${relativeLeft}px`;
+          }
+          if (this.canvas.style.top !== `${relativeTop}px`) {
+              this.canvas.style.top = `${relativeTop}px`;
+          }
+          this.context.setTransform(ratio, 0, 0, ratio, -left * ratio, -top * ratio);
+          this.cssWidth = width;
+          this.cssHeight = height;
+          this.pixelRatio = ratio;
+          this.offsetLeft = left;
+          this.offsetTop = top;
+      }
+      clearCanvas() {
+          if (!this.context) {
+              return;
+          }
+          this.updateCanvasSize();
+          this.context.save();
+          this.context.setTransform(1, 0, 0, 1, 0, 0);
+          this.context.clearRect(0, 0, this.canvas.width, this.canvas.height);
+          this.context.restore();
+          this.maskSidebarRegion();
+      }
+      resolveHostElement() {
+          if (typeof document === "undefined") {
+              return null;
+          }
+          const transform = this.options.resolveTransform?.();
+          const candidateCanvas = transform?.canvas;
+          if (candidateCanvas instanceof HTMLCanvasElement) {
+              return candidateCanvas.parentElement ?? candidateCanvas;
+          }
+          const fallbackCanvas = document.querySelector("canvas");
+          if (fallbackCanvas instanceof HTMLCanvasElement) {
+              return fallbackCanvas.parentElement ?? fallbackCanvas;
+          }
+          return document.body;
+      }
+      ensureAttached() {
+          if (typeof document === "undefined") {
+              return;
+          }
+          let container = this.resolveHostElement();
+          if (!container) {
+              return;
+          }
+          if (container instanceof HTMLCanvasElement) {
+              container = container.parentElement ?? document.body;
+          }
+          if (!(container instanceof HTMLElement)) {
+              return;
+          }
+          if (this.canvas.parentElement !== container) {
+              this.canvas.remove();
+              container.appendChild(this.canvas);
+          }
+          this.hostElement = container;
+          this.attached = true;
+      }
+      ensureContainerPositioned(container) {
+          if (typeof window === "undefined") {
+              return;
+          }
+          if (container === document.body) {
+              return;
+          }
+          const position = window.getComputedStyle(container).position;
+          if (position === "static") {
+              container.style.position = "relative";
+          }
+      }
+      render() {
+          const ctx = this.context;
+          if (!ctx) {
+              return;
+          }
+          this.updateCanvasSize();
+          ctx.save();
+          ctx.setTransform(1, 0, 0, 1, 0, 0);
+          ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+          ctx.restore();
+          this.maskSidebarRegion();
+          if (!this.active || this.destinations.length === 0) {
+              return;
+          }
+          const transform = this.options.resolveTransform?.();
+          if (!transform) {
+              return;
+          }
+          const nowMs = typeof performance !== "undefined" &&
+              typeof performance.now === "function"
+              ? performance.now()
+              : Date.now();
+          for (let index = 0; index < this.destinations.length; index += 1) {
+              const destination = this.destinations[index];
+              const center = transform.worldToScreenCoordinates(this.toCellCenter(destination));
+              if (!this.isFinitePoint(center)) {
+                  continue;
+              }
+              const radius = this.resolveMarkerRadius(destination.count);
+              const markerVisible = this.isScreenPointInsideViewport(center, radius);
+              const labelVisible = this.isScreenPointInsideViewport(center);
+              if (!markerVisible && !labelVisible) {
+                  continue;
+              }
+              const pulse = 0.65 + 0.35 * Math.sin(nowMs / 600 + index * 0.9);
+              const color = this.normalizeColor(destination.color);
+              ctx.save();
+              ctx.strokeStyle = color;
+              ctx.fillStyle = color;
+              if (markerVisible) {
+                  ctx.globalAlpha = 0.22 + pulse * 0.16;
+                  ctx.beginPath();
+                  ctx.arc(center.x, center.y, radius, 0, Math.PI * 2);
+                  ctx.fill();
+                  ctx.globalAlpha = 0.92;
+                  ctx.lineWidth = Math.max(2, Math.min(4, radius / 3));
+                  ctx.beginPath();
+                  ctx.arc(center.x, center.y, radius, 0, Math.PI * 2);
+                  ctx.stroke();
+                  ctx.strokeStyle = "rgba(15, 23, 42, 0.9)";
+                  ctx.globalAlpha = 0.85;
+                  ctx.lineWidth = 1.25;
+                  ctx.beginPath();
+                  ctx.arc(center.x, center.y, Math.max(2, radius * 0.45), 0, Math.PI * 2);
+                  ctx.stroke();
+                  if (destination.count > 1) {
+                      const fontSize = Math.max(10, Math.min(14, radius + 3));
+                      ctx.font = `600 ${fontSize}px "Segoe UI", system-ui, sans-serif`;
+                      ctx.textAlign = "center";
+                      ctx.textBaseline = "middle";
+                      ctx.lineWidth = 3;
+                      ctx.globalAlpha = 0.95;
+                      ctx.strokeStyle = "rgba(15, 23, 42, 0.95)";
+                      ctx.strokeText(String(destination.count), center.x, center.y);
+                      ctx.fillStyle = "#f8fafc";
+                      ctx.fillText(String(destination.count), center.x, center.y);
+                  }
+              }
+              if (labelVisible) {
+                  this.drawLabel(ctx, center, radius, destination.label, color, transform.scale);
+              }
+              ctx.restore();
+          }
+          this.maskSidebarRegion();
+      }
+      maskSidebarRegion() {
+          if (!this.context || typeof document === "undefined") {
+              return;
+          }
+          const sidebar = document.getElementById(SIDEBAR_ID);
+          if (!sidebar) {
+              return;
+          }
+          const rect = sidebar.getBoundingClientRect();
+          if (rect.width <= 0 || rect.height <= 0) {
+              return;
+          }
+          const ratio = this.pixelRatio || 1;
+          const offsetLeft = this.offsetLeft || 0;
+          const offsetTop = this.offsetTop || 0;
+          const x = (rect.left - offsetLeft) * ratio;
+          const y = (rect.top - offsetTop) * ratio;
+          const width = rect.width * ratio;
+          const height = rect.height * ratio;
+          if (!Number.isFinite(x) || !Number.isFinite(y)) {
+              return;
+          }
+          this.context.save();
+          this.context.setTransform(1, 0, 0, 1, 0, 0);
+          this.context.clearRect(x, y, width, height);
+          this.context.restore();
+      }
+      resolveMarkerRadius(count) {
+          const safeCount = Math.max(1, Math.floor(count));
+          return Math.min(18, 6 + Math.log2(safeCount) * 3);
+      }
+      drawLabel(ctx, center, radius, rawLabel, accentColor, transformScale) {
+          const zoomScale = this.resolveLabelZoomScale(transformScale);
+          if (zoomScale <= 0.36) {
+              return;
+          }
+          const label = this.normalizeLabel(rawLabel, this.resolveLabelMaxChars(zoomScale));
+          if (!label) {
+              return;
+          }
+          const fontSize = Math.max(8, Math.min(12, Math.round(11 * zoomScale)));
+          const horizontalPadding = Math.max(4, Math.min(8, Math.round(6 * zoomScale)));
+          const boxHeight = Math.max(13, Math.min(22, Math.round(18 * zoomScale)));
+          const offset = Math.max(8, Math.round((radius + 12) * zoomScale));
+          const centerY = Math.max(boxHeight / 2 + 2, center.y - offset);
+          ctx.font = `600 ${fontSize}px "Segoe UI", system-ui, sans-serif`;
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          const textWidth = ctx.measureText(label).width;
+          const boxWidth = Math.max(28, Math.ceil(textWidth + horizontalPadding * 2));
+          const boxX = center.x - boxWidth / 2;
+          const boxY = centerY - boxHeight / 2;
+          const cornerRadius = Math.max(3, Math.min(6, Math.round(5 * zoomScale)));
+          this.roundedRectPath(ctx, boxX, boxY, boxWidth, boxHeight, cornerRadius);
+          ctx.fillStyle = "rgba(15, 23, 42, 0.85)";
+          ctx.shadowColor = "rgba(2, 6, 23, 0.35)";
+          ctx.shadowBlur = Math.max(4, 8 * zoomScale);
+          ctx.shadowOffsetX = 0;
+          ctx.shadowOffsetY = Math.max(1, 3 * zoomScale);
+          ctx.globalAlpha = 0.96;
+          ctx.fill();
+          ctx.shadowBlur = 0;
+          ctx.shadowOffsetX = 0;
+          ctx.shadowOffsetY = 0;
+          this.roundedRectPath(ctx, boxX, boxY, boxWidth, boxHeight, cornerRadius);
+          ctx.strokeStyle = this.mixLabelBorderColor(accentColor);
+          ctx.globalAlpha = 0.55;
+          ctx.lineWidth = Math.max(0.75, Math.min(1.1, 0.9 * zoomScale));
+          ctx.stroke();
+          ctx.fillStyle = "#e2e8f0";
+          ctx.globalAlpha = 0.98;
+          ctx.fillText(label, center.x, centerY + 0.5);
+      }
+      roundedRectPath(ctx, x, y, width, height, radius) {
+          const safeRadius = Math.max(0, Math.min(radius, width / 2, height / 2));
+          ctx.beginPath();
+          ctx.moveTo(x + safeRadius, y);
+          ctx.lineTo(x + width - safeRadius, y);
+          ctx.quadraticCurveTo(x + width, y, x + width, y + safeRadius);
+          ctx.lineTo(x + width, y + height - safeRadius);
+          ctx.quadraticCurveTo(x + width, y + height, x + width - safeRadius, y + height);
+          ctx.lineTo(x + safeRadius, y + height);
+          ctx.quadraticCurveTo(x, y + height, x, y + height - safeRadius);
+          ctx.lineTo(x, y + safeRadius);
+          ctx.quadraticCurveTo(x, y, x + safeRadius, y);
+          ctx.closePath();
+      }
+      normalizeLabel(rawLabel, maxChars) {
+          if (typeof rawLabel !== "string") {
+              return null;
+          }
+          const trimmed = rawLabel.trim();
+          if (!trimmed) {
+              return null;
+          }
+          if (trimmed.length <= maxChars) {
+              return trimmed;
+          }
+          return `${trimmed.slice(0, maxChars - 1)}…`;
+      }
+      resolveLabelZoomScale(transformScale) {
+          const numericScale = Number.isFinite(transformScale) ? transformScale : 1;
+          return Math.max(0.35, Math.min(1, numericScale / 1.8));
+      }
+      resolveLabelMaxChars(zoomScale) {
+          const clamped = Math.max(0.35, Math.min(1, zoomScale));
+          return Math.max(10, Math.min(34, Math.round(10 + clamped * 24)));
+      }
+      mixLabelBorderColor(accentColor) {
+          const parsed = this.parseColor(accentColor);
+          if (!parsed) {
+              return "rgba(148, 163, 184, 0.75)";
+          }
+          const blendWith = { r: 148, g: 163, b: 184 };
+          const weight = 0.5;
+          const r = Math.round(parsed.r * weight + blendWith.r * (1 - weight));
+          const g = Math.round(parsed.g * weight + blendWith.g * (1 - weight));
+          const b = Math.round(parsed.b * weight + blendWith.b * (1 - weight));
+          return `rgba(${r}, ${g}, ${b}, 0.75)`;
+      }
+      parseColor(color) {
+          if (!color || typeof color !== "string") {
+              return null;
+          }
+          const context = this.colorContext;
+          if (!context) {
+              return null;
+          }
+          try {
+              context.fillStyle = "#000";
+              context.fillStyle = color;
+              const computed = context.fillStyle;
+              if (typeof computed !== "string" || !computed) {
+                  return null;
+              }
+              if (computed.startsWith("#")) {
+                  const hex = computed.slice(1);
+                  if (hex.length === 6) {
+                      const r = parseInt(hex.slice(0, 2), 16);
+                      const g = parseInt(hex.slice(2, 4), 16);
+                      const b = parseInt(hex.slice(4, 6), 16);
+                      return { r, g, b, a: 1 };
+                  }
+              }
+              const match = /rgba?\(([^)]+)\)/.exec(computed);
+              if (!match) {
+                  return null;
+              }
+              const parts = match[1]
+                  .split(",")
+                  .map((segment) => segment.trim())
+                  .filter((segment) => segment.length > 0);
+              if (parts.length < 3) {
+                  return null;
+              }
+              const [rRaw, gRaw, bRaw, aRaw] = parts;
+              const r = this.parseChannel(rRaw);
+              const g = this.parseChannel(gRaw);
+              const b = this.parseChannel(bRaw);
+              const a = aRaw !== undefined ? Number(aRaw) : 1;
+              if ([r, g, b].some((value) => Number.isNaN(value))) {
+                  return null;
+              }
+              return { r, g, b, a: Number.isFinite(a) ? a : 1 };
+          }
+          catch {
+              return null;
+          }
+      }
+      parseChannel(value) {
+          if (value.endsWith("%")) {
+              const percentage = Number(value.slice(0, -1));
+              if (!Number.isFinite(percentage)) {
+                  return NaN;
+              }
+              return Math.max(0, Math.min(255, Math.round((percentage / 100) * 255)));
+          }
+          const numeric = Number(value);
+          if (Number.isFinite(numeric)) {
+              return Math.max(0, Math.min(255, Math.round(numeric)));
+          }
+          return NaN;
+      }
+      isFinitePoint(point) {
+          return !!point && Number.isFinite(point.x) && Number.isFinite(point.y);
+      }
+      isScreenPointInsideViewport(point, padding = 0) {
+          if (this.cssWidth <= 0 || this.cssHeight <= 0) {
+              return false;
+          }
+          return (point.x >= this.offsetLeft - padding &&
+              point.x <= this.offsetLeft + this.cssWidth + padding &&
+              point.y >= this.offsetTop - padding &&
+              point.y <= this.offsetTop + this.cssHeight + padding);
+      }
+      toCellCenter(point) {
+          return { x: point.x + 0.5, y: point.y + 0.5 };
+      }
+      normalizeColor(color) {
+          if (typeof color === "string" && color.trim().length > 0) {
+              return color.trim();
+          }
+          return "rgb(56, 189, 248)";
+      }
+  }
   class MinPriorityQueue {
       constructor() {
           this.heap = [];
@@ -10878,6 +11373,7 @@
   const TROOP_DONATION_OVERLAY_ID = "troop-donations";
   const GOLD_DONATION_OVERLAY_ID = "gold-donations";
   const TRADE_ROUTE_OVERLAY_ID = "trade-routes";
+  const TRANSPORT_DESTINATION_OVERLAY_ID = "transport-destinations";
   const ATTACK_BORDER_OVERLAY_ID = "attack-borders";
   const ATTACK_BORDER_TROOP_COMPACT_THRESHOLD = 100000;
   const ATTACK_BORDER_TROOP_COMPACT_FORMATTER = new Intl.NumberFormat("en-US", {
@@ -11164,6 +11660,12 @@
                   id: TRADE_ROUTE_OVERLAY_ID,
                   label: "Trade ship routes",
                   description: "Displays projected trade ship paths, distances, and base gold when placing a new port.",
+                  enabled: false,
+              },
+              {
+                  id: TRANSPORT_DESTINATION_OVERLAY_ID,
+                  label: "Transport destinations",
+                  description: "Highlights destination tiles for transport ships currently moving across the map.",
                   enabled: false,
               },
               {
@@ -11521,6 +12023,14 @@
                       resolveLocalPlayerSmallId: () => this.resolveLocalPlayerSmallId(),
                   });
           return this.tradeRouteOverlay;
+      }
+      ensureTransportDestinationOverlay() {
+          this.transportDestinationOverlay =
+              this.transportDestinationOverlay ??
+                  new TransportDestinationOverlay({
+                      resolveTransform: () => this.resolveTransformHandler(),
+                  });
+          return this.transportDestinationOverlay;
       }
       ensureAttackBorderOverlay() {
           this.attackBorderOverlay =
@@ -12001,6 +12511,96 @@
           const localSmallId = this.resolveLocalPlayerSmallId();
           this.tradeRouteOverlay.setLocalPlayerSmallId(localSmallId);
           this.tradeRouteOverlay.setPortSummaries(ports);
+      }
+      collectTransportDestinations(ships, players) {
+          const ownerColors = new Map();
+          const ownerNames = new Map();
+          for (const player of players) {
+              if (player.name.trim().length > 0) {
+                  ownerNames.set(player.id, player.name.trim());
+              }
+              if (typeof player.color === "string" && player.color.trim().length > 0) {
+                  ownerColors.set(player.id, player.color.trim());
+              }
+          }
+          const byDestination = new Map();
+          for (const ship of ships) {
+              if (ship.type !== "Transport" ||
+                  ship.reachedTarget ||
+                  !ship.destination) {
+                  continue;
+              }
+              const current = ship.current;
+              if (current &&
+                  ((current.ref !== undefined &&
+                      ship.destination.ref !== undefined &&
+                      current.ref === ship.destination.ref) ||
+                      (current.x === ship.destination.x &&
+                          current.y === ship.destination.y))) {
+                  continue;
+              }
+              const key = ship.destination.ref !== undefined
+                  ? `ref:${ship.destination.ref}`
+                  : `xy:${ship.destination.x},${ship.destination.y}`;
+              const existing = byDestination.get(key);
+              const ownerColor = ownerColors.get(ship.ownerId);
+              const ownerName = ownerNames.get(ship.ownerId) ??
+                  (ship.ownerName.trim().length > 0 ? ship.ownerName.trim() : null);
+              if (existing) {
+                  existing.count += 1;
+                  if (ownerName) {
+                      existing.ownerNames.add(ownerName);
+                  }
+                  if (existing.ownerId !== ship.ownerId) {
+                      existing.ownerId = undefined;
+                      existing.color = undefined;
+                  }
+                  else if (!existing.color && ownerColor) {
+                      existing.color = ownerColor;
+                  }
+                  continue;
+              }
+              byDestination.set(key, {
+                  x: ship.destination.x,
+                  y: ship.destination.y,
+                  count: 1,
+                  ownerId: ship.ownerId,
+                  color: ownerColor,
+                  ownerNames: new Set(ownerName ? [ownerName] : []),
+              });
+          }
+          const summaries = [];
+          for (const aggregate of byDestination.values()) {
+              const uniqueOwnerNames = Array.from(aggregate.ownerNames.values()).sort((a, b) => a.localeCompare(b));
+              summaries.push({
+                  x: aggregate.x,
+                  y: aggregate.y,
+                  count: aggregate.count,
+                  ownerId: aggregate.ownerId,
+                  color: aggregate.color,
+                  label: this.formatTransportIncomingLabel(uniqueOwnerNames),
+              });
+          }
+          return summaries.sort((a, b) => b.count - a.count);
+      }
+      formatTransportIncomingLabel(ownerNames) {
+          if (ownerNames.length === 0) {
+              return "Incoming";
+          }
+          if (ownerNames.length === 1) {
+              return ownerNames[0];
+          }
+          if (ownerNames.length === 2) {
+              return `${ownerNames[0]} + ${ownerNames[1]}`;
+          }
+          const preview = ownerNames.slice(0, 2).join(", ");
+          return `${preview} +${ownerNames.length - 2}`;
+      }
+      syncTransportDestinationOverlay(ships = this.snapshot.ships, players = this.snapshot.players) {
+          if (!this.transportDestinationOverlay) {
+              return;
+          }
+          this.transportDestinationOverlay.setDestinations(this.collectTransportDestinations(ships, players));
       }
       syncAttackBorderOverlay(players) {
           if (!this.attackBorderOverlay || !this.attackBorderOverlay.isActive()) {
@@ -13216,6 +13816,7 @@
           this.troopDonationOverlay?.setVisible(visible);
           this.goldDonationOverlay?.setVisible(visible);
           this.tradeRouteOverlay?.setVisible(visible);
+          this.transportDestinationOverlay?.setVisible(visible);
           this.attackBorderOverlay?.setVisible(visible);
       }
       syncOverlayRuntime(overlayId) {
@@ -13284,6 +13885,17 @@
               const effect = this.ensureTradeRouteOverlay();
               effect.setVisible(visible);
               this.syncTradeRouteOverlay();
+              effect.enable();
+              return;
+          }
+          if (overlayId === TRANSPORT_DESTINATION_OVERLAY_ID) {
+              if (!shouldEnable) {
+                  this.transportDestinationOverlay?.disable();
+                  return;
+              }
+              const effect = this.ensureTransportDestinationOverlay();
+              effect.setVisible(visible);
+              this.syncTransportDestinationOverlay();
               effect.enable();
               return;
           }
@@ -14277,6 +14889,7 @@
               this.syncTroopDonationOverlay(players);
               this.syncGoldDonationOverlay(players);
               this.syncTradeRouteOverlay(players, recordLookup);
+              this.syncTransportDestinationOverlay(ships, records);
               this.syncAttackBorderOverlay(players);
               this.notify();
           }
@@ -14289,6 +14902,7 @@
               this.troopDonationOverlay?.clear();
               this.goldDonationOverlay?.clear();
               this.tradeRouteOverlay?.clear();
+              this.transportDestinationOverlay?.clear();
               this.attackBorderOverlay?.clear();
               if (this.refreshHandle !== undefined) {
                   window.clearInterval(this.refreshHandle);
