@@ -108,11 +108,7 @@ function ensureSidebarStyles(targetDocument: Document): void {
   targetDocument.head.appendChild(nextStyle);
 }
 
-const OVERLAY_SELECTORS = [
-  "game-left-sidebar",
-  "control-panel",
-  "leader-board",
-] as const;
+const OVERLAY_SELECTORS = ["game-left-sidebar", "control-panel"] as const;
 type OverlaySelector = (typeof OVERLAY_SELECTORS)[number];
 
 interface OverlayRegistration {
@@ -120,8 +116,8 @@ interface OverlayRegistration {
   target: HTMLElement;
   originalLeft: string;
   originalRight: string;
+  originalWidth: string;
   originalMaxWidth: string;
-  originalTranslate: string;
 }
 
 export class SidebarApp {
@@ -522,27 +518,12 @@ export class SidebarApp {
       }
 
       const target = registration.target;
-      if (selector === "control-panel") {
-        const style = target.style as CSSStyleDeclaration & {
-          translate?: string;
-        };
-        if (treatHidden) {
-          style.translate = registration.originalTranslate;
-        } else {
-          style.translate = `${sidebarOffset}px 0px`;
-        }
+      if (treatHidden) {
+        this.restoreOverlayRegistration(selector, registration);
         continue;
       }
 
-      if (treatHidden) {
-        target.style.left = registration.originalLeft;
-        target.style.right = registration.originalRight;
-        target.style.maxWidth = registration.originalMaxWidth;
-      } else {
-        target.style.left = `${offset}px`;
-        target.style.right = "auto";
-        target.style.maxWidth = `calc(100vw - ${offset + 24}px)`;
-      }
+      this.applyOverlayOffset(selector, registration, offset);
     }
 
     if (missingElement) {
@@ -554,17 +535,29 @@ export class SidebarApp {
     selector: OverlaySelector,
     registration: OverlayRegistration,
   ): void {
+    registration.target.style.left = registration.originalLeft;
+    registration.target.style.right = registration.originalRight;
+    registration.target.style.width = registration.originalWidth;
+    registration.target.style.maxWidth = registration.originalMaxWidth;
+  }
+
+  private applyOverlayOffset(
+    selector: OverlaySelector,
+    registration: OverlayRegistration,
+    offset: number,
+  ): void {
     if (selector === "control-panel") {
-      const style = registration.target.style as CSSStyleDeclaration & {
-        translate?: string;
-      };
-      style.translate = registration.originalTranslate;
+      registration.target.style.left = `${offset}px`;
+      registration.target.style.right = registration.originalRight;
+      registration.target.style.width = `calc(100vw - ${offset}px)`;
+      registration.target.style.maxWidth = `calc(100vw - ${offset}px)`;
       return;
     }
 
-    registration.target.style.left = registration.originalLeft;
-    registration.target.style.right = registration.originalRight;
-    registration.target.style.maxWidth = registration.originalMaxWidth;
+    registration.target.style.left = `${offset}px`;
+    registration.target.style.right = "auto";
+    registration.target.style.width = registration.originalWidth;
+    registration.target.style.maxWidth = `calc(100vw - ${offset + 24}px)`;
   }
 
   private ensureOverlayRegistration(
@@ -619,23 +612,22 @@ export class SidebarApp {
       existing && existing.target === target
         ? existing.originalRight
         : target.style.right;
+    const originalWidth =
+      existing && existing.target === target
+        ? existing.originalWidth
+        : target.style.width;
     const originalMaxWidth =
       existing && existing.target === target
         ? existing.originalMaxWidth
         : target.style.maxWidth;
-    const style = target.style as CSSStyleDeclaration & { translate?: string };
-    const originalTranslate =
-      existing && existing.target === target
-        ? existing.originalTranslate
-        : (style.translate ?? "");
 
     this.overlayElements.set(selector, {
       root,
       target,
       originalLeft,
       originalRight,
+      originalWidth,
       originalMaxWidth,
-      originalTranslate,
     });
   }
 
@@ -679,35 +671,66 @@ export class SidebarApp {
       return null;
     }
 
+    if (selector === "game-left-sidebar") {
+      return this.resolveGameLeftSidebarTarget(root);
+    }
+
     if (selector === "control-panel") {
-      const wrapper = root.parentElement;
-      return wrapper instanceof HTMLElement ? wrapper : root;
-    }
-
-    if (selector === "leader-board") {
-      return root;
-    }
-
-    if (selector === "game-left-sidebar") {
-      const fixedChild = this.findPositionedChild(root);
-      if (fixedChild) {
-        return fixedChild;
-      }
-    }
-
-    const ancestor = this.findPositionedAncestor(root);
-    if (ancestor) {
-      return ancestor;
-    }
-
-    if (selector === "game-left-sidebar") {
-      const aside = root.querySelector<HTMLElement>("aside");
-      if (aside) {
-        return aside;
-      }
+      return this.resolveBottomHudTarget(root);
     }
 
     return root;
+  }
+
+  private resolveGameLeftSidebarTarget(root: HTMLElement): HTMLElement {
+    const aside = root.querySelector<HTMLElement>("aside");
+    if (aside?.isConnected) {
+      return aside;
+    }
+
+    const fixedDescendant = this.findPositionedDescendant(root);
+    if (fixedDescendant) {
+      return fixedDescendant;
+    }
+
+    return this.findPositionedAncestor(root) ?? root;
+  }
+
+  private resolveBottomHudTarget(root: HTMLElement): HTMLElement {
+    const hudContainer = this.findBottomHudContainer(root);
+    if (hudContainer) {
+      return hudContainer;
+    }
+
+    return this.findPositionedAncestor(root) ?? root;
+  }
+
+  private findBottomHudContainer(root: HTMLElement): HTMLElement | null {
+    let current = root.parentElement;
+    while (current) {
+      if (this.isBottomHudContainer(current)) {
+        return current;
+      }
+      current = current.parentElement;
+    }
+    return null;
+  }
+
+  private isBottomHudContainer(element: HTMLElement): boolean {
+    const style = this.hostWindow.getComputedStyle(element);
+    if (style.position !== "fixed") {
+      return false;
+    }
+
+    const hasHudContent =
+      element.querySelector("control-panel") instanceof HTMLElement &&
+      element.querySelector("attacks-display") instanceof HTMLElement &&
+      element.querySelector("events-display") instanceof HTMLElement;
+    if (!hasHudContent) {
+      return false;
+    }
+
+    return style.left === "0px" || style.bottom === "0px";
   }
 
   private findPositionedAncestor(element: HTMLElement): HTMLElement | null {
@@ -722,7 +745,7 @@ export class SidebarApp {
     return null;
   }
 
-  private findPositionedChild(root: HTMLElement): HTMLElement | null {
+  private findPositionedDescendant(root: HTMLElement): HTMLElement | null {
     const walker = (root.ownerDocument ?? document).createTreeWalker(
       root,
       NodeFilter.SHOW_ELEMENT,

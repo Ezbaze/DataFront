@@ -2,7 +2,7 @@
 // ==UserScript==
 // @name			DataFront
 // @namespace		https://openfront.io/
-// @version			0.1.6
+// @version			0.1.7
 // @description		Adds a resizable, splittable strategic sidebar for OpenFront players, clans, and teams.
 // @author			ezbaze
 // @match			https://*.openfront.io/*
@@ -5741,11 +5741,7 @@
     }`);
       targetDocument.head.appendChild(nextStyle);
   }
-  const OVERLAY_SELECTORS = [
-      "game-left-sidebar",
-      "control-panel",
-      "leader-board",
-  ];
+  const OVERLAY_SELECTORS = ["game-left-sidebar", "control-panel"];
   class SidebarApp {
       constructor(store, options, uiDocument = document, uiWindow = window) {
           this.hostDocument = document;
@@ -6049,41 +6045,35 @@
                   missingElement = true;
                   continue;
               }
-              const target = registration.target;
-              if (selector === "control-panel") {
-                  const style = target.style;
-                  if (treatHidden) {
-                      style.translate = registration.originalTranslate;
-                  }
-                  else {
-                      style.translate = `${sidebarOffset}px 0px`;
-                  }
+              registration.target;
+              if (treatHidden) {
+                  this.restoreOverlayRegistration(selector, registration);
                   continue;
               }
-              if (treatHidden) {
-                  target.style.left = registration.originalLeft;
-                  target.style.right = registration.originalRight;
-                  target.style.maxWidth = registration.originalMaxWidth;
-              }
-              else {
-                  target.style.left = `${offset}px`;
-                  target.style.right = "auto";
-                  target.style.maxWidth = `calc(100vw - ${offset + 24}px)`;
-              }
+              this.applyOverlayOffset(selector, registration, offset);
           }
           if (missingElement) {
               this.observeGameOverlays();
           }
       }
       restoreOverlayRegistration(selector, registration) {
-          if (selector === "control-panel") {
-              const style = registration.target.style;
-              style.translate = registration.originalTranslate;
-              return;
-          }
           registration.target.style.left = registration.originalLeft;
           registration.target.style.right = registration.originalRight;
+          registration.target.style.width = registration.originalWidth;
           registration.target.style.maxWidth = registration.originalMaxWidth;
+      }
+      applyOverlayOffset(selector, registration, offset) {
+          if (selector === "control-panel") {
+              registration.target.style.left = `${offset}px`;
+              registration.target.style.right = registration.originalRight;
+              registration.target.style.width = `calc(100vw - ${offset}px)`;
+              registration.target.style.maxWidth = `calc(100vw - ${offset}px)`;
+              return;
+          }
+          registration.target.style.left = `${offset}px`;
+          registration.target.style.right = "auto";
+          registration.target.style.width = registration.originalWidth;
+          registration.target.style.maxWidth = `calc(100vw - ${offset + 24}px)`;
       }
       ensureOverlayRegistration(selector) {
           const root = document.querySelector(selector);
@@ -6122,20 +6112,19 @@
           const originalRight = existing && existing.target === target
               ? existing.originalRight
               : target.style.right;
+          const originalWidth = existing && existing.target === target
+              ? existing.originalWidth
+              : target.style.width;
           const originalMaxWidth = existing && existing.target === target
               ? existing.originalMaxWidth
               : target.style.maxWidth;
-          const style = target.style;
-          const originalTranslate = existing && existing.target === target
-              ? existing.originalTranslate
-              : (style.translate ?? "");
           this.overlayElements.set(selector, {
               root,
               target,
               originalLeft,
               originalRight,
+              originalWidth,
               originalMaxWidth,
-              originalTranslate,
           });
       }
       toggleSidebarVisibility(force) {
@@ -6168,30 +6157,54 @@
           if (!root.isConnected) {
               return null;
           }
+          if (selector === "game-left-sidebar") {
+              return this.resolveGameLeftSidebarTarget(root);
+          }
           if (selector === "control-panel") {
-              const wrapper = root.parentElement;
-              return wrapper instanceof HTMLElement ? wrapper : root;
-          }
-          if (selector === "leader-board") {
-              return root;
-          }
-          if (selector === "game-left-sidebar") {
-              const fixedChild = this.findPositionedChild(root);
-              if (fixedChild) {
-                  return fixedChild;
-              }
-          }
-          const ancestor = this.findPositionedAncestor(root);
-          if (ancestor) {
-              return ancestor;
-          }
-          if (selector === "game-left-sidebar") {
-              const aside = root.querySelector("aside");
-              if (aside) {
-                  return aside;
-              }
+              return this.resolveBottomHudTarget(root);
           }
           return root;
+      }
+      resolveGameLeftSidebarTarget(root) {
+          const aside = root.querySelector("aside");
+          if (aside?.isConnected) {
+              return aside;
+          }
+          const fixedDescendant = this.findPositionedDescendant(root);
+          if (fixedDescendant) {
+              return fixedDescendant;
+          }
+          return this.findPositionedAncestor(root) ?? root;
+      }
+      resolveBottomHudTarget(root) {
+          const hudContainer = this.findBottomHudContainer(root);
+          if (hudContainer) {
+              return hudContainer;
+          }
+          return this.findPositionedAncestor(root) ?? root;
+      }
+      findBottomHudContainer(root) {
+          let current = root.parentElement;
+          while (current) {
+              if (this.isBottomHudContainer(current)) {
+                  return current;
+              }
+              current = current.parentElement;
+          }
+          return null;
+      }
+      isBottomHudContainer(element) {
+          const style = this.hostWindow.getComputedStyle(element);
+          if (style.position !== "fixed") {
+              return false;
+          }
+          const hasHudContent = element.querySelector("control-panel") instanceof HTMLElement &&
+              element.querySelector("attacks-display") instanceof HTMLElement &&
+              element.querySelector("events-display") instanceof HTMLElement;
+          if (!hasHudContent) {
+              return false;
+          }
+          return style.left === "0px" || style.bottom === "0px";
       }
       findPositionedAncestor(element) {
           let current = element;
@@ -6204,7 +6217,7 @@
           }
           return null;
       }
-      findPositionedChild(root) {
+      findPositionedDescendant(root) {
           const walker = (root.ownerDocument ?? document).createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
           const current = walker.currentNode;
           if (current !== root) {
