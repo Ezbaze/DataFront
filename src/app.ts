@@ -4,6 +4,7 @@ import { createDefaultRootNode, splitPanelLeaf } from "./panelLayout";
 import { startPanelResize } from "./panelResize";
 import {
   GameSnapshot,
+  LobbyQueueInfo,
   PanelGroupNode,
   PanelLeafElements,
   PanelLeafNode,
@@ -58,6 +59,8 @@ const PANEL_ACTION_BUTTON_BASE_CLASS = [
 
 const PROJECT_DOCS_URL =
   "https://github.com/Ezbaze/DataFront/blob/main/docs/README.md";
+const LOBBY_CLAN_TAG_COUNTS_OVERLAY_ID = "lobby-clan-tag-counts";
+const LOBBY_CLAN_TAG_PILL_SELECTOR = "[data-datafront-lobby-clan-pill='true']";
 
 function getPanelActionButtonClass(extra?: string): string {
   return extra
@@ -137,6 +140,10 @@ export class SidebarApp {
   private overlayObserver?: MutationObserver;
   private overlayResizeObserver?: ResizeObserver;
   private overlayMutationFrame?: number;
+  private lobbyCardObserver?: MutationObserver;
+  private lobbyCardObservedRoot?: HTMLElement;
+  private lobbyCardMutationFrame?: number;
+  private isSyncingLobbyCardOverlays = false;
   private readonly handleOverlayRealign = () =>
     this.runWithUiContext(() => this.repositionGameOverlay());
   private readonly handleGlobalKeyDown = (event: KeyboardEvent) =>
@@ -249,6 +256,7 @@ export class SidebarApp {
           this.expandSelfClanmates(snapshot);
         }
         this.refreshAllLeaves();
+        this.syncLobbyClanTagCardOverlays();
       });
     });
     if (this.enableOverlayAlignment) {
@@ -263,6 +271,7 @@ export class SidebarApp {
       this.hostWindow.addEventListener("keydown", this.handleGlobalKeyDown);
     }
     this.repositionGameOverlay();
+    this.syncLobbyClanTagCardOverlays();
   }
 
   syncPlayerDetails(playerId: string): void {
@@ -302,6 +311,13 @@ export class SidebarApp {
         this.hostWindow.cancelAnimationFrame(this.overlayMutationFrame);
         this.overlayMutationFrame = undefined;
       }
+      if (this.lobbyCardObserver) {
+        this.lobbyCardObserver.disconnect();
+      }
+      if (this.lobbyCardMutationFrame !== undefined) {
+        this.hostWindow.cancelAnimationFrame(this.lobbyCardMutationFrame);
+        this.lobbyCardMutationFrame = undefined;
+      }
       this.hostWindow.removeEventListener("resize", this.handleOverlayRealign);
       if (this.enableGlobalHotkeys) {
         this.hostWindow.removeEventListener(
@@ -310,6 +326,7 @@ export class SidebarApp {
         );
       }
       this.closeQuickActionsMenu();
+      this.clearLobbyClanTagCardOverlays();
     });
   }
 
@@ -661,6 +678,222 @@ export class SidebarApp {
 
     this.areOverlaysHidden = nextHidden;
     this.store.setOverlaysTemporarilyHidden(nextHidden);
+    this.syncLobbyClanTagCardOverlays();
+  }
+
+  private syncLobbyClanTagCardOverlays(): void {
+    const selector = this.hostDocument.querySelector(
+      "game-mode-selector",
+    ) as HTMLElement | null;
+    const shouldRender =
+      !this.areOverlaysHidden &&
+      this.isOverlayEnabled(LOBBY_CLAN_TAG_COUNTS_OVERLAY_ID) &&
+      !this.snapshot.players.some((player) => !player.isLobbyPlayer) &&
+      (this.snapshot.currentLobbyQueues?.length ?? 0) > 0 &&
+      typeof this.snapshot.currentLobbyClanTag === "string" &&
+      this.snapshot.currentLobbyClanTag.length > 0;
+
+    this.observeLobbyCardMutations(
+      shouldRender && selector?.isConnected ? selector : undefined,
+    );
+
+    if (!shouldRender || !selector?.isConnected) {
+      this.clearLobbyClanTagCardOverlays();
+      return;
+    }
+
+    this.isSyncingLobbyCardOverlays = true;
+    try {
+      const buttons = this.collectLobbyCardButtons(selector);
+      const cardQueues = this.buildLobbyCardQueueSequence();
+      this.clearLobbyClanTagCardOverlays(selector);
+
+      const clanTag = this.snapshot.currentLobbyClanTag ?? "";
+      const total = Math.min(buttons.length, cardQueues.length);
+      for (let index = 0; index < total; index += 1) {
+        const button = buttons[index];
+        const queue = cardQueues[index];
+        if (!button || !queue) {
+          continue;
+        }
+        const count = this.countPlayersWithClanTag(queue.players, clanTag);
+        this.renderLobbyClanTagCardAugment(button, clanTag, count);
+      }
+    } finally {
+      this.isSyncingLobbyCardOverlays = false;
+    }
+  }
+
+  private observeLobbyCardMutations(root?: HTMLElement): void {
+    if (this.lobbyCardObservedRoot === root && this.lobbyCardObserver) {
+      return;
+    }
+    if (this.lobbyCardObserver) {
+      this.lobbyCardObserver.disconnect();
+      this.lobbyCardObserver = undefined;
+    }
+    this.lobbyCardObservedRoot = root;
+    if (!root) {
+      return;
+    }
+    this.lobbyCardObserver = new MutationObserver(() => {
+      if (this.isSyncingLobbyCardOverlays) {
+        return;
+      }
+      if (this.lobbyCardMutationFrame !== undefined) {
+        return;
+      }
+      this.lobbyCardMutationFrame = this.hostWindow.requestAnimationFrame(
+        () => {
+          this.lobbyCardMutationFrame = undefined;
+          this.syncLobbyClanTagCardOverlays();
+        },
+      );
+    });
+    this.lobbyCardObserver.observe(root, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+    });
+  }
+
+  private isOverlayEnabled(overlayId: string): boolean {
+    return (
+      this.snapshot.sidebarOverlays?.some(
+        (overlay) => overlay.id === overlayId && overlay.enabled,
+      ) ?? false
+    );
+  }
+
+  private collectLobbyCardButtons(root: HTMLElement): HTMLButtonElement[] {
+    return Array.from(root.querySelectorAll("button")).filter(
+      (element): element is HTMLButtonElement =>
+        element instanceof HTMLButtonElement &&
+        element.classList.contains("rounded-2xl"),
+    );
+  }
+
+  private buildLobbyCardQueueSequence(): LobbyQueueInfo[] {
+    const queues = this.snapshot.currentLobbyQueues ?? [];
+    const queueByType = new Map<"special" | "ffa" | "team", LobbyQueueInfo>();
+    for (const queue of queues) {
+      if (
+        queue.publicGameType === "special" ||
+        queue.publicGameType === "ffa" ||
+        queue.publicGameType === "team"
+      ) {
+        queueByType.set(queue.publicGameType, queue);
+      }
+    }
+    const orderedTypes: Array<"special" | "ffa" | "team"> = [
+      "special",
+      "ffa",
+      "team",
+    ];
+    const orderedQueues: LobbyQueueInfo[] = [];
+    for (const type of orderedTypes) {
+      const queue = queueByType.get(type);
+      if (queue) {
+        orderedQueues.push(queue);
+      }
+    }
+    const fallbackQueues =
+      orderedQueues.length > 0
+        ? queues.filter(
+            (queue) =>
+              !orderedQueues.some(
+                (orderedQueue) => orderedQueue.gameId === queue.gameId,
+              ),
+          )
+        : queues;
+    const displayQueues = [...orderedQueues, ...fallbackQueues];
+    if (displayQueues.length === 0) {
+      return [];
+    }
+    return [...displayQueues, ...displayQueues];
+  }
+
+  private countPlayersWithClanTag(
+    players: ReadonlyArray<{ name: string }>,
+    clanTag: string,
+  ): number {
+    const normalizedTarget = this.normalizeClanTag(clanTag);
+    if (!normalizedTarget) {
+      return 0;
+    }
+    let count = 0;
+    for (const player of players) {
+      if (
+        this.normalizeClanTag(extractClanTag(player.name)) === normalizedTarget
+      ) {
+        count += 1;
+      }
+    }
+    return count;
+  }
+
+  private normalizeClanTag(clanTag?: string): string {
+    const trimmed = clanTag?.trim();
+    return trimmed && trimmed.length > 0 ? trimmed.toUpperCase() : "";
+  }
+
+  private renderLobbyClanTagCardAugment(
+    button: HTMLButtonElement,
+    clanTag: string,
+    count: number,
+  ): void {
+    const pill = this.findLobbyCardPlayerCountPill(button);
+    if (!pill) {
+      return;
+    }
+    const container = pill.parentElement ?? button;
+    const computedStyle = this.hostWindow.getComputedStyle(pill);
+    const rightOffset = Number.parseFloat(computedStyle.right || "0");
+    const gapPx = 4;
+    const pillWidth = Math.ceil(pill.getBoundingClientRect().width);
+    const clanPill = this.createUiElement(
+      "span",
+      [
+        "absolute bottom-full mb-1 rounded px-2 py-0.5",
+        "bg-black/70 backdrop-blur-sm text-xs font-bold tracking-widest",
+        count > 0 ? "text-emerald-100" : "text-slate-300",
+      ].join(" "),
+      `${count} [${clanTag}]`,
+    );
+    clanPill.dataset.datafrontLobbyClanPill = "true";
+    clanPill.title = `Players with your clan tag ([${clanTag}]) in this lobby`;
+    clanPill.style.right = `${rightOffset + pillWidth + gapPx}px`;
+    container.appendChild(clanPill);
+  }
+
+  private findLobbyCardPlayerCountPill(
+    button: HTMLButtonElement,
+  ): HTMLElement | null {
+    const directMatch = button.querySelector<HTMLElement>(
+      "span.absolute.bottom-full.right-2",
+    );
+    if (directMatch?.isConnected) {
+      return directMatch;
+    }
+    for (const child of Array.from(button.querySelectorAll("span"))) {
+      if (
+        child instanceof HTMLElement &&
+        child.querySelector("svg") &&
+        child.textContent?.includes("/")
+      ) {
+        return child;
+      }
+    }
+    return null;
+  }
+
+  private clearLobbyClanTagCardOverlays(root?: ParentNode): void {
+    const scope = root ?? this.hostDocument;
+    for (const pill of Array.from(
+      scope.querySelectorAll(LOBBY_CLAN_TAG_PILL_SELECTOR),
+    )) {
+      pill.remove();
+    }
   }
 
   private resolveOverlayTarget(

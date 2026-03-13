@@ -392,6 +392,46 @@ describe("matchesSearchQuery per view", () => {
     expect(matchesSearchQuery(ast, { kind: "player", player })).toBe(true);
   });
 
+  it("matches players by lobby label and queue id", () => {
+    const player = makePlayer({
+      name: "Alice",
+      lobbyLabel: "Europe • Duos",
+      lobbyGameId: "special-123",
+    });
+    expect(
+      matchesSearchQuery(mustCompile("lobby:europe"), {
+        kind: "player",
+        player,
+      }),
+    ).toBe(true);
+    expect(
+      matchesSearchQuery(mustCompile("queueid:123"), {
+        kind: "player",
+        player,
+      }),
+    ).toBe(true);
+    expect(
+      matchesSearchQuery(mustCompile("lobby:world"), {
+        kind: "player",
+        player,
+      }),
+    ).toBe(false);
+  });
+
+  it("includes lobby metadata in free-text player searches", () => {
+    const player = makePlayer({
+      name: "Alice",
+      lobbyLabel: "World • FFA",
+      lobbyGameId: "ffa-777",
+    });
+    expect(
+      matchesSearchQuery(mustCompile("world"), { kind: "player", player }),
+    ).toBe(true);
+    expect(
+      matchesSearchQuery(mustCompile("777"), { kind: "player", player }),
+    ).toBe(true);
+  });
+
   it("matches players by alive/dead filters", () => {
     const aliveMatch = mustCompile("alive:true");
     const alivePlayer = makePlayer({ eliminated: false });

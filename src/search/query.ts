@@ -672,7 +672,15 @@ function defaultTextForTarget(target: SearchTarget): string {
       const derivedClanTag = extractClanTag(p.name);
       const clan = p.clan ?? derivedClanTag ?? "";
       const clanTag = clan ? `[${clan}]` : "";
-      const fields = [p.name, p.id, p.team ?? "", clan, clanTag];
+      const fields = [
+        p.name,
+        p.id,
+        p.team ?? "",
+        clan,
+        clanTag,
+        p.lobbyLabel ?? "",
+        p.lobbyGameId ?? "",
+      ];
       return fields.join(" ").toLowerCase();
     }
     case "ship": {
@@ -801,6 +809,13 @@ function matchesTerm(term: SearchQueryTerm, target: SearchTarget): boolean {
         }
         case "team":
           return includes((p.team ?? "").toLowerCase(), value);
+        case "lobby":
+          return includes(
+            `${p.lobbyLabel ?? ""} ${p.lobbyGameId ?? ""}`.toLowerCase(),
+            value,
+          );
+        case "queueid":
+          return includes((p.lobbyGameId ?? "").toLowerCase(), value);
         case "alive": {
           const parsed = parseBoolean(value);
           if (parsed === null) {

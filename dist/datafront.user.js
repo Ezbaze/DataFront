@@ -1044,6 +1044,7 @@
           sortKey: "label",
           hideable: false,
       },
+      { key: "scope", label: "Scope", align: "left", sortKey: "scope" },
       { key: "status", label: "Status", align: "right", sortKey: "status" },
   ];
   function getTableHeadersForView(view) {
@@ -1924,7 +1925,15 @@
               const derivedClanTag = extractClanTag(p.name);
               const clan = p.clan ?? derivedClanTag ?? "";
               const clanTag = clan ? `[${clan}]` : "";
-              const fields = [p.name, p.id, p.team ?? "", clan, clanTag];
+              const fields = [
+                  p.name,
+                  p.id,
+                  p.team ?? "",
+                  clan,
+                  clanTag,
+                  p.lobbyLabel ?? "",
+                  p.lobbyGameId ?? "",
+              ];
               return fields.join(" ").toLowerCase();
           }
           case "ship": {
@@ -2044,6 +2053,10 @@
                   }
                   case "team":
                       return includes((p.team ?? "").toLowerCase(), value);
+                  case "lobby":
+                      return includes(`${p.lobbyLabel ?? ""} ${p.lobbyGameId ?? ""}`.toLowerCase(), value);
+                  case "queueid":
+                      return includes((p.lobbyGameId ?? "").toLowerCase(), value);
                   case "alive": {
                       const parsed = parseBoolean(value);
                       if (parsed === null) {
@@ -2908,14 +2921,17 @@
                           "text-[0.65rem] uppercase tracking-wide text-rose-400";
                       return "KICKED";
                   }
-                  const queue = snapshot.currentLobbyQueue;
+                  const queue = snapshot.currentLobbyQueues?.find((entry) => entry.gameId === player.lobbyGameId) ?? snapshot.currentLobbyQueue;
                   const hasPosition = typeof player.lobbyPosition === "number" &&
                       Number.isFinite(player.lobbyPosition);
                   const positionLabel = hasPosition
                       ? `#${player.lobbyPosition}`
                       : "Queued";
+                  const queueLabel = player.lobbyLabel ?? queue?.lobbyLabel;
                   if (!queue) {
-                      return `Queue ${positionLabel}`;
+                      return queueLabel
+                          ? `${queueLabel} • Queue ${positionLabel}`
+                          : `Queue ${positionLabel}`;
                   }
                   const totalSlots = queue.maxPlayers ?? queue.playerCount;
                   const hasTotalSlots = typeof totalSlots === "number" &&
@@ -2931,8 +2947,12 @@
                   else {
                       label = `Queue ${positionLabel}`;
                   }
-                  if (queue.playerTeams && player.team) {
-                      label = `${label} • ${player.team}`;
+                  if (queueLabel && !options.lobbyLabelHidden) {
+                      label = `${queueLabel} • ${label}`;
+                  }
+                  const playerTeamLabel = getLobbyLocalTeamLabel(player);
+                  if (queue.playerTeams && playerTeamLabel) {
+                      label = `${label} • ${playerTeamLabel}`;
                   }
                   return label;
               }
@@ -2963,9 +2983,12 @@
       }
   }
   function appendGroupRows(options) {
-      const { group, leaf, snapshot, tbody, requestRender, groupType, metricsCache, actions, headers, visiblePlayers, expandedOverride, disableToggle, } = options;
-      const groupKey = `${groupType}:${group.key}`;
-      const expanded = expandedOverride ?? leaf.expandedGroups.has(groupKey);
+      const { group, groupKey, subtitle, leaf, snapshot, tbody, requestRender, metricsCache, actions, headers, visiblePlayers, expandedOverride, disableToggle, indent, childIndent, defaultExpanded, lobbyLabelHidden, renderExpandedContent, } = options;
+      const isExpandedByDefault = defaultExpanded ?? false;
+      const expanded = expandedOverride ??
+          (isExpandedByDefault
+              ? !leaf.expandedGroups.has(groupKey)
+              : leaf.expandedGroups.has(groupKey));
       const playersToRender = visiblePlayers ?? group.players;
       const row = createElement$7("tr", "bg-slate-900/70 hover:bg-slate-800/60 transition-colors font-semibold");
       row.dataset.groupKey = groupKey;
@@ -2989,18 +3012,28 @@
           const toggleAttribute = disableToggle ? undefined : "data-group-toggle";
           firstCell.appendChild(createLabelBlock({
               label: `${group.label} (${countLabel})`,
-              subtitle: groupType === "clan" ? "Clan summary" : "Team summary",
-              indent: 0,
+              subtitle,
+              indent: indent ?? 0,
               expanded,
               toggleAttribute,
               rowKey: groupKey,
               onToggle: toggleAttribute &&
                   ((next) => {
-                      if (next) {
-                          leaf.expandedGroups.add(groupKey);
+                      if (isExpandedByDefault) {
+                          if (next) {
+                              leaf.expandedGroups.delete(groupKey);
+                          }
+                          else {
+                              leaf.expandedGroups.add(groupKey);
+                          }
                       }
                       else {
-                          leaf.expandedGroups.delete(groupKey);
+                          if (next) {
+                              leaf.expandedGroups.add(groupKey);
+                          }
+                          else {
+                              leaf.expandedGroups.delete(groupKey);
+                          }
                       }
                       requestRender();
                   }),
@@ -3025,17 +3058,23 @@
       });
       tbody.appendChild(row);
       if (expanded) {
-          for (const player of playersToRender) {
-              appendPlayerRows({
-                  player,
-                  indent: 1,
-                  leaf,
-                  snapshot,
-                  tbody,
-                  metricsCache,
-                  actions,
-                  headers,
-              });
+          if (renderExpandedContent) {
+              renderExpandedContent(playersToRender);
+          }
+          else {
+              for (const player of playersToRender) {
+                  appendPlayerRows({
+                      player,
+                      indent: childIndent ?? 1,
+                      leaf,
+                      snapshot,
+                      tbody,
+                      metricsCache,
+                      actions,
+                      headers,
+                      lobbyLabelHidden,
+                  });
+              }
           }
       }
   }
@@ -3281,14 +3320,14 @@
       }
   }
   function groupPlayers(options) {
-      const { players, snapshot, metricsCache, getKey, sortState } = options;
+      const { players, snapshot, metricsCache, getKey, getLabel, sortState } = options;
       const map = new Map();
       for (const player of players) {
           const key = getKey(player) ?? "Unaffiliated";
           if (!map.has(key)) {
               map.set(key, {
                   key,
-                  label: key,
+                  label: getLabel?.(player, key) ?? key,
                   players: [],
                   metrics: {
                       incoming: 0,
@@ -3337,6 +3376,128 @@
       rows.sort((a, b) => compareAggregated({ a, b, sortState, snapshot }));
       return rows;
   }
+  function getLobbyLocalTeamLabel(player) {
+      if (!player.isLobbyPlayer) {
+          return player.team;
+      }
+      const team = player.team?.trim();
+      if (!team) {
+          return undefined;
+      }
+      const lobbyLabel = player.lobbyLabel?.trim();
+      if (!lobbyLabel) {
+          return team;
+      }
+      if (team === lobbyLabel) {
+          return undefined;
+      }
+      const prefix = `${lobbyLabel} • `;
+      return team.startsWith(prefix) ? team.slice(prefix.length) : team;
+  }
+  function isMultiLobbySnapshot(snapshot) {
+      return (!snapshot.players.some((player) => !player.isLobbyPlayer) &&
+          (snapshot.currentLobbyQueues?.length ?? 0) > 1);
+  }
+  function buildLobbyGroups(options) {
+      const { snapshot, players, metricsCache, sortState } = options;
+      const grouped = groupPlayers({
+          players,
+          snapshot,
+          metricsCache,
+          getKey: (player) => player.lobbyGameId ?? player.lobbyLabel ?? "Lobby",
+          getLabel: (player) => player.lobbyLabel ?? player.lobbyGameId ?? "Lobby",
+          sortState,
+      });
+      const groupedByKey = new Map(grouped.map((group) => [group.key, group]));
+      const ordered = [];
+      for (const queue of snapshot.currentLobbyQueues ?? []) {
+          const key = queue.gameId;
+          const group = groupedByKey.get(key);
+          if (!group) {
+              continue;
+          }
+          ordered.push({
+              ...group,
+              queueLabel: queue.lobbyLabel,
+          });
+          groupedByKey.delete(key);
+      }
+      for (const group of groupedByKey.values()) {
+          ordered.push({
+              ...group,
+              queueLabel: group.label,
+          });
+      }
+      return ordered;
+  }
+  function createPlayerMatcher(searchFilter, extraFields) {
+      const filter = (searchFilter ?? "").trim().toLowerCase();
+      const compiled = filter ? compileSearchQuery(filter) : null;
+      const hasStructuredQuery = !!compiled && compiled.ok;
+      const matcher = ((player) => {
+          if (!filter) {
+              return true;
+          }
+          if (hasStructuredQuery) {
+              return matchesSearchQuery(compiled.ast, { kind: "player", player });
+          }
+          const clan = extractClanTag(player.name);
+          const fields = [
+              player.name,
+              player.id,
+              player.team ?? "",
+              clan ?? "",
+              ...(extraFields?.(player) ?? []),
+          ];
+          return fields.some((field) => String(field ?? "")
+              .toLowerCase()
+              .includes(filter));
+      });
+      matcher.filter = filter;
+      return matcher;
+  }
+  function appendLobbyGroupedView(options) {
+      const { lobbyGroups, leaf, snapshot, tbody, requestRender, metricsCache, actions, headers, filter, renderLobbyContent, } = options;
+      for (const lobbyGroup of lobbyGroups) {
+          const groupLabelMatches = filter
+              ? lobbyGroup.label.toLowerCase().includes(filter)
+              : false;
+          const matchedPlayers = filter
+              ? lobbyGroup.players.filter(createPlayerMatcher(filter, (player) => [
+                  player.lobbyLabel ?? "",
+                  getLobbyLocalTeamLabel(player) ?? "",
+              ]))
+              : lobbyGroup.players;
+          const playersToRender = groupLabelMatches
+              ? lobbyGroup.players
+              : matchedPlayers;
+          if (filter && playersToRender.length === 0) {
+              continue;
+          }
+          appendGroupRows({
+              group: lobbyGroup,
+              groupKey: `lobby:${lobbyGroup.key}`,
+              subtitle: "Lobby queue",
+              leaf,
+              snapshot,
+              tbody,
+              requestRender,
+              metricsCache,
+              actions,
+              headers,
+              visiblePlayers: playersToRender,
+              expandedOverride: filter ? true : undefined,
+              defaultExpanded: true,
+              indent: 0,
+              childIndent: 1,
+              disableToggle: Boolean(filter),
+              lobbyLabelHidden: true,
+              renderExpandedContent: (visibleLobbyPlayers) => {
+                  renderLobbyContent(lobbyGroup, visibleLobbyPlayers);
+              },
+          });
+      }
+  }
   function computePlayerMetrics(player, snapshot) {
       const incoming = player.incomingAttacks.length;
       const outgoing = player.outgoingAttacks.length;
@@ -3376,7 +3537,7 @@
   }
   function renderPlayersView(options) {
       return withViewDocument$7(options.ui.document, () => {
-          const { leaf, snapshot, sortState, onSort, existingContainer, actions } = options;
+          const { leaf, snapshot, sortState, onSort, existingContainer, actions, requestRender, searchFilter, } = options;
           const metricsCache = new Map();
           const visibleHeaders = getVisibleHeaders(leaf, leaf.view, TABLE_HEADERS);
           const { container, tbody } = createTableShell({
@@ -3388,17 +3549,60 @@
               document: viewDocument$7,
           });
           const players = [...snapshot.players].sort((a, b) => comparePlayers({ a, b, sortState, snapshot, metricsCache }));
-          for (const player of players) {
-              appendPlayerRows({
-                  player,
-                  indent: 0,
+          const matchesPlayer = createPlayerMatcher(searchFilter, (player) => [
+              player.lobbyLabel ?? "",
+              getLobbyLocalTeamLabel(player) ?? "",
+          ]);
+          if (isMultiLobbySnapshot(snapshot)) {
+              const lobbyGroups = buildLobbyGroups({
+                  snapshot,
+                  players,
+                  metricsCache,
+                  sortState,
+              });
+              appendLobbyGroupedView({
+                  lobbyGroups,
                   leaf,
                   snapshot,
                   tbody,
+                  requestRender,
                   metricsCache,
                   actions,
                   headers: visibleHeaders,
+                  filter: matchesPlayer.filter,
+                  renderLobbyContent: (_lobbyGroup, lobbyPlayers) => {
+                      for (const player of lobbyPlayers) {
+                          appendPlayerRows({
+                              player,
+                              indent: 1,
+                              leaf,
+                              snapshot,
+                              tbody,
+                              metricsCache,
+                              actions,
+                              headers: visibleHeaders,
+                              lobbyLabelHidden: true,
+                          });
+                      }
+                  },
               });
+          }
+          else {
+              for (const player of players) {
+                  if (matchesPlayer.filter && !matchesPlayer(player)) {
+                      continue;
+                  }
+                  appendPlayerRows({
+                      player,
+                      indent: 0,
+                      leaf,
+                      snapshot,
+                      tbody,
+                      metricsCache,
+                      actions,
+                      headers: visibleHeaders,
+                  });
+              }
           }
           registerContextMenuDelegation$1(container, actions);
           return container;
@@ -3417,56 +3621,108 @@
               headers: visibleHeaders,
               document: viewDocument$7,
           });
-          const groups = groupPlayers({
-              players: snapshot.players,
-              snapshot,
-              metricsCache,
-              getKey: (player) => extractClanTag(player.name),
-              sortState,
-          });
-          const filter = (searchFilter ?? "").trim().toLowerCase();
-          const compiled = filter ? compileSearchQuery(filter) : null;
-          const hasStructuredQuery = !!compiled && compiled.ok;
-          const matchesPlayer = (player) => {
-              if (!filter) {
-                  return true;
-              }
-              if (hasStructuredQuery) {
-                  return matchesSearchQuery(compiled.ast, { kind: "player", player });
-              }
-              const clan = extractClanTag(player.name);
-              const fields = [player.name, player.id, player.team ?? "", clan ?? ""];
-              return fields.some((field) => String(field ?? "")
-                  .toLowerCase()
-                  .includes(filter));
-          };
-          for (const group of groups) {
-              const groupLabelMatches = filter
-                  ? group.label.toLowerCase().includes(filter)
-                  : false;
-              const matchedPlayers = filter
-                  ? group.players.filter(matchesPlayer)
-                  : group.players;
-              const playersToRender = groupLabelMatches
-                  ? group.players
-                  : matchedPlayers;
-              if (filter && playersToRender.length === 0) {
-                  continue;
-              }
-              appendGroupRows({
-                  group,
+          const matchesPlayer = createPlayerMatcher(searchFilter, (player) => [
+              player.lobbyLabel ?? "",
+              getLobbyLocalTeamLabel(player) ?? "",
+          ]);
+          if (isMultiLobbySnapshot(snapshot)) {
+              const sortedPlayers = [...snapshot.players].sort((a, b) => comparePlayers({ a, b, sortState, snapshot, metricsCache }));
+              const lobbyGroups = buildLobbyGroups({
+                  snapshot,
+                  players: sortedPlayers,
+                  metricsCache,
+                  sortState,
+              });
+              appendLobbyGroupedView({
+                  lobbyGroups,
                   leaf,
                   snapshot,
                   tbody,
                   requestRender,
-                  groupType: "clan",
                   metricsCache,
                   actions,
                   headers: visibleHeaders,
-                  visiblePlayers: playersToRender,
-                  expandedOverride: filter ? true : undefined,
-                  disableToggle: Boolean(filter),
+                  filter: matchesPlayer.filter,
+                  renderLobbyContent: (lobbyGroup, lobbyPlayers) => {
+                      const groups = groupPlayers({
+                          players: lobbyPlayers,
+                          snapshot,
+                          metricsCache,
+                          getKey: (player) => extractClanTag(player.name),
+                          sortState,
+                      });
+                      for (const group of groups) {
+                          const groupLabelMatches = matchesPlayer.filter
+                              ? group.label.toLowerCase().includes(matchesPlayer.filter)
+                              : false;
+                          const matchedPlayers = matchesPlayer.filter
+                              ? group.players.filter(matchesPlayer)
+                              : group.players;
+                          const playersToRender = groupLabelMatches
+                              ? group.players
+                              : matchedPlayers;
+                          if (matchesPlayer.filter && playersToRender.length === 0) {
+                              continue;
+                          }
+                          appendGroupRows({
+                              group,
+                              groupKey: `lobby:${lobbyGroup.key}:clan:${group.key}`,
+                              subtitle: "Clan summary",
+                              leaf,
+                              snapshot,
+                              tbody,
+                              requestRender,
+                              metricsCache,
+                              actions,
+                              headers: visibleHeaders,
+                              visiblePlayers: playersToRender,
+                              expandedOverride: matchesPlayer.filter ? true : undefined,
+                              indent: 1,
+                              childIndent: 2,
+                              disableToggle: Boolean(matchesPlayer.filter),
+                              lobbyLabelHidden: true,
+                          });
+                      }
+                  },
               });
+          }
+          else {
+              const groups = groupPlayers({
+                  players: snapshot.players,
+                  snapshot,
+                  metricsCache,
+                  getKey: (player) => extractClanTag(player.name),
+                  sortState,
+              });
+              for (const group of groups) {
+                  const groupLabelMatches = matchesPlayer.filter
+                      ? group.label.toLowerCase().includes(matchesPlayer.filter)
+                      : false;
+                  const matchedPlayers = matchesPlayer.filter
+                      ? group.players.filter(matchesPlayer)
+                      : group.players;
+                  const playersToRender = groupLabelMatches
+                      ? group.players
+                      : matchedPlayers;
+                  if (matchesPlayer.filter && playersToRender.length === 0) {
+                      continue;
+                  }
+                  appendGroupRows({
+                      group,
+                      groupKey: `clan:${group.key}`,
+                      subtitle: "Clan summary",
+                      leaf,
+                      snapshot,
+                      tbody,
+                      requestRender,
+                      metricsCache,
+                      actions,
+                      headers: visibleHeaders,
+                      visiblePlayers: playersToRender,
+                      expandedOverride: matchesPlayer.filter ? true : undefined,
+                      disableToggle: Boolean(matchesPlayer.filter),
+                  });
+              }
           }
           registerContextMenuDelegation$1(container, actions);
           return container;
@@ -3485,56 +3741,110 @@
               headers: visibleHeaders,
               document: viewDocument$7,
           });
-          const groups = groupPlayers({
-              players: snapshot.players,
-              snapshot,
-              metricsCache,
-              getKey: (player) => player.team ?? "Solo",
-              sortState,
-          });
-          const filter = (searchFilter ?? "").trim().toLowerCase();
-          const compiled = filter ? compileSearchQuery(filter) : null;
-          const hasStructuredQuery = !!compiled && compiled.ok;
-          const matchesPlayer = (player) => {
-              if (!filter) {
-                  return true;
-              }
-              if (hasStructuredQuery) {
-                  return matchesSearchQuery(compiled.ast, { kind: "player", player });
-              }
-              const clan = extractClanTag(player.name);
-              const fields = [player.name, player.id, player.team ?? "", clan ?? ""];
-              return fields.some((field) => String(field ?? "")
-                  .toLowerCase()
-                  .includes(filter));
-          };
-          for (const group of groups) {
-              const groupLabelMatches = filter
-                  ? group.label.toLowerCase().includes(filter)
-                  : false;
-              const matchedPlayers = filter
-                  ? group.players.filter(matchesPlayer)
-                  : group.players;
-              const playersToRender = groupLabelMatches
-                  ? group.players
-                  : matchedPlayers;
-              if (filter && playersToRender.length === 0) {
-                  continue;
-              }
-              appendGroupRows({
-                  group,
+          const matchesPlayer = createPlayerMatcher(searchFilter, (player) => [
+              player.lobbyLabel ?? "",
+              getLobbyLocalTeamLabel(player) ?? "",
+          ]);
+          if (isMultiLobbySnapshot(snapshot)) {
+              const sortedPlayers = [...snapshot.players].sort((a, b) => comparePlayers({ a, b, sortState, snapshot, metricsCache }));
+              const lobbyGroups = buildLobbyGroups({
+                  snapshot,
+                  players: sortedPlayers,
+                  metricsCache,
+                  sortState,
+              });
+              appendLobbyGroupedView({
+                  lobbyGroups,
                   leaf,
                   snapshot,
                   tbody,
                   requestRender,
-                  groupType: "team",
                   metricsCache,
                   actions,
                   headers: visibleHeaders,
-                  visiblePlayers: playersToRender,
-                  expandedOverride: filter ? true : undefined,
-                  disableToggle: Boolean(filter),
+                  filter: matchesPlayer.filter,
+                  renderLobbyContent: (lobbyGroup, lobbyPlayers) => {
+                      const groups = groupPlayers({
+                          players: lobbyPlayers,
+                          snapshot,
+                          metricsCache,
+                          getKey: (player) => getLobbyLocalTeamLabel(player) ?? "Solo",
+                          getLabel: (player) => getLobbyLocalTeamLabel(player) ?? "Solo",
+                          sortState,
+                      });
+                      for (const group of groups) {
+                          const groupLabelMatches = matchesPlayer.filter
+                              ? group.label.toLowerCase().includes(matchesPlayer.filter)
+                              : false;
+                          const matchedPlayers = matchesPlayer.filter
+                              ? group.players.filter(matchesPlayer)
+                              : group.players;
+                          const playersToRender = groupLabelMatches
+                              ? group.players
+                              : matchedPlayers;
+                          if (matchesPlayer.filter && playersToRender.length === 0) {
+                              continue;
+                          }
+                          appendGroupRows({
+                              group,
+                              groupKey: `lobby:${lobbyGroup.key}:team:${group.key}`,
+                              subtitle: "Team summary",
+                              leaf,
+                              snapshot,
+                              tbody,
+                              requestRender,
+                              metricsCache,
+                              actions,
+                              headers: visibleHeaders,
+                              visiblePlayers: playersToRender,
+                              expandedOverride: matchesPlayer.filter ? true : undefined,
+                              indent: 1,
+                              childIndent: 2,
+                              disableToggle: Boolean(matchesPlayer.filter),
+                              lobbyLabelHidden: true,
+                          });
+                      }
+                  },
               });
+          }
+          else {
+              const groups = groupPlayers({
+                  players: snapshot.players,
+                  snapshot,
+                  metricsCache,
+                  getKey: (player) => player.team ?? "Solo",
+                  getLabel: (player) => player.team ?? "Solo",
+                  sortState,
+              });
+              for (const group of groups) {
+                  const groupLabelMatches = matchesPlayer.filter
+                      ? group.label.toLowerCase().includes(matchesPlayer.filter)
+                      : false;
+                  const matchedPlayers = matchesPlayer.filter
+                      ? group.players.filter(matchesPlayer)
+                      : group.players;
+                  const playersToRender = groupLabelMatches
+                      ? group.players
+                      : matchedPlayers;
+                  if (matchesPlayer.filter && playersToRender.length === 0) {
+                      continue;
+                  }
+                  appendGroupRows({
+                      group,
+                      groupKey: `team:${group.key}`,
+                      subtitle: "Team summary",
+                      leaf,
+                      snapshot,
+                      tbody,
+                      requestRender,
+                      metricsCache,
+                      actions,
+                      headers: visibleHeaders,
+                      visiblePlayers: playersToRender,
+                      expandedOverride: matchesPlayer.filter ? true : undefined,
+                      disableToggle: Boolean(matchesPlayer.filter),
+                  });
+              }
           }
           registerContextMenuDelegation$1(container, actions);
           return container;
@@ -5407,7 +5717,7 @@
           const overlays = snapshot.sidebarOverlays ?? [];
           const revision = snapshot.sidebarOverlayRevision ?? 0;
           const signature = `${revision}:${overlays
-            .map((overlay) => `${overlay.id}:${overlay.enabled ? 1 : 0}`)
+            .map((overlay) => `${overlay.id}:${overlay.enabled ? 1 : 0}:${overlay.scope}:${overlay.label}`)
             .join("|")}`;
           const sortSignature = `${sortState.key}:${sortState.direction}`;
           const isOverlayContainer = !!existingContainer &&
@@ -5448,6 +5758,9 @@
           if (sortState.key === "label") {
               sortedOverlays.sort((a, b) => compareSortValues(a.label.toLowerCase(), b.label.toLowerCase(), sortState.direction));
           }
+          else if (sortState.key === "scope") {
+              sortedOverlays.sort((a, b) => compareSortValues(a.scope, b.scope, sortState.direction));
+          }
           else if (sortState.key === "status") {
               sortedOverlays.sort((a, b) => compareSortValues(a.enabled ? 1 : 0, b.enabled ? 1 : 0, sortState.direction));
           }
@@ -5458,6 +5771,8 @@
               const nameLabel = createElement("span", "font-semibold text-slate-100", overlay.label);
               nameStack.appendChild(nameLabel);
               nameCell.appendChild(nameStack);
+              const scopeCell = createElement("td", `${cellBaseClass} text-left`);
+              scopeCell.textContent = overlay.scope === "lobby" ? "Lobby" : "Game";
               const statusCell = createElement("td", `${cellBaseClass} text-right`);
               const toggleWrapper = createElement("div", "flex justify-end");
               const toggleButton = createElement("button", "relative inline-flex h-6 w-12 items-center rounded-full border transition-colors focus:outline-none focus:ring-2 focus:ring-sky-500/60");
@@ -5492,11 +5807,14 @@
               });
               toggleWrapper.appendChild(toggleButton);
               statusCell.appendChild(toggleWrapper);
+              if (visibleKeys.has("name")) {
+                  row.appendChild(nameCell);
+              }
+              if (visibleKeys.has("scope")) {
+                  row.appendChild(scopeCell);
+              }
               if (visibleKeys.has("status")) {
                   row.appendChild(statusCell);
-              }
-              if (visibleKeys.has("name")) {
-                  row.insertBefore(nameCell, row.firstChild);
               }
               tbody.appendChild(row);
           }
@@ -5698,6 +6016,8 @@
       "focus:outline-none focus:ring-2 focus:ring-sky-500/50",
   ].join(" ");
   const PROJECT_DOCS_URL = "https://github.com/Ezbaze/DataFront/blob/main/docs/README.md";
+  const LOBBY_CLAN_TAG_COUNTS_OVERLAY_ID$1 = "lobby-clan-tag-counts";
+  const LOBBY_CLAN_TAG_PILL_SELECTOR = "[data-datafront-lobby-clan-pill='true']";
   function getPanelActionButtonClass(extra) {
       return extra
           ? `${PANEL_ACTION_BUTTON_BASE_CLASS} ${extra}`
@@ -5749,6 +6069,7 @@
           this.uiDocument = document;
           this.uiWindow = window;
           this.overlayElements = new Map();
+          this.isSyncingLobbyCardOverlays = false;
           this.handleOverlayRealign = () => this.runWithUiContext(() => this.repositionGameOverlay());
           this.handleGlobalKeyDown = (event) => this.onGlobalKeyDown(event);
           this.searchFilter = "";
@@ -5836,6 +6157,7 @@
                       this.expandSelfClanmates(snapshot);
                   }
                   this.refreshAllLeaves();
+                  this.syncLobbyClanTagCardOverlays();
               });
           });
           if (this.enableOverlayAlignment) {
@@ -5848,6 +6170,7 @@
               this.hostWindow.addEventListener("keydown", this.handleGlobalKeyDown);
           }
           this.repositionGameOverlay();
+          this.syncLobbyClanTagCardOverlays();
       }
       syncPlayerDetails(playerId) {
           this.syncPlayerSelection(playerId);
@@ -5883,11 +6206,19 @@
                   this.hostWindow.cancelAnimationFrame(this.overlayMutationFrame);
                   this.overlayMutationFrame = undefined;
               }
+              if (this.lobbyCardObserver) {
+                  this.lobbyCardObserver.disconnect();
+              }
+              if (this.lobbyCardMutationFrame !== undefined) {
+                  this.hostWindow.cancelAnimationFrame(this.lobbyCardMutationFrame);
+                  this.lobbyCardMutationFrame = undefined;
+              }
               this.hostWindow.removeEventListener("resize", this.handleOverlayRealign);
               if (this.enableGlobalHotkeys) {
                   this.hostWindow.removeEventListener("keydown", this.handleGlobalKeyDown);
               }
               this.closeQuickActionsMenu();
+              this.clearLobbyClanTagCardOverlays();
           });
       }
       setUiEnvironment(doc, win) {
@@ -6152,6 +6483,166 @@
           }
           this.areOverlaysHidden = nextHidden;
           this.store.setOverlaysTemporarilyHidden(nextHidden);
+          this.syncLobbyClanTagCardOverlays();
+      }
+      syncLobbyClanTagCardOverlays() {
+          const selector = this.hostDocument.querySelector("game-mode-selector");
+          const shouldRender = !this.areOverlaysHidden &&
+              this.isOverlayEnabled(LOBBY_CLAN_TAG_COUNTS_OVERLAY_ID$1) &&
+              !this.snapshot.players.some((player) => !player.isLobbyPlayer) &&
+              (this.snapshot.currentLobbyQueues?.length ?? 0) > 0 &&
+              typeof this.snapshot.currentLobbyClanTag === "string" &&
+              this.snapshot.currentLobbyClanTag.length > 0;
+          this.observeLobbyCardMutations(shouldRender && selector?.isConnected ? selector : undefined);
+          if (!shouldRender || !selector?.isConnected) {
+              this.clearLobbyClanTagCardOverlays();
+              return;
+          }
+          this.isSyncingLobbyCardOverlays = true;
+          try {
+              const buttons = this.collectLobbyCardButtons(selector);
+              const cardQueues = this.buildLobbyCardQueueSequence();
+              this.clearLobbyClanTagCardOverlays(selector);
+              const clanTag = this.snapshot.currentLobbyClanTag ?? "";
+              const total = Math.min(buttons.length, cardQueues.length);
+              for (let index = 0; index < total; index += 1) {
+                  const button = buttons[index];
+                  const queue = cardQueues[index];
+                  if (!button || !queue) {
+                      continue;
+                  }
+                  const count = this.countPlayersWithClanTag(queue.players, clanTag);
+                  this.renderLobbyClanTagCardAugment(button, clanTag, count);
+              }
+          }
+          finally {
+              this.isSyncingLobbyCardOverlays = false;
+          }
+      }
+      observeLobbyCardMutations(root) {
+          if (this.lobbyCardObservedRoot === root && this.lobbyCardObserver) {
+              return;
+          }
+          if (this.lobbyCardObserver) {
+              this.lobbyCardObserver.disconnect();
+              this.lobbyCardObserver = undefined;
+          }
+          this.lobbyCardObservedRoot = root;
+          if (!root) {
+              return;
+          }
+          this.lobbyCardObserver = new MutationObserver(() => {
+              if (this.isSyncingLobbyCardOverlays) {
+                  return;
+              }
+              if (this.lobbyCardMutationFrame !== undefined) {
+                  return;
+              }
+              this.lobbyCardMutationFrame = this.hostWindow.requestAnimationFrame(() => {
+                  this.lobbyCardMutationFrame = undefined;
+                  this.syncLobbyClanTagCardOverlays();
+              });
+          });
+          this.lobbyCardObserver.observe(root, {
+              childList: true,
+              subtree: true,
+              characterData: true,
+          });
+      }
+      isOverlayEnabled(overlayId) {
+          return (this.snapshot.sidebarOverlays?.some((overlay) => overlay.id === overlayId && overlay.enabled) ?? false);
+      }
+      collectLobbyCardButtons(root) {
+          return Array.from(root.querySelectorAll("button")).filter((element) => element instanceof HTMLButtonElement &&
+              element.classList.contains("rounded-2xl"));
+      }
+      buildLobbyCardQueueSequence() {
+          const queues = this.snapshot.currentLobbyQueues ?? [];
+          const queueByType = new Map();
+          for (const queue of queues) {
+              if (queue.publicGameType === "special" ||
+                  queue.publicGameType === "ffa" ||
+                  queue.publicGameType === "team") {
+                  queueByType.set(queue.publicGameType, queue);
+              }
+          }
+          const orderedTypes = [
+              "special",
+              "ffa",
+              "team",
+          ];
+          const orderedQueues = [];
+          for (const type of orderedTypes) {
+              const queue = queueByType.get(type);
+              if (queue) {
+                  orderedQueues.push(queue);
+              }
+          }
+          const fallbackQueues = orderedQueues.length > 0
+              ? queues.filter((queue) => !orderedQueues.some((orderedQueue) => orderedQueue.gameId === queue.gameId))
+              : queues;
+          const displayQueues = [...orderedQueues, ...fallbackQueues];
+          if (displayQueues.length === 0) {
+              return [];
+          }
+          return [...displayQueues, ...displayQueues];
+      }
+      countPlayersWithClanTag(players, clanTag) {
+          const normalizedTarget = this.normalizeClanTag(clanTag);
+          if (!normalizedTarget) {
+              return 0;
+          }
+          let count = 0;
+          for (const player of players) {
+              if (this.normalizeClanTag(extractClanTag(player.name)) === normalizedTarget) {
+                  count += 1;
+              }
+          }
+          return count;
+      }
+      normalizeClanTag(clanTag) {
+          const trimmed = clanTag?.trim();
+          return trimmed && trimmed.length > 0 ? trimmed.toUpperCase() : "";
+      }
+      renderLobbyClanTagCardAugment(button, clanTag, count) {
+          const pill = this.findLobbyCardPlayerCountPill(button);
+          if (!pill) {
+              return;
+          }
+          const container = pill.parentElement ?? button;
+          const computedStyle = this.hostWindow.getComputedStyle(pill);
+          const rightOffset = Number.parseFloat(computedStyle.right || "0");
+          const gapPx = 4;
+          const pillWidth = Math.ceil(pill.getBoundingClientRect().width);
+          const clanPill = this.createUiElement("span", [
+              "absolute bottom-full mb-1 rounded px-2 py-0.5",
+              "bg-black/70 backdrop-blur-sm text-xs font-bold tracking-widest",
+              count > 0 ? "text-emerald-100" : "text-slate-300",
+          ].join(" "), `${count} [${clanTag}]`);
+          clanPill.dataset.datafrontLobbyClanPill = "true";
+          clanPill.title = `Players with your clan tag ([${clanTag}]) in this lobby`;
+          clanPill.style.right = `${rightOffset + pillWidth + gapPx}px`;
+          container.appendChild(clanPill);
+      }
+      findLobbyCardPlayerCountPill(button) {
+          const directMatch = button.querySelector("span.absolute.bottom-full.right-2");
+          if (directMatch?.isConnected) {
+              return directMatch;
+          }
+          for (const child of Array.from(button.querySelectorAll("span"))) {
+              if (child instanceof HTMLElement &&
+                  child.querySelector("svg") &&
+                  child.textContent?.includes("/")) {
+                  return child;
+              }
+          }
+          return null;
+      }
+      clearLobbyClanTagCardOverlays(root) {
+          const scope = root ?? this.hostDocument;
+          for (const pill of Array.from(scope.querySelectorAll(LOBBY_CLAN_TAG_PILL_SELECTOR))) {
+              pill.remove();
+          }
       }
       resolveOverlayTarget(selector, root) {
           if (!root.isConnected) {
@@ -11368,6 +11859,11 @@
 
   const TICK_MILLISECONDS = 100;
   const MAX_LOG_ENTRIES = 500;
+  const FEATURED_PUBLIC_GAME_ORDER = [
+      "special",
+      "ffa",
+      "team",
+  ];
   const STRUCTURE_UNIT_TYPES = new Set([
       "City",
       "Port",
@@ -11388,6 +11884,7 @@
   const TRADE_ROUTE_OVERLAY_ID = "trade-routes";
   const TRANSPORT_DESTINATION_OVERLAY_ID = "transport-destinations";
   const ATTACK_BORDER_OVERLAY_ID = "attack-borders";
+  const LOBBY_CLAN_TAG_COUNTS_OVERLAY_ID = "lobby-clan-tag-counts";
   const ATTACK_BORDER_TROOP_COMPACT_THRESHOLD = 100000;
   const ATTACK_BORDER_TROOP_COMPACT_FORMATTER = new Intl.NumberFormat("en-US", {
       notation: "compact",
@@ -11618,6 +12115,7 @@
           this.lastLobbyTeamLogKey = null;
           this.lastLiveGameTeamLogKey = null;
           this.localPlayerPublicId = null;
+          this.latestFeaturedLobbySummaries = null;
           this.hostWindow =
               globalThis.unsafeWindow ??
                   (typeof window !== "undefined" ? window : null);
@@ -11635,7 +12133,16 @@
                       ? candidate.trim()
                       : null;
           };
+          this.publicLobbiesHandler = (event) => {
+              const custom = event;
+              const payload = custom.detail?.payload;
+              const summaries = this.normalizePublicLobbyUpdatePayload(payload);
+              this.latestFeaturedLobbySummaries =
+                  summaries.length > 0 ? summaries : null;
+              this.enqueueLobbyQueueRefresh();
+          };
           this.hostDocument.addEventListener("userMeResponse", this.userMeHandler);
+          this.hostDocument.addEventListener("public-lobbies-update", this.publicLobbiesHandler);
           this.webSocketDonationCleanup = this.installWebSocketDonationHook();
           this.actionsState = this.createInitialActionsState();
           this.sidebarOverlays = [
@@ -11644,48 +12151,63 @@
                   label: "Missile trajectories",
                   description: "Draws projected missile paths from each silo to your selected Atom or Hydrogen bomb target.",
                   enabled: false,
+                  scope: "game",
               },
               {
                   id: HISTORICAL_MISSILE_OVERLAY_ID,
                   label: "Active missile trajectories",
                   description: "Shows the live flight paths for missiles currently in the air, colored by their owners.",
                   enabled: false,
+                  scope: "game",
               },
               {
                   id: MISSILE_IMPACT_OVERLAY_ID,
                   label: "Missile impact",
                   description: "Shows rotating impact circles for active missiles, colored per team.",
                   enabled: false,
+                  scope: "game",
               },
               {
                   id: TROOP_DONATION_OVERLAY_ID,
                   label: "Troop donations",
                   description: "Shows temporary arrows and labels across the map when players send troops to each other.",
                   enabled: false,
+                  scope: "game",
               },
               {
                   id: GOLD_DONATION_OVERLAY_ID,
                   label: "Gold donations",
                   description: "Shows temporary arrows and labels across the map when players send gold to each other.",
                   enabled: false,
+                  scope: "game",
               },
               {
                   id: TRADE_ROUTE_OVERLAY_ID,
                   label: "Trade ship routes",
                   description: "Displays projected trade ship paths, distances, and base gold when placing a new port.",
                   enabled: false,
+                  scope: "game",
               },
               {
                   id: TRANSPORT_DESTINATION_OVERLAY_ID,
                   label: "Transport destinations",
                   description: "Highlights destination tiles for transport ships currently moving across the map.",
                   enabled: false,
+                  scope: "game",
               },
               {
                   id: ATTACK_BORDER_OVERLAY_ID,
                   label: "Attack border labels",
                   description: "Shows active attack labels centered on the attacker side of shared territory borders.",
                   enabled: false,
+                  scope: "game",
+              },
+              {
+                  id: LOBBY_CLAN_TAG_COUNTS_OVERLAY_ID,
+                  label: "Clan tag counts",
+                  description: "Adds the count of queued players with your clan tag to each featured lobby card.",
+                  enabled: false,
+                  scope: "lobby",
               },
           ];
           this.sidebarOverlayRevision = 1;
@@ -11709,6 +12231,8 @@
           });
           if (typeof window !== "undefined") {
               window.addEventListener("beforeunload", () => {
+                  this.hostDocument.removeEventListener("userMeResponse", this.userMeHandler);
+                  this.hostDocument.removeEventListener("public-lobbies-update", this.publicLobbiesHandler);
                   this.logSubscriptionCleanup();
                   this.webSocketDonationCleanup?.();
               }, { once: true });
@@ -11928,6 +12452,7 @@
       attachActionsState(snapshot) {
           return {
               ...snapshot,
+              currentLobbyClanTag: this.resolveCurrentLobbyClanTag(),
               sidebarActions: this.actionsState,
               sidebarLogs: this.sidebarLogs.slice(),
               sidebarLogRevision: this.sidebarLogRevision,
@@ -13397,42 +13922,34 @@
                   "    state.lastJoinGameId = undefined;\n" +
                   "    state.lastJoinedGameId = undefined;\n" +
                   "  });\n" +
-                  "  const apply = (queue) => {\n" +
+                  "  const getQueueList = (queues) => {\n" +
+                  "    if (Array.isArray(queues) && queues.length > 0) {\n" +
+                  "      return queues;\n" +
+                  "    }\n" +
+                  "    if (Array.isArray(lobby.queues) && lobby.queues.length > 0) {\n" +
+                  "      return lobby.queues;\n" +
+                  "    }\n" +
+                  "    return lobby.queue ? [lobby.queue] : [];\n" +
+                  "  };\n" +
+                  "  const analyzeQueue = (queue) => {\n" +
                   "    if (!queue) {\n" +
-                  "      state.lastJoinGameId = undefined;\n" +
-                  "      state.lastJoinedGameId = undefined;\n" +
-                  "      state.lastAppliedDisplayName = undefined;\n" +
-                  "      return;\n" +
-                  "    }\n" +
-                  "    if (state.lastJoinedGameId === queue.gameId) {\n" +
-                  "      return;\n" +
-                  "    }\n" +
-                  "    if (inGame) {\n" +
-                  '      logger.info("Already in an active game; skipping join.");\n' +
-                  "      state.lastJoinGameId = undefined;\n" +
-                  "      return;\n" +
+                  "      return null;\n" +
                   "    }\n" +
                   "    if (!queue.playerTeams) {\n" +
-                  '      logger.info("Skipping FFA lobby (not a team game)");\n' +
-                  "      return;\n" +
+                  "      return null;\n" +
                   "    }\n" +
                   "    if (queue.playerCount >= queue.maxPlayers) {\n" +
-                  '      logger.info("Lobby is full; skipping join.");\n' +
-                  "      return;\n" +
+                  "      return null;\n" +
                   "    }\n" +
                   "    const players = Array.isArray(queue.players) ? queue.players : [];\n" +
                   "    if (players.length === 0) {\n" +
-                  '      logger.info("Lobby has no visible players; skipping join.");\n' +
-                  "      return;\n" +
+                  "      return null;\n" +
                   "    }\n" +
                   "    const counts = new Map();\n" +
                   "    for (const entry of players) {\n" +
                   "      const tag = lobby.extractClanTag(entry.name);\n" +
                   "      if (!tag) continue;\n" +
                   "      counts.set(tag, (counts.get(tag) ?? 0) + 1);\n" +
-                  "    }\n" +
-                  "    if (counts.size === 0) {\n" +
-                  '      logger.info("No clans detected in lobby; keeping existing name.");\n' +
                   "    }\n" +
                   "    let best = null;\n" +
                   "    for (const [tag, count] of counts.entries()) {\n" +
@@ -13453,13 +13970,53 @@
                   "      teamSize = Math.floor(queue.maxPlayers / 2);\n" +
                   "    }\n" +
                   "    if (best && teamSize > 0 && best.count >= teamSize) {\n" +
-                  "      logger.info(`Clan ${best.tag} already has ${best.count} players (team size: ${teamSize}); skipping join to avoid overfilling.`);\n" +
-                  "      return;\n" +
+                  "      return null;\n" +
                   "    }\n" +
                   "    const slotsLeft = queue.maxPlayers - queue.playerCount;\n" +
                   "    const slotThreshold = Math.ceil(queue.maxPlayers * 0.2);\n" +
                   "    if (slotsLeft > slotThreshold) {\n" +
-                  "      logger.info(`Waiting for lobby to fill more (${slotsLeft} slots remaining, waiting for ${slotThreshold} or fewer)`);\n" +
+                  "      return null;\n" +
+                  "    }\n" +
+                  "    return { queue, best, teamSize, slotsLeft, slotThreshold };\n" +
+                  "  };\n" +
+                  "  const selectQueue = (queues) => {\n" +
+                  "    let selected = null;\n" +
+                  "    for (const queue of getQueueList(queues)) {\n" +
+                  "      const candidate = analyzeQueue(queue);\n" +
+                  "      if (!candidate) {\n" +
+                  "        continue;\n" +
+                  "      }\n" +
+                  "      if (!selected) {\n" +
+                  "        selected = candidate;\n" +
+                  "        continue;\n" +
+                  "      }\n" +
+                  "      const selectedCount = selected.best?.count ?? 0;\n" +
+                  "      const candidateCount = candidate.best?.count ?? 0;\n" +
+                  "      if (candidateCount > selectedCount) {\n" +
+                  "        selected = candidate;\n" +
+                  "        continue;\n" +
+                  "      }\n" +
+                  "      if (candidateCount === selectedCount && candidate.slotsLeft < selected.slotsLeft) {\n" +
+                  "        selected = candidate;\n" +
+                  "      }\n" +
+                  "    }\n" +
+                  "    return selected;\n" +
+                  "  };\n" +
+                  "  const apply = (queues) => {\n" +
+                  "    const selected = selectQueue(queues);\n" +
+                  "    if (!selected) {\n" +
+                  "      state.lastJoinGameId = undefined;\n" +
+                  "      state.lastJoinedGameId = undefined;\n" +
+                  "      state.lastAppliedDisplayName = undefined;\n" +
+                  "      return;\n" +
+                  "    }\n" +
+                  "    const { queue, best, teamSize, slotsLeft, slotThreshold } = selected;\n" +
+                  "    if (state.lastJoinedGameId === queue.gameId) {\n" +
+                  "      return;\n" +
+                  "    }\n" +
+                  "    if (inGame) {\n" +
+                  '      logger.info("Already in an active game; skipping join.");\n' +
+                  "      state.lastJoinGameId = undefined;\n" +
                   "      return;\n" +
                   "    }\n" +
                   '    const currentName = (typeof lobby.getDisplayName === "function" && lobby.getDisplayName()) || "";\n' +
@@ -13478,16 +14035,16 @@
                   "      const joined = lobby.join(queue.gameId);\n" +
                   "      state.lastJoinGameId = queue.gameId;\n" +
                   "      if (joined) {\n" +
-                  "        logger.info(`Joining lobby ${queue.gameId} with ${nextName}`);\n" +
+                  "        logger.info(`Joining lobby ${queue.gameId} (${queue.lobbyLabel || queue.modeName}) with ${nextName}`);\n" +
                   "        state.lastJoinedGameId = queue.gameId;\n" +
                   "      } else {\n" +
                   '        logger.warn("Could not request lobby join (maybe already in-game?)");\n' +
                   "      }\n" +
                   "    }\n" +
                   "  };\n" +
-                  "  apply(snapshot.currentLobbyQueue);\n" +
-                  '  events.on("lobbyUpdated", (queue) => {\n' +
-                  "    apply(queue || lobby.queue);\n" +
+                  "  apply(snapshot.currentLobbyQueues);\n" +
+                  '  events.on("lobbiesUpdated", (queues) => {\n' +
+                  "    apply(queues);\n" +
                   "  });\n" +
                   "};",
               runMode: "event",
@@ -14527,6 +15084,7 @@
       buildActionLobbyApi() {
           return {
               queue: this.snapshot.currentLobbyQueue,
+              queues: this.snapshot.currentLobbyQueues,
               extractClanTag,
               buildNameWithClanTag: (baseName, clanTag) => this.buildDisplayNameWithClan(baseName, clanTag),
               join: (gameId) => this.requestLobbyJoin(gameId),
@@ -14541,22 +15099,78 @@
           const candidate = tag ? `[${tag}] ${safeBase}` : safeBase;
           return Array.from(candidate).slice(0, 27).join("");
       }
-      readLobbyDisplayName() {
-          if (typeof window === "undefined") {
-              return undefined;
+      splitLobbyDisplayName(displayName) {
+          const trimmed = (displayName ?? "").trim();
+          const clanTag = extractClanTag(trimmed);
+          if (!clanTag) {
+              return {
+                  baseName: trimmed,
+              };
           }
-          const readFromInput = () => {
-              const usernameInput = document.querySelector("username-input");
-              const input = usernameInput?.querySelector("input");
-              const value = input?.value?.trim();
-              return value && value.length > 0 ? value : undefined;
+          return {
+              baseName: trimmed.replace(`[${clanTag}]`, "").trim(),
+              clanTag,
           };
-          const liveValue = readFromInput();
-          if (liveValue) {
-              return liveValue;
+      }
+      isTextInputElement(value) {
+          if (!value || typeof value !== "object") {
+              return false;
+          }
+          const candidate = value;
+          return (candidate.type === "text" &&
+              typeof candidate.value === "string" &&
+              typeof candidate.dispatchEvent === "function");
+      }
+      readLobbyDisplayNameParts() {
+          if (typeof window === "undefined") {
+              return {};
+          }
+          const usernameInput = document.querySelector("username-input");
+          if (!usernameInput) {
+              const stored = readPersistedString(USERNAME_STORAGE_KEY);
+              const trimmed = stored?.trim();
+              if (!trimmed) {
+                  return {};
+              }
+              const parts = this.splitLobbyDisplayName(trimmed);
+              return {
+                  displayName: trimmed,
+                  clanTag: parts.clanTag,
+              };
+          }
+          const componentValue = typeof usernameInput.getCurrentUsername === "function"
+              ? usernameInput.getCurrentUsername().trim()
+              : "";
+          const textInputs = Array.from(usernameInput.querySelectorAll("input")).filter((input) => this.isTextInputElement(input));
+          const tagInputValue = textInputs[0]?.value?.trim();
+          const baseInputValue = textInputs[1]?.value?.trim();
+          const combinedValue = baseInputValue && baseInputValue.length > 0
+              ? this.buildDisplayNameWithClan(baseInputValue, tagInputValue)
+              : componentValue;
+          if (combinedValue && combinedValue.length > 0) {
+              const parts = this.splitLobbyDisplayName(combinedValue);
+              return {
+                  displayName: combinedValue,
+                  clanTag: tagInputValue || parts.clanTag,
+              };
           }
           const stored = readPersistedString(USERNAME_STORAGE_KEY);
           const trimmed = stored?.trim();
+          if (!trimmed) {
+              return {};
+          }
+          const parts = this.splitLobbyDisplayName(trimmed);
+          return {
+              displayName: trimmed,
+              clanTag: parts.clanTag,
+          };
+      }
+      readLobbyDisplayName() {
+          return this.readLobbyDisplayNameParts().displayName;
+      }
+      resolveCurrentLobbyClanTag() {
+          const clanTag = this.readLobbyDisplayNameParts().clanTag;
+          const trimmed = clanTag?.trim();
           return trimmed && trimmed.length > 0 ? trimmed : undefined;
       }
       requestLobbyJoin(gameId) {
@@ -14567,12 +15181,10 @@
               console.warn("Cannot join a lobby while already attached to a live game.");
               return false;
           }
-          const target = (gameId ?? this.snapshot.currentLobbyQueue?.gameId)?.trim();
+          const fallbackQueue = this.snapshot.currentLobbyQueues?.[0] ?? this.snapshot.currentLobbyQueue;
+          const target = (gameId ?? fallbackQueue?.gameId)?.trim();
           if (!target) {
               return false;
-          }
-          if (this.tryJoinViaLobbyElement(target)) {
-              return true;
           }
           const clientID = this.generateLobbyClientId();
           try {
@@ -14587,30 +15199,6 @@
           }
           catch (error) {
               sidebarLogger.error("Failed to dispatch lobby join request", error);
-              return false;
-          }
-      }
-      tryJoinViaLobbyElement(target) {
-          const element = this.hostDocument.querySelector("public-lobby");
-          if (!element) {
-              return false;
-          }
-          const lobbies = element.lobbies;
-          if (!Array.isArray(lobbies)) {
-              return false;
-          }
-          const match = lobbies.find((entry) => typeof entry?.gameID === "string" && entry.gameID === target);
-          const clickHandler = element.lobbyClicked;
-          if (!match || typeof clickHandler !== "function") {
-              return false;
-          }
-          try {
-              clickHandler.call(element, match);
-              sidebarLogger.info(`Requested lobby join for ${target} via lobby component interaction.`);
-              return true;
-          }
-          catch (error) {
-              console.warn("Failed to trigger lobby join via lobby component", error);
               return false;
           }
       }
@@ -14637,14 +15225,35 @@
               return false;
           }
           const normalized = Array.from(trimmed).slice(0, 27).join("");
+          const { baseName, clanTag } = this.splitLobbyDisplayName(normalized);
           writePersistedString(USERNAME_STORAGE_KEY, normalized);
           const usernameInput = document.querySelector("username-input");
-          const input = usernameInput?.querySelector("input");
-          if (input) {
-              input.value = normalized;
-              input.dispatchEvent(new Event("input", { bubbles: true }));
+          const textInputs = Array.from(usernameInput?.querySelectorAll("input") ?? []).filter((input) => this.isTextInputElement(input));
+          if (textInputs.length >= 2) {
+              const tagInput = textInputs[0];
+              const baseInput = textInputs[1];
+              if (tagInput) {
+                  tagInput.value = clanTag ?? "";
+                  tagInput.dispatchEvent(new Event("input", { bubbles: true }));
+              }
+              if (baseInput) {
+                  baseInput.value = baseName;
+                  baseInput.dispatchEvent(new Event("input", { bubbles: true }));
+              }
+          }
+          else {
+              const input = textInputs[0];
+              if (input) {
+                  input.value = normalized;
+                  input.dispatchEvent(new Event("input", { bubbles: true }));
+              }
           }
           sidebarLogger.info(`Updated lobby display name to "${normalized}".`);
+          const nextSnapshot = this.attachActionsState({ ...this.snapshot });
+          if (nextSnapshot.currentLobbyClanTag !== this.snapshot.currentLobbyClanTag) {
+              this.snapshot = nextSnapshot;
+              this.notify();
+          }
           return true;
       }
       normalizeTargetIds(target) {
@@ -16524,33 +17133,35 @@
               this.clearLobbyQueueSnapshot();
               return;
           }
-          const lobby = await this.resolveFeaturedLobby();
+          const lobbies = await this.resolveFeaturedLobbies();
           if (this.game) {
               this.clearLobbyQueueSnapshot();
               return;
           }
-          if (!lobby) {
+          if (lobbies.length === 0) {
               this.clearLobbyQueueSnapshot();
               return;
           }
-          const queue = await this.buildLobbyQueueInfo(lobby);
+          const queueCandidates = await Promise.all(lobbies.map((lobby) => this.buildLobbyQueueInfo(lobby)));
           if (this.game) {
               this.clearLobbyQueueSnapshot();
               return;
           }
-          if (!queue) {
+          const queues = queueCandidates.filter((queue) => Boolean(queue));
+          if (queues.length === 0) {
               this.clearLobbyQueueSnapshot();
               return;
           }
-          this.applyLobbyQueue(queue);
+          this.applyLobbyQueues(queues);
       }
       clearLobbyQueueSnapshot() {
           const hadQueue = Boolean(this.snapshot.currentLobbyQueue);
+          const hadQueues = (this.snapshot.currentLobbyQueues?.length ?? 0) > 0;
           const shouldDropLobbyPlayers = !this.game;
           const hadLobbyPlayers = shouldDropLobbyPlayers
               ? this.snapshot.players.some((player) => player.isLobbyPlayer)
               : false;
-          if (!hadQueue && !hadLobbyPlayers) {
+          if (!hadQueue && !hadQueues && !hadLobbyPlayers) {
               return;
           }
           this.lastLobbyTeamLogKey = null;
@@ -16564,31 +17175,31 @@
               ...this.snapshot,
               players,
               currentLobbyQueue: undefined,
+              currentLobbyQueues: undefined,
           });
-          if (hadQueue) {
-              this.emitActionEvent("lobbyUpdated", null);
+          if (hadQueue || hadQueues) {
+              this.emitActionEvent("lobbiesUpdated", []);
           }
           this.snapshot = next;
           this.notify();
       }
-      async resolveFeaturedLobby() {
-          const fromElement = this.readLobbyFromElement();
-          if (fromElement) {
-              return fromElement;
+      async resolveFeaturedLobbies() {
+          if (this.latestFeaturedLobbySummaries?.length) {
+              return this.latestFeaturedLobbySummaries;
+          }
+          const fromSelector = this.readFeaturedLobbiesFromSelector();
+          if (fromSelector.length > 0) {
+              return fromSelector;
           }
           const summaries = await this.fetchPublicLobbySummaries();
-          return summaries.length ? summaries[0] : null;
+          return summaries;
       }
-      readLobbyFromElement() {
-          const element = this.hostDocument.querySelector("public-lobby");
+      readFeaturedLobbiesFromSelector() {
+          const element = this.hostDocument.querySelector("game-mode-selector");
           if (!element) {
-              return null;
+              return [];
           }
-          const lobbies = element.lobbies;
-          if (!Array.isArray(lobbies) || lobbies.length === 0) {
-              return null;
-          }
-          return this.normalizeLobbySummary(lobbies[0]);
+          return this.normalizePublicLobbyUpdatePayload(element.lobbies);
       }
       normalizeLobbySummary(input) {
           if (!input ||
@@ -16604,6 +17215,14 @@
           }
           if (typeof input.msUntilStart === "number") {
               summary.msUntilStart = input.msUntilStart;
+          }
+          if (typeof input.startsAt === "number" && Number.isFinite(input.startsAt)) {
+              summary.startsAt = input.startsAt;
+          }
+          if (input.publicGameType === "ffa" ||
+              input.publicGameType === "team" ||
+              input.publicGameType === "special") {
+              summary.publicGameType = input.publicGameType;
           }
           if (input.gameConfig) {
               summary.gameConfig = {
@@ -16624,6 +17243,74 @@
           }
           return summary;
       }
+      normalizePublicLobbyUpdatePayload(payload) {
+          if (!payload || typeof payload !== "object") {
+              return [];
+          }
+          const candidate = payload;
+          const summaries = [];
+          const serverTime = typeof candidate.serverTime === "number" &&
+              Number.isFinite(candidate.serverTime)
+              ? candidate.serverTime
+              : undefined;
+          for (const publicGameType of FEATURED_PUBLIC_GAME_ORDER) {
+              const entries = candidate.games?.[publicGameType];
+              if (!Array.isArray(entries)) {
+                  continue;
+              }
+              for (const entry of entries) {
+                  const normalized = this.normalizeLobbySummary({
+                      ...entry,
+                      publicGameType,
+                      startsAt: typeof entry?.startsAt === "number" &&
+                          Number.isFinite(entry.startsAt)
+                          ? entry.startsAt
+                          : typeof entry?.msUntilStart === "number" &&
+                              Number.isFinite(entry.msUntilStart) &&
+                              serverTime !== undefined
+                              ? serverTime + Math.max(0, entry.msUntilStart)
+                              : undefined,
+                  });
+                  if (normalized) {
+                      summaries.push(normalized);
+                  }
+              }
+          }
+          return this.prioritizeLobbySummaries(summaries);
+      }
+      prioritizeLobbySummaries(summaries) {
+          const unique = new Map();
+          for (const summary of summaries) {
+              if (!unique.has(summary.gameID)) {
+                  unique.set(summary.gameID, summary);
+              }
+          }
+          const ordered = Array.from(unique.values());
+          const prioritized = [];
+          for (const publicGameType of FEATURED_PUBLIC_GAME_ORDER) {
+              const match = ordered.find((summary) => summary.publicGameType === publicGameType);
+              if (match) {
+                  prioritized.push(match);
+              }
+          }
+          for (const summary of ordered) {
+              if (prioritized.length >= FEATURED_PUBLIC_GAME_ORDER.length) {
+                  break;
+              }
+              if (!prioritized.some((entry) => entry.gameID === summary.gameID)) {
+                  prioritized.push(summary);
+              }
+          }
+          return prioritized;
+      }
+      formatLobbyQueueLabel(mapName, modeName) {
+          const safeMapName = mapName.trim();
+          const safeModeName = modeName.trim();
+          if (safeMapName && safeModeName) {
+              return `${safeMapName} • ${safeModeName}`;
+          }
+          return safeMapName || safeModeName || "Lobby queue";
+      }
       async fetchPublicLobbySummaries() {
           if (typeof fetch !== "function") {
               return [];
@@ -16634,6 +17321,10 @@
                   cache: "no-store",
               });
               if (!response.ok) {
+                  return [];
+              }
+              const contentType = response.headers.get("content-type") ?? "";
+              if (!contentType.toLowerCase().includes("json")) {
                   return [];
               }
               const payload = (await response.json());
@@ -16647,7 +17338,7 @@
                       summaries.push(normalized);
                   }
               }
-              return summaries;
+              return this.prioritizeLobbySummaries(summaries);
           }
           catch (error) {
               console.warn("Failed to fetch public lobby list", error);
@@ -16676,16 +17367,19 @@
               ? Math.max(inferredMaxPlayers, playerCount)
               : Math.max(playerCount, 0);
           const startsAtMs = this.getLobbyStartTime(summary, details);
+          const lobbyLabel = this.formatLobbyQueueLabel(mapName, modeName);
           return {
               gameId: summary.gameID,
               mapName,
               modeName,
+              lobbyLabel,
               playerCount,
               maxPlayers,
               startsAtMs,
               updatedAtMs: now,
               players,
               playerTeams,
+              publicGameType: summary.publicGameType,
           };
       }
       deriveLobbyPlayerList(details) {
@@ -16703,9 +17397,7 @@
       }
       createLobbyQueuePlayers(queue) {
           const now = Date.now();
-          const fallbackTeamName = queue.modeName && queue.modeName !== "Unknown mode"
-              ? `${queue.modeName} lobby`
-              : "Lobby queue";
+          const fallbackTeamName = queue.lobbyLabel || "Lobby queue";
           const normalizedPlayers = queue.players.map((entry, index) => {
               const trimmedName = entry.name?.trim() ?? "Anonymous player";
               const safeName = trimmedName.length > 0 ? trimmedName : "Anonymous player";
@@ -16727,7 +17419,9 @@
           return normalizedPlayers.map((player) => {
               const predictedTeam = predictedTeams.get(player.id);
               const wasKicked = predictedTeam === LOBBY_TEAM_KICKED;
-              const teamLabel = !predictedTeam || wasKicked ? fallbackTeamName : predictedTeam;
+              const teamLabel = !predictedTeam || wasKicked
+                  ? fallbackTeamName
+                  : `${fallbackTeamName} • ${predictedTeam}`;
               return {
                   id: player.id,
                   name: player.name,
@@ -16754,6 +17448,8 @@
                   alliances: [],
                   lastUpdatedMs: now,
                   isLobbyPlayer: true,
+                  lobbyGameId: queue.gameId,
+                  lobbyLabel: queue.lobbyLabel,
                   lobbyPosition: player.lobbyPosition,
                   wasKickedFromLobby: wasKicked,
               };
@@ -16850,31 +17546,43 @@
               return { workerCount: DEFAULT_WORKER_COUNT };
           }
       }
-      applyLobbyQueue(queue) {
-          const players = this.createLobbyQueuePlayers(queue);
+      applyLobbyQueues(queues) {
+          const normalizedQueues = [...queues];
+          const players = normalizedQueues.flatMap((queue) => this.createLobbyQueuePlayers(queue));
+          const primaryQueue = normalizedQueues[0];
           const nextSnapshot = this.attachActionsState({
               ...this.snapshot,
               players,
-              currentLobbyQueue: queue,
+              currentLobbyQueue: primaryQueue,
+              currentLobbyQueues: normalizedQueues,
               currentTimeMs: Date.now(),
           });
-          const queueChanged = !this.areLobbyQueuesEqual(this.snapshot.currentLobbyQueue, queue);
+          const queuesChanged = !this.areLobbyQueueListsEqual(this.snapshot.currentLobbyQueues, normalizedQueues);
           const timeChanged = Math.abs(nextSnapshot.currentTimeMs - this.snapshot.currentTimeMs) >=
               1000;
-          if (queueChanged || timeChanged) {
-              if (queueChanged) {
-                  this.logLobbyTeamPredictions(queue, players);
-                  this.emitActionEvent("lobbyUpdated", queue);
+          if (queuesChanged || timeChanged) {
+              if (queuesChanged) {
+                  this.logLobbyTeamPredictions(normalizedQueues, players);
+                  for (let index = 0; index < normalizedQueues.length; index += 1) {
+                      const queue = normalizedQueues[index];
+                      this.emitActionEvent("lobbyQueueUpdated", {
+                          queue,
+                          index,
+                          total: normalizedQueues.length,
+                      });
+                  }
+                  this.emitActionEvent("lobbiesUpdated", normalizedQueues);
               }
               this.snapshot = nextSnapshot;
               this.notify();
           }
       }
-      logLobbyTeamPredictions(queue, players) {
+      logLobbyTeamPredictions(queues, players) {
           if (players.length === 0) {
               return;
           }
-          const signature = this.buildPlayerTeamSignature(players, queue.gameId);
+          const scope = queues.map((queue) => queue.gameId).join(",");
+          const signature = this.buildPlayerTeamSignature(players, scope);
           if (this.lastLobbyTeamLogKey === signature) {
               return;
           }
@@ -16902,9 +17610,12 @@
           if (previous.gameId !== next.gameId ||
               previous.mapName !== next.mapName ||
               previous.modeName !== next.modeName ||
+              previous.lobbyLabel !== next.lobbyLabel ||
               previous.playerCount !== next.playerCount ||
               previous.maxPlayers !== next.maxPlayers ||
-              previous.startsAtMs !== next.startsAtMs) {
+              previous.startsAtMs !== next.startsAtMs ||
+              previous.playerTeams !== next.playerTeams ||
+              previous.publicGameType !== next.publicGameType) {
               return false;
           }
           if (previous.players.length !== next.players.length) {
@@ -16919,7 +17630,28 @@
           }
           return true;
       }
+      areLobbyQueueListsEqual(previous, next) {
+          const left = previous ?? [];
+          const right = next ?? [];
+          if (left.length !== right.length) {
+              return false;
+          }
+          for (let index = 0; index < left.length; index += 1) {
+              if (!this.areLobbyQueuesEqual(left[index], right[index])) {
+                  return false;
+              }
+          }
+          return true;
+      }
       getLobbyStartTime(summary, details) {
+          if (typeof summary.startsAt === "number" &&
+              Number.isFinite(summary.startsAt)) {
+              return summary.startsAt;
+          }
+          if (typeof details?.startsAt === "number" &&
+              Number.isFinite(details.startsAt)) {
+              return details.startsAt;
+          }
           if (typeof details?.msUntilStart === "number" &&
               Number.isFinite(details.msUntilStart)) {
               return Date.now() + Math.max(0, details.msUntilStart);
@@ -16934,7 +17666,7 @@
   DataStore.wsDonationListeners = new Set();
   DataStore.wsDonationHooksByWindow = new WeakMap();
 
-  const datafrontTailwindCss = `#datafront .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border-width:0}#datafront .pointer-events-none{pointer-events:none}#datafront .visible{visibility:visible}#datafront .static{position:static}#datafront .fixed{position:fixed}#datafront .absolute{position:absolute}#datafront .relative{position:relative}#datafront .sticky{position:sticky}#datafront .left-0{left:0}#datafront .left-1{left:.25rem}#datafront .right-0{right:0}#datafront .right-2{right:.5rem}#datafront .top-0{top:0}#datafront .top-1{top:.25rem}#datafront .top-1\\/2{top:50%}#datafront .z-10{z-index:10}#datafront .z-\\[2147483646\\]{z-index:2147483646}#datafront .z-\\[2147483647\\]{z-index:2147483647}#datafront .-mx-px{margin-left:-1px;margin-right:-1px}#datafront .-my-px{margin-top:-1px;margin-bottom:-1px}#datafront .mt-2{margin-top:.5rem}#datafront .mt-3{margin-top:.75rem}#datafront .block{display:block}#datafront .flex{display:flex}#datafront .inline-flex{display:inline-flex}#datafront .\\!table{display:table!important}#datafront .table{display:table}#datafront .grid{display:grid}#datafront .hidden{display:none}#datafront .h-10{height:2.5rem}#datafront .h-12{height:3rem}#datafront .h-2{height:.5rem}#datafront .h-3{height:.75rem}#datafront .h-3\\.5{height:.875rem}#datafront .h-4{height:1rem}#datafront .h-5{height:1.25rem}#datafront .h-6{height:1.5rem}#datafront .h-7{height:1.75rem}#datafront .h-8{height:2rem}#datafront .h-full{height:100%}#datafront .h-px{height:1px}#datafront .min-h-0{min-height:0}#datafront .min-h-\\[220px\\]{min-height:220px}#datafront .min-h-\\[72px\\]{min-height:72px}#datafront .min-h-full{min-height:100%}#datafront .w-10{width:2.5rem}#datafront .w-12{width:3rem}#datafront .w-2{width:.5rem}#datafront .w-3{width:.75rem}#datafront .w-3\\.5{width:.875rem}#datafront .w-32{width:8rem}#datafront .w-36{width:9rem}#datafront .w-4{width:1rem}#datafront .w-40{width:10rem}#datafront .w-44{width:11rem}#datafront .w-48{width:12rem}#datafront .w-5{width:1.25rem}#datafront .w-6{width:1.5rem}#datafront .w-7{width:1.75rem}#datafront .w-full{width:100%}#datafront .w-px{width:1px}#datafront .min-w-0{min-width:0}#datafront .min-w-\\[160px\\]{min-width:160px}#datafront .min-w-\\[200px\\]{min-width:200px}#datafront .min-w-\\[8rem\\]{min-width:8rem}#datafront .min-w-full{min-width:100%}#datafront .max-w-\\[10rem\\]{max-width:10rem}#datafront .max-w-full{max-width:100%}#datafront .max-w-xs{max-width:20rem}#datafront .flex-1{flex:1 1 0%}#datafront .shrink-0{flex-shrink:0}#datafront .border-collapse{border-collapse:collapse}#datafront .-translate-y-1{--tw-translate-y:-0.25rem}#datafront .-translate-y-1,#datafront .-translate-y-1\\/2{transform:translate(var(--tw-translate-x),var(--tw-translate-y)) rotate(var(--tw-rotate)) skewX(var(--tw-skew-x)) skewY(var(--tw-skew-y)) scaleX(var(--tw-scale-x)) scaleY(var(--tw-scale-y))}#datafront .-translate-y-1\\/2{--tw-translate-y:-50%}#datafront .translate-x-full{--tw-translate-x:100%;transform:translate(var(--tw-translate-x),var(--tw-translate-y)) rotate(var(--tw-rotate)) skewX(var(--tw-skew-x)) skewY(var(--tw-skew-y)) scaleX(var(--tw-scale-x)) scaleY(var(--tw-scale-y))}#datafront .\\!transform{transform:translate(var(--tw-translate-x),var(--tw-translate-y)) rotate(var(--tw-rotate)) skewX(var(--tw-skew-x)) skewY(var(--tw-skew-y)) scaleX(var(--tw-scale-x)) scaleY(var(--tw-scale-y))!important}#datafront .transform{transform:translate(var(--tw-translate-x),var(--tw-translate-y)) rotate(var(--tw-rotate)) skewX(var(--tw-skew-x)) skewY(var(--tw-skew-y)) scaleX(var(--tw-scale-x)) scaleY(var(--tw-scale-y))}#datafront .cursor-col-resize{cursor:col-resize}#datafront .cursor-default{cursor:default}#datafront .cursor-not-allowed{cursor:not-allowed}#datafront .cursor-pointer{cursor:pointer}#datafront .cursor-row-resize{cursor:row-resize}#datafront .select-none{-webkit-user-select:none;-moz-user-select:none;user-select:none}#datafront .resize{resize:both}#datafront .appearance-none{-webkit-appearance:none;-moz-appearance:none;appearance:none}#datafront .flex-row{flex-direction:row}#datafront .flex-col{flex-direction:column}#datafront .flex-wrap{flex-wrap:wrap}#datafront .items-start{align-items:flex-start}#datafront .items-end{align-items:flex-end}#datafront .items-center{align-items:center}#datafront .items-baseline{align-items:baseline}#datafront .justify-start{justify-content:flex-start}#datafront .justify-end{justify-content:flex-end}#datafront .justify-center{justify-content:center}#datafront .justify-between{justify-content:space-between}#datafront .gap-1{gap:.25rem}#datafront .gap-2{gap:.5rem}#datafront .gap-3{gap:.75rem}#datafront .gap-4{gap:1rem}#datafront .gap-6{gap:1.5rem}#datafront :is(.space-y-1>:not([hidden])~:not([hidden])){--tw-space-y-reverse:0;margin-top:calc(.25rem*(1 - var(--tw-space-y-reverse)));margin-bottom:calc(.25rem*var(--tw-space-y-reverse))}#datafront :is(.space-y-2>:not([hidden])~:not([hidden])){--tw-space-y-reverse:0;margin-top:calc(.5rem*(1 - var(--tw-space-y-reverse)));margin-bottom:calc(.5rem*var(--tw-space-y-reverse))}#datafront :is(.space-y-3>:not([hidden])~:not([hidden])){--tw-space-y-reverse:0;margin-top:calc(.75rem*(1 - var(--tw-space-y-reverse)));margin-bottom:calc(.75rem*var(--tw-space-y-reverse))}#datafront :is(.space-y-4>:not([hidden])~:not([hidden])){--tw-space-y-reverse:0;margin-top:calc(1rem*(1 - var(--tw-space-y-reverse)));margin-bottom:calc(1rem*var(--tw-space-y-reverse))}#datafront .overflow-auto{overflow:auto}#datafront .overflow-hidden{overflow:hidden}#datafront .overflow-x-auto{overflow-x:auto}#datafront .overflow-y-hidden{overflow-y:hidden}#datafront .truncate{overflow:hidden;text-overflow:ellipsis}#datafront .truncate,#datafront .whitespace-nowrap{white-space:nowrap}#datafront .whitespace-pre-wrap{white-space:pre-wrap}#datafront .break-words{overflow-wrap:break-word}#datafront .rounded{border-radius:.25rem}#datafront .rounded-full{border-radius:9999px}#datafront .rounded-lg{border-radius:.5rem}#datafront .rounded-md{border-radius:.375rem}#datafront .rounded-sm{border-radius:.125rem}#datafront .rounded-r-full{border-top-right-radius:9999px;border-bottom-right-radius:9999px}#datafront .border{border-width:1px}#datafront .border-b{border-bottom-width:1px}#datafront .border-r{border-right-width:1px}#datafront .border-t{border-top-width:1px}#datafront .border-none{border-style:none}#datafront .\\!border-rose-500{--tw-border-opacity:1!important;border-color:rgb(244 63 94/var(--tw-border-opacity,1))!important}#datafront .border-amber-400{--tw-border-opacity:1;border-color:rgb(251 191 36/var(--tw-border-opacity,1))}#datafront .border-amber-400\\/40{border-color:rgba(251,191,36,.4)}#datafront .border-emerald-400{--tw-border-opacity:1;border-color:rgb(52 211 153/var(--tw-border-opacity,1))}#datafront .border-emerald-400\\/60{border-color:rgba(52,211,153,.6)}#datafront .border-rose-500{--tw-border-opacity:1;border-color:rgb(244 63 94/var(--tw-border-opacity,1))}#datafront .border-rose-500\\/40{border-color:rgba(244,63,94,.4)}#datafront .border-rose-500\\/50{border-color:rgba(244,63,94,.5)}#datafront .border-sky-400{--tw-border-opacity:1;border-color:rgb(56 189 248/var(--tw-border-opacity,1))}#datafront .border-sky-400\\/40{border-color:rgba(56,189,248,.4)}#datafront .border-sky-500{--tw-border-opacity:1;border-color:rgb(14 165 233/var(--tw-border-opacity,1))}#datafront .border-sky-500\\/40{border-color:rgba(14,165,233,.4)}#datafront .border-sky-500\\/50{border-color:rgba(14,165,233,.5)}#datafront .border-sky-500\\/60{border-color:rgba(14,165,233,.6)}#datafront .border-sky-500\\/70{border-color:rgba(14,165,233,.7)}#datafront .border-slate-600{--tw-border-opacity:1;border-color:rgb(71 85 105/var(--tw-border-opacity,1))}#datafront .border-slate-600\\/50{border-color:rgba(71,85,105,.5)}#datafront .border-slate-700{--tw-border-opacity:1;border-color:rgb(51 65 85/var(--tw-border-opacity,1))}#datafront .border-slate-700\\/70{border-color:rgba(51,65,85,.7)}#datafront .border-slate-700\\/80{border-color:rgba(51,65,85,.8)}#datafront .border-slate-800{--tw-border-opacity:1;border-color:rgb(30 41 59/var(--tw-border-opacity,1))}#datafront .border-slate-800\\/60{border-color:rgba(30,41,59,.6)}#datafront .border-slate-800\\/70{border-color:rgba(30,41,59,.7)}#datafront .border-slate-800\\/80{border-color:rgba(30,41,59,.8)}#datafront .border-slate-900{--tw-border-opacity:1;border-color:rgb(15 23 42/var(--tw-border-opacity,1))}#datafront .border-slate-900\\/70{border-color:rgba(15,23,42,.7)}#datafront .border-slate-900\\/80{border-color:rgba(15,23,42,.8)}#datafront .bg-amber-400{--tw-bg-opacity:1;background-color:rgb(251 191 36/var(--tw-bg-opacity,1))}#datafront .bg-amber-400\\/15{background-color:rgba(251,191,36,.15)}#datafront .bg-amber-500{--tw-bg-opacity:1;background-color:rgb(245 158 11/var(--tw-bg-opacity,1))}#datafront .bg-amber-500\\/20{background-color:rgba(245,158,11,.2)}#datafront .bg-emerald-100{--tw-bg-opacity:1;background-color:rgb(209 250 229/var(--tw-bg-opacity,1))}#datafront .bg-emerald-500{--tw-bg-opacity:1;background-color:rgb(16 185 129/var(--tw-bg-opacity,1))}#datafront .bg-emerald-500\\/20{background-color:rgba(16,185,129,.2)}#datafront .bg-emerald-500\\/40{background-color:rgba(16,185,129,.4)}#datafront .bg-red-500{--tw-bg-opacity:1;background-color:rgb(239 68 68/var(--tw-bg-opacity,1))}#datafront .bg-rose-500{--tw-bg-opacity:1;background-color:rgb(244 63 94/var(--tw-bg-opacity,1))}#datafront .bg-rose-500\\/10{background-color:rgba(244,63,94,.1)}#datafront .bg-rose-500\\/15{background-color:rgba(244,63,94,.15)}#datafront .bg-rose-500\\/20{background-color:rgba(244,63,94,.2)}#datafront .bg-sky-400{--tw-bg-opacity:1;background-color:rgb(56 189 248/var(--tw-bg-opacity,1))}#datafront .bg-sky-400\\/15{background-color:rgba(56,189,248,.15)}#datafront .bg-sky-500{--tw-bg-opacity:1;background-color:rgb(14 165 233/var(--tw-bg-opacity,1))}#datafront .bg-sky-500\\/10{background-color:rgba(14,165,233,.1)}#datafront .bg-sky-500\\/20{background-color:rgba(14,165,233,.2)}#datafront .bg-slate-300{--tw-bg-opacity:1;background-color:rgb(203 213 225/var(--tw-bg-opacity,1))}#datafront .bg-slate-600{--tw-bg-opacity:1;background-color:rgb(71 85 105/var(--tw-bg-opacity,1))}#datafront .bg-slate-600\\/60{background-color:rgba(71,85,105,.6)}#datafront .bg-slate-700{--tw-bg-opacity:1;background-color:rgb(51 65 85/var(--tw-bg-opacity,1))}#datafront .bg-slate-700\\/60{background-color:rgba(51,65,85,.6)}#datafront .bg-slate-800{--tw-bg-opacity:1;background-color:rgb(30 41 59/var(--tw-bg-opacity,1))}#datafront .bg-slate-800\\/50{background-color:rgba(30,41,59,.5)}#datafront .bg-slate-800\\/60{background-color:rgba(30,41,59,.6)}#datafront .bg-slate-800\\/70{background-color:rgba(30,41,59,.7)}#datafront .bg-slate-800\\/80{background-color:rgba(30,41,59,.8)}#datafront .bg-slate-900{--tw-bg-opacity:1;background-color:rgb(15 23 42/var(--tw-bg-opacity,1))}#datafront .bg-slate-900\\/40{background-color:rgba(15,23,42,.4)}#datafront .bg-slate-900\\/70{background-color:rgba(15,23,42,.7)}#datafront .bg-slate-900\\/80{background-color:rgba(15,23,42,.8)}#datafront .bg-slate-900\\/90{background-color:rgba(15,23,42,.9)}#datafront .bg-slate-900\\/95{background-color:rgba(15,23,42,.95)}#datafront .bg-slate-950{--tw-bg-opacity:1;background-color:rgb(2 6 23/var(--tw-bg-opacity,1))}#datafront .bg-slate-950\\/40{background-color:rgba(2,6,23,.4)}#datafront .bg-slate-950\\/60{background-color:rgba(2,6,23,.6)}#datafront .bg-slate-950\\/70{background-color:rgba(2,6,23,.7)}#datafront .bg-slate-950\\/80{background-color:rgba(2,6,23,.8)}#datafront .bg-slate-950\\/95{background-color:rgba(2,6,23,.95)}#datafront .bg-transparent{background-color:transparent}#datafront .bg-none{background-image:none}#datafront .p-3{padding:.75rem}#datafront .p-4{padding:1rem}#datafront .p-6{padding:1.5rem}#datafront .px-0{padding-left:0;padding-right:0}#datafront .px-1{padding-left:.25rem;padding-right:.25rem}#datafront .px-1\\.5{padding-left:.375rem;padding-right:.375rem}#datafront .px-2{padding-left:.5rem;padding-right:.5rem}#datafront .px-2\\.5{padding-left:.625rem;padding-right:.625rem}#datafront .px-3{padding-left:.75rem;padding-right:.75rem}#datafront .px-4{padding-left:1rem;padding-right:1rem}#datafront .py-0{padding-top:0;padding-bottom:0}#datafront .py-0\\.5{padding-top:.125rem;padding-bottom:.125rem}#datafront .py-1{padding-top:.25rem;padding-bottom:.25rem}#datafront .py-1\\.5{padding-top:.375rem;padding-bottom:.375rem}#datafront .py-2{padding-top:.5rem;padding-bottom:.5rem}#datafront .py-4{padding-top:1rem;padding-bottom:1rem}#datafront .py-8{padding-top:2rem;padding-bottom:2rem}#datafront .pb-3{padding-bottom:.75rem}#datafront .pr-7{padding-right:1.75rem}#datafront .pt-4{padding-top:1rem}#datafront .text-left{text-align:left}#datafront .text-center{text-align:center}#datafront .text-right{text-align:right}#datafront .align-top{vertical-align:top}#datafront .font-mono{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,Liberation Mono,Courier New,monospace}#datafront .text-\\[0\\.65rem\\]{font-size:.65rem}#datafront .text-\\[0\\.6rem\\]{font-size:.6rem}#datafront .text-\\[0\\.75rem\\]{font-size:.75rem}#datafront .text-\\[0\\.7rem\\]{font-size:.7rem}#datafront .text-base{font-size:1rem;line-height:1.5rem}#datafront .text-lg{font-size:1.125rem;line-height:1.75rem}#datafront .text-sm{font-size:.875rem;line-height:1.25rem}#datafront .text-xs{font-size:.75rem;line-height:1rem}#datafront .font-medium{font-weight:500}#datafront .font-semibold{font-weight:600}#datafront .uppercase{text-transform:uppercase}#datafront .capitalize{text-transform:capitalize}#datafront .italic{font-style:italic}#datafront .leading-none{line-height:1}#datafront .tracking-wide{letter-spacing:.025em}#datafront .text-amber-200{--tw-text-opacity:1;color:rgb(253 230 138/var(--tw-text-opacity,1))}#datafront .text-amber-300{--tw-text-opacity:1;color:rgb(252 211 77/var(--tw-text-opacity,1))}#datafront .text-emerald-200{--tw-text-opacity:1;color:rgb(167 243 208/var(--tw-text-opacity,1))}#datafront .text-inherit{color:inherit}#datafront .text-rose-200{--tw-text-opacity:1;color:rgb(254 205 211/var(--tw-text-opacity,1))}#datafront .text-rose-400{--tw-text-opacity:1;color:rgb(251 113 133/var(--tw-text-opacity,1))}#datafront .text-sky-100{--tw-text-opacity:1;color:rgb(224 242 254/var(--tw-text-opacity,1))}#datafront .text-sky-200{--tw-text-opacity:1;color:rgb(186 230 253/var(--tw-text-opacity,1))}#datafront .text-sky-300{--tw-text-opacity:1;color:rgb(125 211 252/var(--tw-text-opacity,1))}#datafront .text-sky-400{--tw-text-opacity:1;color:rgb(56 189 248/var(--tw-text-opacity,1))}#datafront .text-slate-100{--tw-text-opacity:1;color:rgb(241 245 249/var(--tw-text-opacity,1))}#datafront .text-slate-200{--tw-text-opacity:1;color:rgb(226 232 240/var(--tw-text-opacity,1))}#datafront .text-slate-300{--tw-text-opacity:1;color:rgb(203 213 225/var(--tw-text-opacity,1))}#datafront .text-slate-400{--tw-text-opacity:1;color:rgb(148 163 184/var(--tw-text-opacity,1))}#datafront .text-slate-50{--tw-text-opacity:1;color:rgb(248 250 252/var(--tw-text-opacity,1))}#datafront .text-slate-500{--tw-text-opacity:1;color:rgb(100 116 139/var(--tw-text-opacity,1))}#datafront .text-white{--tw-text-opacity:1;color:rgb(255 255 255/var(--tw-text-opacity,1))}#datafront .opacity-40{opacity:.4}#datafront .opacity-50{opacity:.5}#datafront .shadow{--tw-shadow:0 1px 3px 0 rgba(0,0,0,.1),0 1px 2px -1px rgba(0,0,0,.1);--tw-shadow-colored:0 1px 3px 0 var(--tw-shadow-color),0 1px 2px -1px var(--tw-shadow-color)}#datafront .shadow,#datafront .shadow-2xl{box-shadow:var(--tw-ring-offset-shadow,0 0 #0000),var(--tw-ring-shadow,0 0 #0000),var(--tw-shadow)}#datafront .shadow-2xl{--tw-shadow:0 25px 50px -12px rgba(0,0,0,.25);--tw-shadow-colored:0 25px 50px -12px var(--tw-shadow-color)}#datafront .shadow-inner{--tw-shadow:inset 0 2px 4px 0 rgba(0,0,0,.05);--tw-shadow-colored:inset 0 2px 4px 0 var(--tw-shadow-color)}#datafront .shadow-inner,#datafront .shadow-xl{box-shadow:var(--tw-ring-offset-shadow,0 0 #0000),var(--tw-ring-shadow,0 0 #0000),var(--tw-shadow)}#datafront .shadow-xl{--tw-shadow:0 20px 25px -5px rgba(0,0,0,.1),0 8px 10px -6px rgba(0,0,0,.1);--tw-shadow-colored:0 20px 25px -5px var(--tw-shadow-color),0 8px 10px -6px var(--tw-shadow-color)}#datafront .ring-0{--tw-ring-offset-shadow:var(--tw-ring-inset) 0 0 0 var(--tw-ring-offset-width) var(--tw-ring-offset-color);--tw-ring-shadow:var(--tw-ring-inset) 0 0 0 calc(var(--tw-ring-offset-width)) var(--tw-ring-color);box-shadow:var(--tw-ring-offset-shadow),var(--tw-ring-shadow),var(--tw-shadow,0 0 #0000)}#datafront .ring-sky-500{--tw-ring-opacity:1;--tw-ring-color:rgb(14 165 233/var(--tw-ring-opacity,1))}#datafront .blur{--tw-blur:blur(8px);filter:var(--tw-blur) var(--tw-brightness) var(--tw-contrast) var(--tw-grayscale) var(--tw-hue-rotate) var(--tw-invert) var(--tw-saturate) var(--tw-sepia) var(--tw-drop-shadow)}#datafront .\\!filter{filter:var(--tw-blur) var(--tw-brightness) var(--tw-contrast) var(--tw-grayscale) var(--tw-hue-rotate) var(--tw-invert) var(--tw-saturate) var(--tw-sepia) var(--tw-drop-shadow)!important}#datafront .filter{filter:var(--tw-blur) var(--tw-brightness) var(--tw-contrast) var(--tw-grayscale) var(--tw-hue-rotate) var(--tw-invert) var(--tw-saturate) var(--tw-sepia) var(--tw-drop-shadow)}#datafront .backdrop-blur{--tw-backdrop-blur:blur(8px)}#datafront .backdrop-blur,#datafront .backdrop-blur-sm{backdrop-filter:var(--tw-backdrop-blur) var(--tw-backdrop-brightness) var(--tw-backdrop-contrast) var(--tw-backdrop-grayscale) var(--tw-backdrop-hue-rotate) var(--tw-backdrop-invert) var(--tw-backdrop-opacity) var(--tw-backdrop-saturate) var(--tw-backdrop-sepia)}#datafront .backdrop-blur-sm{--tw-backdrop-blur:blur(4px)}#datafront .transition{transition-property:color,background-color,border-color,text-decoration-color,fill,stroke,opacity,box-shadow,transform,filter,backdrop-filter;transition-timing-function:cubic-bezier(.4,0,.2,1);transition-duration:.15s}#datafront .transition-colors{transition-property:color,background-color,border-color,text-decoration-color,fill,stroke;transition-timing-function:cubic-bezier(.4,0,.2,1);transition-duration:.15s}#datafront .transition-transform{transition-property:transform;transition-timing-function:cubic-bezier(.4,0,.2,1);transition-duration:.15s}#datafront .duration-150{transition-duration:.15s}#datafront .ease-out{transition-timing-function:cubic-bezier(0,0,.2,1)}#datafront .placeholder\\:text-slate-500::-moz-placeholder{--tw-text-opacity:1;color:rgb(100 116 139/var(--tw-text-opacity,1))}#datafront .placeholder\\:text-slate-500::placeholder{--tw-text-opacity:1;color:rgb(100 116 139/var(--tw-text-opacity,1))}#datafront .last\\:border-r-0:last-child{border-right-width:0}#datafront .hover\\:\\!border-rose-500\\/70:hover{border-color:rgba(244,63,94,.7)!important}#datafront .hover\\:border-rose-500\\/60:hover{border-color:rgba(244,63,94,.6)}#datafront .hover\\:border-sky-500\\/60:hover{border-color:rgba(14,165,233,.6)}#datafront .hover\\:border-sky-500\\/70:hover{border-color:rgba(14,165,233,.7)}#datafront .hover\\:bg-emerald-500\\/50:hover{background-color:rgba(16,185,129,.5)}#datafront .hover\\:bg-rose-500\\/20:hover{background-color:rgba(244,63,94,.2)}#datafront .hover\\:bg-sky-500\\/10:hover{background-color:rgba(14,165,233,.1)}#datafront .hover\\:bg-sky-500\\/20:hover{background-color:rgba(14,165,233,.2)}#datafront .hover\\:bg-sky-500\\/30:hover{background-color:rgba(14,165,233,.3)}#datafront .hover\\:bg-slate-700\\/80:hover{background-color:rgba(51,65,85,.8)}#datafront .hover\\:bg-slate-800\\/40:hover{background-color:rgba(30,41,59,.4)}#datafront .hover\\:bg-slate-800\\/50:hover{background-color:rgba(30,41,59,.5)}#datafront .hover\\:bg-slate-800\\/60:hover{background-color:rgba(30,41,59,.6)}#datafront .hover\\:bg-slate-800\\/70:hover{background-color:rgba(30,41,59,.7)}#datafront .hover\\:bg-slate-800\\/80:hover{background-color:rgba(30,41,59,.8)}#datafront .hover\\:bg-slate-900\\/40:hover{background-color:rgba(15,23,42,.4)}#datafront .hover\\:bg-transparent:hover{background-color:transparent}#datafront .hover\\:\\!text-rose-200:hover{--tw-text-opacity:1!important;color:rgb(254 205 211/var(--tw-text-opacity,1))!important}#datafront .hover\\:text-rose-300:hover{--tw-text-opacity:1;color:rgb(253 164 175/var(--tw-text-opacity,1))}#datafront .hover\\:text-sky-100:hover{--tw-text-opacity:1;color:rgb(224 242 254/var(--tw-text-opacity,1))}#datafront .hover\\:text-sky-200:hover{--tw-text-opacity:1;color:rgb(186 230 253/var(--tw-text-opacity,1))}#datafront .hover\\:text-slate-50:hover{--tw-text-opacity:1;color:rgb(248 250 252/var(--tw-text-opacity,1))}#datafront .focus\\:border-transparent:focus{border-color:transparent}#datafront .focus\\:outline-none:focus{outline:2px solid transparent;outline-offset:2px}#datafront .focus\\:ring-0:focus{--tw-ring-offset-shadow:var(--tw-ring-inset) 0 0 0 var(--tw-ring-offset-width) var(--tw-ring-offset-color);--tw-ring-shadow:var(--tw-ring-inset) 0 0 0 calc(var(--tw-ring-offset-width)) var(--tw-ring-color)}#datafront .focus\\:ring-0:focus,#datafront .focus\\:ring-2:focus{box-shadow:var(--tw-ring-offset-shadow),var(--tw-ring-shadow),var(--tw-shadow,0 0 #0000)}#datafront .focus\\:ring-2:focus{--tw-ring-offset-shadow:var(--tw-ring-inset) 0 0 0 var(--tw-ring-offset-width) var(--tw-ring-offset-color);--tw-ring-shadow:var(--tw-ring-inset) 0 0 0 calc(2px + var(--tw-ring-offset-width)) var(--tw-ring-color)}#datafront .focus\\:ring-sky-500:focus{--tw-ring-opacity:1;--tw-ring-color:rgb(14 165 233/var(--tw-ring-opacity,1))}#datafront .focus\\:ring-sky-500\\/50:focus{--tw-ring-color:rgba(14,165,233,.5)}#datafront .focus\\:ring-sky-500\\/60:focus{--tw-ring-color:rgba(14,165,233,.6)}#datafront .focus\\:ring-sky-500\\/70:focus{--tw-ring-color:rgba(14,165,233,.7)}#datafront .focus-visible\\:ring-2:focus-visible{--tw-ring-offset-shadow:var(--tw-ring-inset) 0 0 0 var(--tw-ring-offset-width) var(--tw-ring-offset-color);--tw-ring-shadow:var(--tw-ring-inset) 0 0 0 calc(2px + var(--tw-ring-offset-width)) var(--tw-ring-color);box-shadow:var(--tw-ring-offset-shadow),var(--tw-ring-shadow),var(--tw-shadow,0 0 #0000)}#datafront .focus-visible\\:ring-sky-500\\/60:focus-visible{--tw-ring-color:rgba(14,165,233,.6)}#datafront :is(.group:hover .group-hover\\:bg-sky-400\\/60){background-color:rgba(56,189,248,.6)}@media (min-width:640px){#datafront .sm\\:grid-cols-3{grid-template-columns:repeat(3,minmax(0,1fr))}}@media (min-width:768px){#datafront .md\\:grid-cols-2{grid-template-columns:repeat(2,minmax(0,1fr))}}`;
+  const datafrontTailwindCss = `#datafront .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border-width:0}#datafront .pointer-events-none{pointer-events:none}#datafront .visible{visibility:visible}#datafront .static{position:static}#datafront .fixed{position:fixed}#datafront .absolute{position:absolute}#datafront .relative{position:relative}#datafront .sticky{position:sticky}#datafront .bottom-full{bottom:100%}#datafront .left-0{left:0}#datafront .left-1{left:.25rem}#datafront .left-2{left:.5rem}#datafront .right-0{right:0}#datafront .right-2{right:.5rem}#datafront .top-0{top:0}#datafront .top-1{top:.25rem}#datafront .top-1\\/2{top:50%}#datafront .z-10{z-index:10}#datafront .z-\\[2147483646\\]{z-index:2147483646}#datafront .z-\\[2147483647\\]{z-index:2147483647}#datafront .-mx-px{margin-left:-1px;margin-right:-1px}#datafront .-my-px{margin-top:-1px;margin-bottom:-1px}#datafront .mb-1{margin-bottom:.25rem}#datafront .mt-2{margin-top:.5rem}#datafront .mt-3{margin-top:.75rem}#datafront .block{display:block}#datafront .flex{display:flex}#datafront .inline-flex{display:inline-flex}#datafront .\\!table{display:table!important}#datafront .table{display:table}#datafront .grid{display:grid}#datafront .hidden{display:none}#datafront .h-10{height:2.5rem}#datafront .h-12{height:3rem}#datafront .h-2{height:.5rem}#datafront .h-3{height:.75rem}#datafront .h-3\\.5{height:.875rem}#datafront .h-4{height:1rem}#datafront .h-5{height:1.25rem}#datafront .h-6{height:1.5rem}#datafront .h-7{height:1.75rem}#datafront .h-8{height:2rem}#datafront .h-full{height:100%}#datafront .h-px{height:1px}#datafront .min-h-0{min-height:0}#datafront .min-h-\\[220px\\]{min-height:220px}#datafront .min-h-\\[72px\\]{min-height:72px}#datafront .min-h-full{min-height:100%}#datafront .w-10{width:2.5rem}#datafront .w-12{width:3rem}#datafront .w-2{width:.5rem}#datafront .w-3{width:.75rem}#datafront .w-3\\.5{width:.875rem}#datafront .w-32{width:8rem}#datafront .w-36{width:9rem}#datafront .w-4{width:1rem}#datafront .w-40{width:10rem}#datafront .w-44{width:11rem}#datafront .w-48{width:12rem}#datafront .w-5{width:1.25rem}#datafront .w-6{width:1.5rem}#datafront .w-7{width:1.75rem}#datafront .w-full{width:100%}#datafront .w-px{width:1px}#datafront .min-w-0{min-width:0}#datafront .min-w-\\[160px\\]{min-width:160px}#datafront .min-w-\\[200px\\]{min-width:200px}#datafront .min-w-\\[8rem\\]{min-width:8rem}#datafront .min-w-full{min-width:100%}#datafront .max-w-\\[10rem\\]{max-width:10rem}#datafront .max-w-full{max-width:100%}#datafront .max-w-xs{max-width:20rem}#datafront .flex-1{flex:1 1 0%}#datafront .shrink-0{flex-shrink:0}#datafront .border-collapse{border-collapse:collapse}#datafront .-translate-y-1{--tw-translate-y:-0.25rem}#datafront .-translate-y-1,#datafront .-translate-y-1\\/2{transform:translate(var(--tw-translate-x),var(--tw-translate-y)) rotate(var(--tw-rotate)) skewX(var(--tw-skew-x)) skewY(var(--tw-skew-y)) scaleX(var(--tw-scale-x)) scaleY(var(--tw-scale-y))}#datafront .-translate-y-1\\/2{--tw-translate-y:-50%}#datafront .translate-x-full{--tw-translate-x:100%;transform:translate(var(--tw-translate-x),var(--tw-translate-y)) rotate(var(--tw-rotate)) skewX(var(--tw-skew-x)) skewY(var(--tw-skew-y)) scaleX(var(--tw-scale-x)) scaleY(var(--tw-scale-y))}#datafront .\\!transform{transform:translate(var(--tw-translate-x),var(--tw-translate-y)) rotate(var(--tw-rotate)) skewX(var(--tw-skew-x)) skewY(var(--tw-skew-y)) scaleX(var(--tw-scale-x)) scaleY(var(--tw-scale-y))!important}#datafront .transform{transform:translate(var(--tw-translate-x),var(--tw-translate-y)) rotate(var(--tw-rotate)) skewX(var(--tw-skew-x)) skewY(var(--tw-skew-y)) scaleX(var(--tw-scale-x)) scaleY(var(--tw-scale-y))}#datafront .cursor-col-resize{cursor:col-resize}#datafront .cursor-default{cursor:default}#datafront .cursor-not-allowed{cursor:not-allowed}#datafront .cursor-pointer{cursor:pointer}#datafront .cursor-row-resize{cursor:row-resize}#datafront .select-none{-webkit-user-select:none;-moz-user-select:none;user-select:none}#datafront .resize{resize:both}#datafront .appearance-none{-webkit-appearance:none;-moz-appearance:none;appearance:none}#datafront .flex-row{flex-direction:row}#datafront .flex-col{flex-direction:column}#datafront .flex-wrap{flex-wrap:wrap}#datafront .items-start{align-items:flex-start}#datafront .items-end{align-items:flex-end}#datafront .items-center{align-items:center}#datafront .items-baseline{align-items:baseline}#datafront .justify-start{justify-content:flex-start}#datafront .justify-end{justify-content:flex-end}#datafront .justify-center{justify-content:center}#datafront .justify-between{justify-content:space-between}#datafront .gap-1{gap:.25rem}#datafront .gap-2{gap:.5rem}#datafront .gap-3{gap:.75rem}#datafront .gap-4{gap:1rem}#datafront .gap-6{gap:1.5rem}#datafront :is(.space-y-1>:not([hidden])~:not([hidden])){--tw-space-y-reverse:0;margin-top:calc(.25rem*(1 - var(--tw-space-y-reverse)));margin-bottom:calc(.25rem*var(--tw-space-y-reverse))}#datafront :is(.space-y-2>:not([hidden])~:not([hidden])){--tw-space-y-reverse:0;margin-top:calc(.5rem*(1 - var(--tw-space-y-reverse)));margin-bottom:calc(.5rem*var(--tw-space-y-reverse))}#datafront :is(.space-y-3>:not([hidden])~:not([hidden])){--tw-space-y-reverse:0;margin-top:calc(.75rem*(1 - var(--tw-space-y-reverse)));margin-bottom:calc(.75rem*var(--tw-space-y-reverse))}#datafront :is(.space-y-4>:not([hidden])~:not([hidden])){--tw-space-y-reverse:0;margin-top:calc(1rem*(1 - var(--tw-space-y-reverse)));margin-bottom:calc(1rem*var(--tw-space-y-reverse))}#datafront .overflow-auto{overflow:auto}#datafront .overflow-hidden{overflow:hidden}#datafront .overflow-x-auto{overflow-x:auto}#datafront .overflow-y-hidden{overflow-y:hidden}#datafront .truncate{overflow:hidden;text-overflow:ellipsis}#datafront .truncate,#datafront .whitespace-nowrap{white-space:nowrap}#datafront .whitespace-pre-wrap{white-space:pre-wrap}#datafront .break-words{overflow-wrap:break-word}#datafront .rounded{border-radius:.25rem}#datafront .rounded-2xl{border-radius:1rem}#datafront .rounded-full{border-radius:9999px}#datafront .rounded-lg{border-radius:.5rem}#datafront .rounded-md{border-radius:.375rem}#datafront .rounded-sm{border-radius:.125rem}#datafront .rounded-b-2xl{border-bottom-right-radius:1rem;border-bottom-left-radius:1rem}#datafront .rounded-r-full{border-top-right-radius:9999px;border-bottom-right-radius:9999px}#datafront .border{border-width:1px}#datafront .border-b{border-bottom-width:1px}#datafront .border-l{border-left-width:1px}#datafront .border-r{border-right-width:1px}#datafront .border-t{border-top-width:1px}#datafront .border-none{border-style:none}#datafront .\\!border-rose-500{--tw-border-opacity:1!important;border-color:rgb(244 63 94/var(--tw-border-opacity,1))!important}#datafront .border-amber-400{--tw-border-opacity:1;border-color:rgb(251 191 36/var(--tw-border-opacity,1))}#datafront .border-amber-400\\/40{border-color:rgba(251,191,36,.4)}#datafront .border-emerald-400{--tw-border-opacity:1;border-color:rgb(52 211 153/var(--tw-border-opacity,1))}#datafront .border-emerald-400\\/60{border-color:rgba(52,211,153,.6)}#datafront .border-rose-500{--tw-border-opacity:1;border-color:rgb(244 63 94/var(--tw-border-opacity,1))}#datafront .border-rose-500\\/40{border-color:rgba(244,63,94,.4)}#datafront .border-rose-500\\/50{border-color:rgba(244,63,94,.5)}#datafront .border-sky-400{--tw-border-opacity:1;border-color:rgb(56 189 248/var(--tw-border-opacity,1))}#datafront .border-sky-400\\/40{border-color:rgba(56,189,248,.4)}#datafront .border-sky-500{--tw-border-opacity:1;border-color:rgb(14 165 233/var(--tw-border-opacity,1))}#datafront .border-sky-500\\/40{border-color:rgba(14,165,233,.4)}#datafront .border-sky-500\\/50{border-color:rgba(14,165,233,.5)}#datafront .border-sky-500\\/60{border-color:rgba(14,165,233,.6)}#datafront .border-sky-500\\/70{border-color:rgba(14,165,233,.7)}#datafront .border-slate-500{--tw-border-opacity:1;border-color:rgb(100 116 139/var(--tw-border-opacity,1))}#datafront .border-slate-600{--tw-border-opacity:1;border-color:rgb(71 85 105/var(--tw-border-opacity,1))}#datafront .border-slate-600\\/50{border-color:rgba(71,85,105,.5)}#datafront .border-slate-700{--tw-border-opacity:1;border-color:rgb(51 65 85/var(--tw-border-opacity,1))}#datafront .border-slate-700\\/70{border-color:rgba(51,65,85,.7)}#datafront .border-slate-700\\/80{border-color:rgba(51,65,85,.8)}#datafront .border-slate-800{--tw-border-opacity:1;border-color:rgb(30 41 59/var(--tw-border-opacity,1))}#datafront .border-slate-800\\/60{border-color:rgba(30,41,59,.6)}#datafront .border-slate-800\\/70{border-color:rgba(30,41,59,.7)}#datafront .border-slate-800\\/80{border-color:rgba(30,41,59,.8)}#datafront .border-slate-900{--tw-border-opacity:1;border-color:rgb(15 23 42/var(--tw-border-opacity,1))}#datafront .border-slate-900\\/70{border-color:rgba(15,23,42,.7)}#datafront .border-slate-900\\/80{border-color:rgba(15,23,42,.8)}#datafront .bg-amber-400{--tw-bg-opacity:1;background-color:rgb(251 191 36/var(--tw-bg-opacity,1))}#datafront .bg-amber-400\\/15{background-color:rgba(251,191,36,.15)}#datafront .bg-amber-500{--tw-bg-opacity:1;background-color:rgb(245 158 11/var(--tw-bg-opacity,1))}#datafront .bg-amber-500\\/20{background-color:rgba(245,158,11,.2)}#datafront .bg-black{--tw-bg-opacity:1;background-color:rgb(0 0 0/var(--tw-bg-opacity,1))}#datafront .bg-black\\/70{background-color:rgba(0,0,0,.7)}#datafront .bg-emerald-100{--tw-bg-opacity:1;background-color:rgb(209 250 229/var(--tw-bg-opacity,1))}#datafront .bg-emerald-500{--tw-bg-opacity:1;background-color:rgb(16 185 129/var(--tw-bg-opacity,1))}#datafront .bg-emerald-500\\/20{background-color:rgba(16,185,129,.2)}#datafront .bg-emerald-500\\/40{background-color:rgba(16,185,129,.4)}#datafront .bg-emerald-950{--tw-bg-opacity:1;background-color:rgb(2 44 34/var(--tw-bg-opacity,1))}#datafront .bg-red-500{--tw-bg-opacity:1;background-color:rgb(239 68 68/var(--tw-bg-opacity,1))}#datafront .bg-rose-500{--tw-bg-opacity:1;background-color:rgb(244 63 94/var(--tw-bg-opacity,1))}#datafront .bg-rose-500\\/10{background-color:rgba(244,63,94,.1)}#datafront .bg-rose-500\\/15{background-color:rgba(244,63,94,.15)}#datafront .bg-rose-500\\/20{background-color:rgba(244,63,94,.2)}#datafront .bg-sky-400{--tw-bg-opacity:1;background-color:rgb(56 189 248/var(--tw-bg-opacity,1))}#datafront .bg-sky-400\\/15{background-color:rgba(56,189,248,.15)}#datafront .bg-sky-500{--tw-bg-opacity:1;background-color:rgb(14 165 233/var(--tw-bg-opacity,1))}#datafront .bg-sky-500\\/10{background-color:rgba(14,165,233,.1)}#datafront .bg-sky-500\\/20{background-color:rgba(14,165,233,.2)}#datafront .bg-slate-300{--tw-bg-opacity:1;background-color:rgb(203 213 225/var(--tw-bg-opacity,1))}#datafront .bg-slate-600{--tw-bg-opacity:1;background-color:rgb(71 85 105/var(--tw-bg-opacity,1))}#datafront .bg-slate-600\\/60{background-color:rgba(71,85,105,.6)}#datafront .bg-slate-700{--tw-bg-opacity:1;background-color:rgb(51 65 85/var(--tw-bg-opacity,1))}#datafront .bg-slate-700\\/60{background-color:rgba(51,65,85,.6)}#datafront .bg-slate-800{--tw-bg-opacity:1;background-color:rgb(30 41 59/var(--tw-bg-opacity,1))}#datafront .bg-slate-800\\/50{background-color:rgba(30,41,59,.5)}#datafront .bg-slate-800\\/60{background-color:rgba(30,41,59,.6)}#datafront .bg-slate-800\\/70{background-color:rgba(30,41,59,.7)}#datafront .bg-slate-800\\/80{background-color:rgba(30,41,59,.8)}#datafront .bg-slate-900{--tw-bg-opacity:1;background-color:rgb(15 23 42/var(--tw-bg-opacity,1))}#datafront .bg-slate-900\\/40{background-color:rgba(15,23,42,.4)}#datafront .bg-slate-900\\/70{background-color:rgba(15,23,42,.7)}#datafront .bg-slate-900\\/80{background-color:rgba(15,23,42,.8)}#datafront .bg-slate-900\\/90{background-color:rgba(15,23,42,.9)}#datafront .bg-slate-900\\/95{background-color:rgba(15,23,42,.95)}#datafront .bg-slate-950{--tw-bg-opacity:1;background-color:rgb(2 6 23/var(--tw-bg-opacity,1))}#datafront .bg-slate-950\\/40{background-color:rgba(2,6,23,.4)}#datafront .bg-slate-950\\/60{background-color:rgba(2,6,23,.6)}#datafront .bg-slate-950\\/70{background-color:rgba(2,6,23,.7)}#datafront .bg-slate-950\\/80{background-color:rgba(2,6,23,.8)}#datafront .bg-slate-950\\/95{background-color:rgba(2,6,23,.95)}#datafront .bg-transparent{background-color:transparent}#datafront .bg-none{background-image:none}#datafront .p-3{padding:.75rem}#datafront .p-4{padding:1rem}#datafront .p-6{padding:1.5rem}#datafront .px-0{padding-left:0;padding-right:0}#datafront .px-1{padding-left:.25rem;padding-right:.25rem}#datafront .px-1\\.5{padding-left:.375rem;padding-right:.375rem}#datafront .px-2{padding-left:.5rem;padding-right:.5rem}#datafront .px-2\\.5{padding-left:.625rem;padding-right:.625rem}#datafront .px-3{padding-left:.75rem;padding-right:.75rem}#datafront .px-4{padding-left:1rem;padding-right:1rem}#datafront .py-0{padding-top:0;padding-bottom:0}#datafront .py-0\\.5{padding-top:.125rem;padding-bottom:.125rem}#datafront .py-1{padding-top:.25rem;padding-bottom:.25rem}#datafront .py-1\\.5{padding-top:.375rem;padding-bottom:.375rem}#datafront .py-2{padding-top:.5rem;padding-bottom:.5rem}#datafront .py-4{padding-top:1rem;padding-bottom:1rem}#datafront .py-8{padding-top:2rem;padding-bottom:2rem}#datafront .pb-3{padding-bottom:.75rem}#datafront .pl-1{padding-left:.25rem}#datafront .pr-7{padding-right:1.75rem}#datafront .pt-4{padding-top:1rem}#datafront .text-left{text-align:left}#datafront .text-center{text-align:center}#datafront .text-right{text-align:right}#datafront .align-top{vertical-align:top}#datafront .font-mono{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,Liberation Mono,Courier New,monospace}#datafront .text-\\[0\\.65rem\\]{font-size:.65rem}#datafront .text-\\[0\\.6rem\\]{font-size:.6rem}#datafront .text-\\[0\\.75rem\\]{font-size:.75rem}#datafront .text-\\[0\\.7rem\\]{font-size:.7rem}#datafront .text-base{font-size:1rem;line-height:1.5rem}#datafront .text-lg{font-size:1.125rem;line-height:1.75rem}#datafront .text-sm{font-size:.875rem;line-height:1.25rem}#datafront .text-xs{font-size:.75rem;line-height:1rem}#datafront .font-bold{font-weight:700}#datafront .font-medium{font-weight:500}#datafront .font-semibold{font-weight:600}#datafront .uppercase{text-transform:uppercase}#datafront .capitalize{text-transform:capitalize}#datafront .italic{font-style:italic}#datafront .leading-none{line-height:1}#datafront .tracking-wide{letter-spacing:.025em}#datafront .tracking-widest{letter-spacing:.1em}#datafront .text-amber-200{--tw-text-opacity:1;color:rgb(253 230 138/var(--tw-text-opacity,1))}#datafront .text-amber-300{--tw-text-opacity:1;color:rgb(252 211 77/var(--tw-text-opacity,1))}#datafront .text-emerald-100{--tw-text-opacity:1;color:rgb(209 250 229/var(--tw-text-opacity,1))}#datafront .text-emerald-200{--tw-text-opacity:1;color:rgb(167 243 208/var(--tw-text-opacity,1))}#datafront .text-inherit{color:inherit}#datafront .text-rose-200{--tw-text-opacity:1;color:rgb(254 205 211/var(--tw-text-opacity,1))}#datafront .text-rose-400{--tw-text-opacity:1;color:rgb(251 113 133/var(--tw-text-opacity,1))}#datafront .text-sky-100{--tw-text-opacity:1;color:rgb(224 242 254/var(--tw-text-opacity,1))}#datafront .text-sky-200{--tw-text-opacity:1;color:rgb(186 230 253/var(--tw-text-opacity,1))}#datafront .text-sky-300{--tw-text-opacity:1;color:rgb(125 211 252/var(--tw-text-opacity,1))}#datafront .text-sky-400{--tw-text-opacity:1;color:rgb(56 189 248/var(--tw-text-opacity,1))}#datafront .text-slate-100{--tw-text-opacity:1;color:rgb(241 245 249/var(--tw-text-opacity,1))}#datafront .text-slate-200{--tw-text-opacity:1;color:rgb(226 232 240/var(--tw-text-opacity,1))}#datafront .text-slate-300{--tw-text-opacity:1;color:rgb(203 213 225/var(--tw-text-opacity,1))}#datafront .text-slate-400{--tw-text-opacity:1;color:rgb(148 163 184/var(--tw-text-opacity,1))}#datafront .text-slate-50{--tw-text-opacity:1;color:rgb(248 250 252/var(--tw-text-opacity,1))}#datafront .text-slate-500{--tw-text-opacity:1;color:rgb(100 116 139/var(--tw-text-opacity,1))}#datafront .text-white{--tw-text-opacity:1;color:rgb(255 255 255/var(--tw-text-opacity,1))}#datafront .opacity-40{opacity:.4}#datafront .opacity-50{opacity:.5}#datafront .shadow{--tw-shadow:0 1px 3px 0 rgba(0,0,0,.1),0 1px 2px -1px rgba(0,0,0,.1);--tw-shadow-colored:0 1px 3px 0 var(--tw-shadow-color),0 1px 2px -1px var(--tw-shadow-color)}#datafront .shadow,#datafront .shadow-2xl{box-shadow:var(--tw-ring-offset-shadow,0 0 #0000),var(--tw-ring-shadow,0 0 #0000),var(--tw-shadow)}#datafront .shadow-2xl{--tw-shadow:0 25px 50px -12px rgba(0,0,0,.25);--tw-shadow-colored:0 25px 50px -12px var(--tw-shadow-color)}#datafront .shadow-inner{--tw-shadow:inset 0 2px 4px 0 rgba(0,0,0,.05);--tw-shadow-colored:inset 0 2px 4px 0 var(--tw-shadow-color)}#datafront .shadow-inner,#datafront .shadow-xl{box-shadow:var(--tw-ring-offset-shadow,0 0 #0000),var(--tw-ring-shadow,0 0 #0000),var(--tw-shadow)}#datafront .shadow-xl{--tw-shadow:0 20px 25px -5px rgba(0,0,0,.1),0 8px 10px -6px rgba(0,0,0,.1);--tw-shadow-colored:0 20px 25px -5px var(--tw-shadow-color),0 8px 10px -6px var(--tw-shadow-color)}#datafront .ring-0{--tw-ring-offset-shadow:var(--tw-ring-inset) 0 0 0 var(--tw-ring-offset-width) var(--tw-ring-offset-color);--tw-ring-shadow:var(--tw-ring-inset) 0 0 0 calc(var(--tw-ring-offset-width)) var(--tw-ring-color)}#datafront .ring-0,#datafront .ring-1{box-shadow:var(--tw-ring-offset-shadow),var(--tw-ring-shadow),var(--tw-shadow,0 0 #0000)}#datafront .ring-1{--tw-ring-offset-shadow:var(--tw-ring-inset) 0 0 0 var(--tw-ring-offset-width) var(--tw-ring-offset-color);--tw-ring-shadow:var(--tw-ring-inset) 0 0 0 calc(1px + var(--tw-ring-offset-width)) var(--tw-ring-color)}#datafront .ring-emerald-400{--tw-ring-opacity:1;--tw-ring-color:rgb(52 211 153/var(--tw-ring-opacity,1))}#datafront .ring-sky-500{--tw-ring-opacity:1;--tw-ring-color:rgb(14 165 233/var(--tw-ring-opacity,1))}#datafront .blur{--tw-blur:blur(8px);filter:var(--tw-blur) var(--tw-brightness) var(--tw-contrast) var(--tw-grayscale) var(--tw-hue-rotate) var(--tw-invert) var(--tw-saturate) var(--tw-sepia) var(--tw-drop-shadow)}#datafront .\\!filter{filter:var(--tw-blur) var(--tw-brightness) var(--tw-contrast) var(--tw-grayscale) var(--tw-hue-rotate) var(--tw-invert) var(--tw-saturate) var(--tw-sepia) var(--tw-drop-shadow)!important}#datafront .filter{filter:var(--tw-blur) var(--tw-brightness) var(--tw-contrast) var(--tw-grayscale) var(--tw-hue-rotate) var(--tw-invert) var(--tw-saturate) var(--tw-sepia) var(--tw-drop-shadow)}#datafront .backdrop-blur{--tw-backdrop-blur:blur(8px)}#datafront .backdrop-blur,#datafront .backdrop-blur-sm{backdrop-filter:var(--tw-backdrop-blur) var(--tw-backdrop-brightness) var(--tw-backdrop-contrast) var(--tw-backdrop-grayscale) var(--tw-backdrop-hue-rotate) var(--tw-backdrop-invert) var(--tw-backdrop-opacity) var(--tw-backdrop-saturate) var(--tw-backdrop-sepia)}#datafront .backdrop-blur-sm{--tw-backdrop-blur:blur(4px)}#datafront .transition{transition-property:color,background-color,border-color,text-decoration-color,fill,stroke,opacity,box-shadow,transform,filter,backdrop-filter;transition-timing-function:cubic-bezier(.4,0,.2,1);transition-duration:.15s}#datafront .transition-colors{transition-property:color,background-color,border-color,text-decoration-color,fill,stroke;transition-timing-function:cubic-bezier(.4,0,.2,1);transition-duration:.15s}#datafront .transition-transform{transition-property:transform;transition-timing-function:cubic-bezier(.4,0,.2,1);transition-duration:.15s}#datafront .duration-150{transition-duration:.15s}#datafront .ease-out{transition-timing-function:cubic-bezier(0,0,.2,1)}#datafront .placeholder\\:text-slate-500::-moz-placeholder{--tw-text-opacity:1;color:rgb(100 116 139/var(--tw-text-opacity,1))}#datafront .placeholder\\:text-slate-500::placeholder{--tw-text-opacity:1;color:rgb(100 116 139/var(--tw-text-opacity,1))}#datafront .last\\:border-r-0:last-child{border-right-width:0}#datafront .hover\\:\\!border-rose-500\\/70:hover{border-color:rgba(244,63,94,.7)!important}#datafront .hover\\:border-rose-500\\/60:hover{border-color:rgba(244,63,94,.6)}#datafront .hover\\:border-sky-500\\/60:hover{border-color:rgba(14,165,233,.6)}#datafront .hover\\:border-sky-500\\/70:hover{border-color:rgba(14,165,233,.7)}#datafront .hover\\:bg-emerald-500\\/50:hover{background-color:rgba(16,185,129,.5)}#datafront .hover\\:bg-rose-500\\/20:hover{background-color:rgba(244,63,94,.2)}#datafront .hover\\:bg-sky-500\\/10:hover{background-color:rgba(14,165,233,.1)}#datafront .hover\\:bg-sky-500\\/20:hover{background-color:rgba(14,165,233,.2)}#datafront .hover\\:bg-sky-500\\/30:hover{background-color:rgba(14,165,233,.3)}#datafront .hover\\:bg-slate-700\\/80:hover{background-color:rgba(51,65,85,.8)}#datafront .hover\\:bg-slate-800\\/40:hover{background-color:rgba(30,41,59,.4)}#datafront .hover\\:bg-slate-800\\/50:hover{background-color:rgba(30,41,59,.5)}#datafront .hover\\:bg-slate-800\\/60:hover{background-color:rgba(30,41,59,.6)}#datafront .hover\\:bg-slate-800\\/70:hover{background-color:rgba(30,41,59,.7)}#datafront .hover\\:bg-slate-800\\/80:hover{background-color:rgba(30,41,59,.8)}#datafront .hover\\:bg-slate-900\\/40:hover{background-color:rgba(15,23,42,.4)}#datafront .hover\\:bg-transparent:hover{background-color:transparent}#datafront .hover\\:\\!text-rose-200:hover{--tw-text-opacity:1!important;color:rgb(254 205 211/var(--tw-text-opacity,1))!important}#datafront .hover\\:text-rose-300:hover{--tw-text-opacity:1;color:rgb(253 164 175/var(--tw-text-opacity,1))}#datafront .hover\\:text-sky-100:hover{--tw-text-opacity:1;color:rgb(224 242 254/var(--tw-text-opacity,1))}#datafront .hover\\:text-sky-200:hover{--tw-text-opacity:1;color:rgb(186 230 253/var(--tw-text-opacity,1))}#datafront .hover\\:text-slate-50:hover{--tw-text-opacity:1;color:rgb(248 250 252/var(--tw-text-opacity,1))}#datafront .focus\\:border-transparent:focus{border-color:transparent}#datafront .focus\\:outline-none:focus{outline:2px solid transparent;outline-offset:2px}#datafront .focus\\:ring-0:focus{--tw-ring-offset-shadow:var(--tw-ring-inset) 0 0 0 var(--tw-ring-offset-width) var(--tw-ring-offset-color);--tw-ring-shadow:var(--tw-ring-inset) 0 0 0 calc(var(--tw-ring-offset-width)) var(--tw-ring-color)}#datafront .focus\\:ring-0:focus,#datafront .focus\\:ring-2:focus{box-shadow:var(--tw-ring-offset-shadow),var(--tw-ring-shadow),var(--tw-shadow,0 0 #0000)}#datafront .focus\\:ring-2:focus{--tw-ring-offset-shadow:var(--tw-ring-inset) 0 0 0 var(--tw-ring-offset-width) var(--tw-ring-offset-color);--tw-ring-shadow:var(--tw-ring-inset) 0 0 0 calc(2px + var(--tw-ring-offset-width)) var(--tw-ring-color)}#datafront .focus\\:ring-sky-500:focus{--tw-ring-opacity:1;--tw-ring-color:rgb(14 165 233/var(--tw-ring-opacity,1))}#datafront .focus\\:ring-sky-500\\/50:focus{--tw-ring-color:rgba(14,165,233,.5)}#datafront .focus\\:ring-sky-500\\/60:focus{--tw-ring-color:rgba(14,165,233,.6)}#datafront .focus\\:ring-sky-500\\/70:focus{--tw-ring-color:rgba(14,165,233,.7)}#datafront .focus-visible\\:ring-2:focus-visible{--tw-ring-offset-shadow:var(--tw-ring-inset) 0 0 0 var(--tw-ring-offset-width) var(--tw-ring-offset-color);--tw-ring-shadow:var(--tw-ring-inset) 0 0 0 calc(2px + var(--tw-ring-offset-width)) var(--tw-ring-color);box-shadow:var(--tw-ring-offset-shadow),var(--tw-ring-shadow),var(--tw-shadow,0 0 #0000)}#datafront .focus-visible\\:ring-sky-500\\/60:focus-visible{--tw-ring-color:rgba(14,165,233,.6)}#datafront :is(.group:hover .group-hover\\:bg-sky-400\\/60){background-color:rgba(56,189,248,.6)}@media (min-width:640px){#datafront .sm\\:grid-cols-3{grid-template-columns:repeat(3,minmax(0,1fr))}}@media (min-width:768px){#datafront .md\\:grid-cols-2{grid-template-columns:repeat(2,minmax(0,1fr))}}`;
 
   function createSessionId() {
       if (typeof crypto !== "undefined" &&

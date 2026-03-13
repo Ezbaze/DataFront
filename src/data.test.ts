@@ -2,12 +2,360 @@ import { describe, expect, it, vi } from "vitest";
 
 import { DataStore } from "./data";
 
+function setMockDocument(): void {
+  (globalThis as { document?: unknown }).document = {
+    addEventListener: () => undefined,
+    removeEventListener: () => undefined,
+    dispatchEvent: () => true,
+    querySelector: () => null,
+  } as unknown as Document;
+}
+
+function setMockWindow(): void {
+  (globalThis as { window?: unknown }).window = {
+    addEventListener: () => undefined,
+    removeEventListener: () => undefined,
+    setTimeout,
+    clearTimeout,
+    setInterval,
+    clearInterval,
+  } as unknown as Window;
+}
+
+function setMockStorage() {
+  const values = new Map<string, string>();
+  (globalThis as { GM_getValue?: unknown }).GM_getValue = (
+    key: string,
+    fallback: string | null,
+  ) => values.get(key) ?? fallback;
+  (globalThis as { GM_setValue?: unknown }).GM_setValue = (
+    key: string,
+    value: string,
+  ) => {
+    values.set(key, value);
+  };
+  return values;
+}
+
+function captureGlobalState() {
+  return {
+    window: (globalThis as { window?: unknown }).window,
+    document: (globalThis as { document?: unknown }).document,
+    gmGetValue: (globalThis as { GM_getValue?: unknown }).GM_getValue,
+    gmSetValue: (globalThis as { GM_setValue?: unknown }).GM_setValue,
+  };
+}
+
+function restoreGlobalState(
+  state: ReturnType<typeof captureGlobalState>,
+): void {
+  (globalThis as { window?: unknown }).window = state.window;
+  (globalThis as { document?: unknown }).document = state.document;
+  (globalThis as { GM_getValue?: unknown }).GM_getValue = state.gmGetValue;
+  (globalThis as { GM_setValue?: unknown }).GM_setValue = state.gmSetValue;
+}
+
+describe("DataStore lobby queues", () => {
+  it("normalizes featured lobby updates into ordered featured queues", () => {
+    setMockDocument();
+
+    const store = new DataStore(undefined as unknown as never) as unknown as {
+      normalizePublicLobbyUpdatePayload: (payload: unknown) => Array<{
+        gameID: string;
+        publicGameType?: string;
+        startsAt?: number;
+      }>;
+    };
+
+    const summaries = store.normalizePublicLobbyUpdatePayload({
+      serverTime: 1_000_000,
+      games: {
+        team: [
+          {
+            gameID: "team-1",
+            msUntilStart: 20_000,
+          },
+        ],
+        special: [
+          {
+            gameID: "special-1",
+            startsAt: 1_111_111,
+          },
+        ],
+        ffa: [
+          {
+            gameID: "ffa-1",
+            msUntilStart: 10_000,
+          },
+          {
+            gameID: "ffa-2",
+            msUntilStart: 30_000,
+          },
+        ],
+      },
+    });
+
+    expect(summaries.map((summary) => summary.gameID)).toEqual([
+      "special-1",
+      "ffa-1",
+      "team-1",
+    ]);
+    expect(summaries.map((summary) => summary.publicGameType)).toEqual([
+      "special",
+      "ffa",
+      "team",
+    ]);
+    expect(summaries[1]?.startsAt).toBe(1_010_000);
+    expect(summaries[2]?.startsAt).toBe(1_020_000);
+  });
+
+  it("stores all featured lobby queues in the snapshot", () => {
+    setMockDocument();
+
+    const store = new DataStore(undefined as unknown as never) as unknown as {
+      applyLobbyQueues: (queues: Array<Record<string, unknown>>) => void;
+      snapshot: {
+        currentLobbyQueue?: { gameId: string };
+        currentLobbyQueues?: Array<{ gameId: string }>;
+        players: Array<{
+          isLobbyPlayer?: boolean;
+          lobbyGameId?: string;
+          lobbyLabel?: string;
+        }>;
+      };
+    };
+
+    store.applyLobbyQueues([
+      {
+        gameId: "special-1",
+        mapName: "Europe",
+        modeName: "Team",
+        lobbyLabel: "Europe • Team",
+        playerCount: 2,
+        maxPlayers: 20,
+        updatedAtMs: 1,
+        players: [
+          { id: "a", name: "[TAG] Alpha" },
+          { id: "b", name: "Bravo" },
+        ],
+        playerTeams: "Duos",
+        publicGameType: "special",
+      },
+      {
+        gameId: "ffa-1",
+        mapName: "World",
+        modeName: "FFA",
+        lobbyLabel: "World • FFA",
+        playerCount: 1,
+        maxPlayers: 50,
+        updatedAtMs: 1,
+        players: [{ id: "c", name: "Charlie" }],
+        publicGameType: "ffa",
+      },
+    ]);
+
+    expect(store.snapshot.currentLobbyQueue?.gameId).toBe("special-1");
+    expect(
+      store.snapshot.currentLobbyQueues?.map((queue) => queue.gameId),
+    ).toEqual(["special-1", "ffa-1"]);
+    expect(
+      store.snapshot.players
+        .filter((player) => player.isLobbyPlayer)
+        .map((player) => ({
+          gameId: player.lobbyGameId,
+          label: player.lobbyLabel,
+        })),
+    ).toEqual([
+      { gameId: "special-1", label: "Europe • Team" },
+      { gameId: "special-1", label: "Europe • Team" },
+      { gameId: "ffa-1", label: "World • FFA" },
+    ]);
+  });
+
+  it("refreshes lobby queues immediately when featured lobby events arrive", () => {
+    setMockDocument();
+
+    const store = new DataStore(undefined as unknown as never) as unknown as {
+      publicLobbiesHandler: (event: Event) => void;
+      latestFeaturedLobbySummaries: Array<{ gameID: string }> | null;
+      enqueueLobbyQueueRefresh: () => void;
+    };
+    const enqueueLobbyQueueRefresh = vi.fn();
+    store.enqueueLobbyQueueRefresh = enqueueLobbyQueueRefresh;
+
+    store.publicLobbiesHandler({
+      detail: {
+        payload: {
+          serverTime: 1_000,
+          games: {
+            special: [{ gameID: "special-1", msUntilStart: 5_000 }],
+          },
+        },
+      },
+    } as unknown as Event);
+
+    expect(
+      store.latestFeaturedLobbySummaries?.map((entry) => entry.gameID),
+    ).toEqual(["special-1"]);
+    expect(enqueueLobbyQueueRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("updates the snapshot when only lobby metadata changes", () => {
+    setMockDocument();
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000);
+
+    try {
+      const store = new DataStore(undefined as unknown as never) as unknown as {
+        applyLobbyQueues: (queues: Array<Record<string, unknown>>) => void;
+        snapshot: {
+          currentLobbyQueues?: Array<{
+            gameId: string;
+            lobbyLabel: string;
+            playerTeams?: string;
+            publicGameType?: string;
+          }>;
+        };
+      };
+
+      store.applyLobbyQueues([
+        {
+          gameId: "special-1",
+          mapName: "Europe",
+          modeName: "Team",
+          lobbyLabel: "Europe • Team",
+          playerCount: 2,
+          maxPlayers: 20,
+          updatedAtMs: 1,
+          players: [
+            { id: "a", name: "[TAG] Alpha" },
+            { id: "b", name: "Bravo" },
+          ],
+          playerTeams: "Duos",
+          publicGameType: "special",
+        },
+      ]);
+
+      store.applyLobbyQueues([
+        {
+          gameId: "special-1",
+          mapName: "Europe",
+          modeName: "Team",
+          lobbyLabel: "Europe • Duos",
+          playerCount: 2,
+          maxPlayers: 20,
+          updatedAtMs: 1,
+          players: [
+            { id: "a", name: "[TAG] Alpha" },
+            { id: "b", name: "Bravo" },
+          ],
+          playerTeams: "Trios",
+          publicGameType: "team",
+        },
+      ]);
+
+      expect(store.snapshot.currentLobbyQueues?.[0]).toMatchObject({
+        gameId: "special-1",
+        lobbyLabel: "Europe • Duos",
+        playerTeams: "Trios",
+        publicGameType: "team",
+      });
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+});
+
+describe("DataStore lobby display name", () => {
+  it("reads clan tag and username from the split lobby input", () => {
+    const state = captureGlobalState();
+    try {
+      setMockWindow();
+      const tagInput = {
+        type: "text",
+        value: "TAG",
+        dispatchEvent: () => true,
+      };
+      const baseInput = {
+        type: "text",
+        value: "Mate",
+        dispatchEvent: () => true,
+      };
+      const usernameInput: {
+        getCurrentUsername?: () => string;
+        querySelectorAll: () => [typeof tagInput, typeof baseInput];
+      } = {
+        querySelectorAll: () => [tagInput, baseInput],
+      };
+      usernameInput.getCurrentUsername = () => "[TAG] Mate";
+      (globalThis as { document?: unknown }).document = {
+        addEventListener: () => undefined,
+        removeEventListener: () => undefined,
+        dispatchEvent: () => true,
+        querySelector: (selector: string) =>
+          selector === "username-input" ? usernameInput : null,
+        querySelectorAll: () => [],
+      } as unknown as Document;
+
+      const store = new DataStore(undefined as unknown as never) as unknown as {
+        readLobbyDisplayName: () => string | undefined;
+        resolveCurrentLobbyClanTag: () => string | undefined;
+      };
+
+      expect(store.readLobbyDisplayName()).toBe("[TAG] Mate");
+      expect(store.resolveCurrentLobbyClanTag()).toBe("TAG");
+    } finally {
+      restoreGlobalState(state);
+    }
+  });
+
+  it("updates split lobby inputs when changing the display name", () => {
+    const state = captureGlobalState();
+    try {
+      setMockWindow();
+      const storage = setMockStorage();
+      const tagInput = {
+        type: "text",
+        value: "",
+        dispatchEvent: vi.fn(() => true),
+      };
+      const baseInput = {
+        type: "text",
+        value: "Anon123",
+        dispatchEvent: vi.fn(() => true),
+      };
+      const usernameInput = {
+        querySelectorAll: () => [tagInput, baseInput],
+      };
+      (globalThis as { document?: unknown }).document = {
+        addEventListener: () => undefined,
+        removeEventListener: () => undefined,
+        dispatchEvent: () => true,
+        querySelector: (selector: string) =>
+          selector === "username-input" ? usernameInput : null,
+        querySelectorAll: () => [],
+      } as unknown as Document;
+
+      const store = new DataStore(undefined as unknown as never) as unknown as {
+        applyLobbyDisplayName: (name: string) => boolean;
+        readLobbyDisplayName: () => string | undefined;
+        resolveCurrentLobbyClanTag: () => string | undefined;
+      };
+
+      expect(store.applyLobbyDisplayName("[ABC] Zed")).toBe(true);
+      expect(tagInput.value).toBe("ABC");
+      expect(baseInput.value).toBe("Zed");
+      expect(storage.get("username")).toBe("[ABC] Zed");
+      expect(store.readLobbyDisplayName()).toBe("[ABC] Zed");
+      expect(store.resolveCurrentLobbyClanTag()).toBe("ABC");
+    } finally {
+      restoreGlobalState(state);
+    }
+  });
+});
+
 describe("DataStore display event polling", () => {
   it("processes appended display events even when updates object is reused", () => {
-    (globalThis as { document?: unknown }).document = {
-      addEventListener: () => undefined,
-      removeEventListener: () => undefined,
-    } as unknown as Document;
+    setMockDocument();
 
     const store = new DataStore(undefined as unknown as never) as unknown as {
       game: unknown;
@@ -63,10 +411,7 @@ describe("DataStore display event polling", () => {
   });
 
   it("extracts donation intents from websocket turn payloads", () => {
-    (globalThis as { document?: unknown }).document = {
-      addEventListener: () => undefined,
-      removeEventListener: () => undefined,
-    } as unknown as Document;
+    setMockDocument();
 
     const store = new DataStore(undefined as unknown as never) as unknown as {
       extractWebSocketDonationIntentCandidatesFromMessage: (
@@ -125,10 +470,7 @@ describe("DataStore display event polling", () => {
   });
 
   it("infers null websocket donation amounts from current game state", () => {
-    (globalThis as { document?: unknown }).document = {
-      addEventListener: () => undefined,
-      removeEventListener: () => undefined,
-    } as unknown as Document;
+    setMockDocument();
 
     const store = new DataStore(undefined as unknown as never) as unknown as {
       game: unknown;
@@ -202,10 +544,7 @@ describe("DataStore display event polling", () => {
   });
 
   it("does not emit websocket intents without execution-result updates", () => {
-    (globalThis as { document?: unknown }).document = {
-      addEventListener: () => undefined,
-      removeEventListener: () => undefined,
-    } as unknown as Document;
+    setMockDocument();
 
     const store = new DataStore(undefined as unknown as never) as unknown as {
       game: unknown;
@@ -259,10 +598,7 @@ describe("DataStore display event polling", () => {
   });
 
   it("restores WebSocket globals when the last donation hook unsubscribes", () => {
-    (globalThis as { document?: unknown }).document = {
-      addEventListener: () => undefined,
-      removeEventListener: () => undefined,
-    } as unknown as Document;
+    setMockDocument();
 
     type MessageHandler = (event: { data: unknown }) => void;
     class FakeWebSocket {
@@ -314,13 +650,6 @@ describe("DataStore display event polling", () => {
 });
 
 describe("DataStore attack border fronts", () => {
-  function setMockDocument(): void {
-    (globalThis as { document?: unknown }).document = {
-      addEventListener: () => undefined,
-      removeEventListener: () => undefined,
-    } as unknown as Document;
-  }
-
   function createGridGame(options: {
     width: number;
     height: number;

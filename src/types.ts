@@ -158,6 +158,8 @@ export interface PlayerRecord {
   alliances: AlliancePact[];
   lastUpdatedMs: number;
   isLobbyPlayer?: boolean;
+  lobbyGameId?: string;
+  lobbyLabel?: string;
   lobbyPosition?: number;
   wasKickedFromLobby?: boolean;
 }
@@ -174,16 +176,20 @@ export type LobbyTeamCountConfig =
   | "Quads"
   | "Humans Vs Nations";
 
+export type LobbyPublicGameType = "ffa" | "team" | "special";
+
 export interface LobbyQueueInfo {
   gameId: string;
   mapName: string;
   modeName: string;
+  lobbyLabel: string;
   playerCount: number;
   maxPlayers: number;
   startsAtMs?: number;
   updatedAtMs: number;
   players: LobbyQueuePlayer[];
   playerTeams?: LobbyTeamCountConfig;
+  publicGameType?: LobbyPublicGameType;
 }
 
 export interface SidebarLobbyApi {
@@ -191,6 +197,10 @@ export interface SidebarLobbyApi {
    * Latest lobby queue snapshot from the sidebar, if any.
    */
   queue?: LobbyQueueInfo;
+  /**
+   * Latest featured lobby queue snapshots from the sidebar, if any.
+   */
+  queues?: LobbyQueueInfo[];
   /**
    * Extracts a clan tag in the format [TAG] from a player name, if present.
    */
@@ -222,6 +232,8 @@ export interface GameSnapshot {
   currentTimeMs: number;
   ships: ShipRecord[];
   currentLobbyQueue?: LobbyQueueInfo;
+  currentLobbyQueues?: LobbyQueueInfo[];
+  currentLobbyClanTag?: string;
   sidebarActions?: SidebarActionsState;
   sidebarLogs?: SidebarLogEntry[];
   sidebarLogRevision?: number;
@@ -261,6 +273,7 @@ export interface SidebarOverlayDefinition {
   label: string;
   description: string;
   enabled: boolean;
+  scope: "game" | "lobby";
 }
 
 export type SidebarRunningActionStatus =
@@ -372,6 +385,7 @@ export type PanelOrientation = "horizontal" | "vertical";
 
 export type SortKey =
   | "label"
+  | "scope"
   | "tiles"
   | "gold"
   | "troops"

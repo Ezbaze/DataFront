@@ -25,6 +25,7 @@ import {
   AlliancePact,
   GameSnapshot,
   IncomingAttack,
+  LobbyPublicGameType,
   LobbyQueueInfo,
   LobbyTeamCountConfig,
   OutgoingAttack,
@@ -58,6 +59,11 @@ import { extractClanTag, formatTroopCount } from "./utils";
 
 const TICK_MILLISECONDS = 100;
 const MAX_LOG_ENTRIES = 500;
+const FEATURED_PUBLIC_GAME_ORDER: readonly LobbyPublicGameType[] = [
+  "special",
+  "ffa",
+  "team",
+];
 const STRUCTURE_UNIT_TYPES = new Set<string>([
   "City",
   "Port",
@@ -79,6 +85,7 @@ const GOLD_DONATION_OVERLAY_ID = "gold-donations";
 const TRADE_ROUTE_OVERLAY_ID = "trade-routes";
 const TRANSPORT_DESTINATION_OVERLAY_ID = "transport-destinations";
 const ATTACK_BORDER_OVERLAY_ID = "attack-borders";
+const LOBBY_CLAN_TAG_COUNTS_OVERLAY_ID = "lobby-clan-tag-counts";
 const ATTACK_BORDER_TROOP_COMPACT_THRESHOLD = 100_000;
 const ATTACK_BORDER_TROOP_COMPACT_FORMATTER = new Intl.NumberFormat("en-US", {
   notation: "compact",
@@ -175,6 +182,8 @@ interface LobbySummaryLike {
   numClients?: number;
   msUntilStart?: number;
   gameConfig?: LobbyGameConfigLike;
+  publicGameType?: LobbyPublicGameType;
+  startsAt?: number;
 }
 
 interface LobbyClientInfoLike {
@@ -191,6 +200,8 @@ interface LobbySummary {
   numClients?: number;
   msUntilStart?: number;
   gameConfig?: LobbyGameConfigLike;
+  publicGameType?: LobbyPublicGameType;
+  startsAt?: number;
 }
 
 interface LobbyDetails extends LobbySummary {
@@ -206,10 +217,23 @@ interface LobbyWorkerInfo {
   workerCount: number;
 }
 
-type PublicLobbyElement = Element & {
-  lobbies?: LobbySummaryLike[];
-  lobbyClicked?: (lobby: LobbySummaryLike) => void;
+interface PublicLobbyUpdatePayload {
+  serverTime?: number;
+  games?: Partial<Record<LobbyPublicGameType, LobbySummaryLike[]>>;
+}
+
+type GameModeSelectorElement = Element & {
+  lobbies?: unknown;
 };
+
+type UsernameInputElement = HTMLElement & {
+  getCurrentUsername?: () => string;
+};
+
+interface LobbyDisplayNameParts {
+  displayName?: string;
+  clanTag?: string;
+}
 
 interface DisplayMessageUpdateLike {
   message: string;
@@ -683,6 +707,8 @@ export class DataStore {
   private readonly hostWindow: Window | null;
   private localPlayerPublicId: string | null = null;
   private readonly userMeHandler: (event: Event) => void;
+  private readonly publicLobbiesHandler: (event: Event) => void;
+  private latestFeaturedLobbySummaries: LobbySummary[] | null = null;
 
   constructor(initialSnapshot?: GameSnapshot) {
     this.hostWindow =
@@ -707,7 +733,19 @@ export class DataStore {
           ? candidate.trim()
           : null;
     };
+    this.publicLobbiesHandler = (event: Event) => {
+      const custom = event as CustomEvent<{ payload?: unknown }>;
+      const payload = custom.detail?.payload;
+      const summaries = this.normalizePublicLobbyUpdatePayload(payload);
+      this.latestFeaturedLobbySummaries =
+        summaries.length > 0 ? summaries : null;
+      this.enqueueLobbyQueueRefresh();
+    };
     this.hostDocument.addEventListener("userMeResponse", this.userMeHandler);
+    this.hostDocument.addEventListener(
+      "public-lobbies-update",
+      this.publicLobbiesHandler,
+    );
     this.webSocketDonationCleanup = this.installWebSocketDonationHook();
     this.actionsState = this.createInitialActionsState();
     this.sidebarOverlays = [
@@ -717,6 +755,7 @@ export class DataStore {
         description:
           "Draws projected missile paths from each silo to your selected Atom or Hydrogen bomb target.",
         enabled: false,
+        scope: "game",
       },
       {
         id: HISTORICAL_MISSILE_OVERLAY_ID,
@@ -724,6 +763,7 @@ export class DataStore {
         description:
           "Shows the live flight paths for missiles currently in the air, colored by their owners.",
         enabled: false,
+        scope: "game",
       },
       {
         id: MISSILE_IMPACT_OVERLAY_ID,
@@ -731,6 +771,7 @@ export class DataStore {
         description:
           "Shows rotating impact circles for active missiles, colored per team.",
         enabled: false,
+        scope: "game",
       },
       {
         id: TROOP_DONATION_OVERLAY_ID,
@@ -738,6 +779,7 @@ export class DataStore {
         description:
           "Shows temporary arrows and labels across the map when players send troops to each other.",
         enabled: false,
+        scope: "game",
       },
       {
         id: GOLD_DONATION_OVERLAY_ID,
@@ -745,6 +787,7 @@ export class DataStore {
         description:
           "Shows temporary arrows and labels across the map when players send gold to each other.",
         enabled: false,
+        scope: "game",
       },
       {
         id: TRADE_ROUTE_OVERLAY_ID,
@@ -752,6 +795,7 @@ export class DataStore {
         description:
           "Displays projected trade ship paths, distances, and base gold when placing a new port.",
         enabled: false,
+        scope: "game",
       },
       {
         id: TRANSPORT_DESTINATION_OVERLAY_ID,
@@ -759,6 +803,7 @@ export class DataStore {
         description:
           "Highlights destination tiles for transport ships currently moving across the map.",
         enabled: false,
+        scope: "game",
       },
       {
         id: ATTACK_BORDER_OVERLAY_ID,
@@ -766,6 +811,15 @@ export class DataStore {
         description:
           "Shows active attack labels centered on the attacker side of shared territory borders.",
         enabled: false,
+        scope: "game",
+      },
+      {
+        id: LOBBY_CLAN_TAG_COUNTS_OVERLAY_ID,
+        label: "Clan tag counts",
+        description:
+          "Adds the count of queued players with your clan tag to each featured lobby card.",
+        enabled: false,
+        scope: "lobby",
       },
     ];
     this.sidebarOverlayRevision = 1;
@@ -792,6 +846,14 @@ export class DataStore {
       window.addEventListener(
         "beforeunload",
         () => {
+          this.hostDocument.removeEventListener(
+            "userMeResponse",
+            this.userMeHandler,
+          );
+          this.hostDocument.removeEventListener(
+            "public-lobbies-update",
+            this.publicLobbiesHandler,
+          );
           this.logSubscriptionCleanup();
           this.webSocketDonationCleanup?.();
         },
@@ -1076,6 +1138,7 @@ export class DataStore {
   private attachActionsState(snapshot: GameSnapshot): GameSnapshot {
     return {
       ...snapshot,
+      currentLobbyClanTag: this.resolveCurrentLobbyClanTag(),
       sidebarActions: this.actionsState,
       sidebarLogs: this.sidebarLogs.slice(),
       sidebarLogRevision: this.sidebarLogRevision,
@@ -2875,42 +2938,34 @@ export class DataStore {
         "    state.lastJoinGameId = undefined;\n" +
         "    state.lastJoinedGameId = undefined;\n" +
         "  });\n" +
-        "  const apply = (queue) => {\n" +
+        "  const getQueueList = (queues) => {\n" +
+        "    if (Array.isArray(queues) && queues.length > 0) {\n" +
+        "      return queues;\n" +
+        "    }\n" +
+        "    if (Array.isArray(lobby.queues) && lobby.queues.length > 0) {\n" +
+        "      return lobby.queues;\n" +
+        "    }\n" +
+        "    return lobby.queue ? [lobby.queue] : [];\n" +
+        "  };\n" +
+        "  const analyzeQueue = (queue) => {\n" +
         "    if (!queue) {\n" +
-        "      state.lastJoinGameId = undefined;\n" +
-        "      state.lastJoinedGameId = undefined;\n" +
-        "      state.lastAppliedDisplayName = undefined;\n" +
-        "      return;\n" +
-        "    }\n" +
-        "    if (state.lastJoinedGameId === queue.gameId) {\n" +
-        "      return;\n" +
-        "    }\n" +
-        "    if (inGame) {\n" +
-        '      logger.info("Already in an active game; skipping join.");\n' +
-        "      state.lastJoinGameId = undefined;\n" +
-        "      return;\n" +
+        "      return null;\n" +
         "    }\n" +
         "    if (!queue.playerTeams) {\n" +
-        '      logger.info("Skipping FFA lobby (not a team game)");\n' +
-        "      return;\n" +
+        "      return null;\n" +
         "    }\n" +
         "    if (queue.playerCount >= queue.maxPlayers) {\n" +
-        '      logger.info("Lobby is full; skipping join.");\n' +
-        "      return;\n" +
+        "      return null;\n" +
         "    }\n" +
         "    const players = Array.isArray(queue.players) ? queue.players : [];\n" +
         "    if (players.length === 0) {\n" +
-        '      logger.info("Lobby has no visible players; skipping join.");\n' +
-        "      return;\n" +
+        "      return null;\n" +
         "    }\n" +
         "    const counts = new Map();\n" +
         "    for (const entry of players) {\n" +
         "      const tag = lobby.extractClanTag(entry.name);\n" +
         "      if (!tag) continue;\n" +
         "      counts.set(tag, (counts.get(tag) ?? 0) + 1);\n" +
-        "    }\n" +
-        "    if (counts.size === 0) {\n" +
-        '      logger.info("No clans detected in lobby; keeping existing name.");\n' +
         "    }\n" +
         "    let best = null;\n" +
         "    for (const [tag, count] of counts.entries()) {\n" +
@@ -2931,13 +2986,53 @@ export class DataStore {
         "      teamSize = Math.floor(queue.maxPlayers / 2);\n" +
         "    }\n" +
         "    if (best && teamSize > 0 && best.count >= teamSize) {\n" +
-        "      logger.info(`Clan ${best.tag} already has ${best.count} players (team size: ${teamSize}); skipping join to avoid overfilling.`);\n" +
-        "      return;\n" +
+        "      return null;\n" +
         "    }\n" +
         "    const slotsLeft = queue.maxPlayers - queue.playerCount;\n" +
         "    const slotThreshold = Math.ceil(queue.maxPlayers * 0.2);\n" +
         "    if (slotsLeft > slotThreshold) {\n" +
-        "      logger.info(`Waiting for lobby to fill more (${slotsLeft} slots remaining, waiting for ${slotThreshold} or fewer)`);\n" +
+        "      return null;\n" +
+        "    }\n" +
+        "    return { queue, best, teamSize, slotsLeft, slotThreshold };\n" +
+        "  };\n" +
+        "  const selectQueue = (queues) => {\n" +
+        "    let selected = null;\n" +
+        "    for (const queue of getQueueList(queues)) {\n" +
+        "      const candidate = analyzeQueue(queue);\n" +
+        "      if (!candidate) {\n" +
+        "        continue;\n" +
+        "      }\n" +
+        "      if (!selected) {\n" +
+        "        selected = candidate;\n" +
+        "        continue;\n" +
+        "      }\n" +
+        "      const selectedCount = selected.best?.count ?? 0;\n" +
+        "      const candidateCount = candidate.best?.count ?? 0;\n" +
+        "      if (candidateCount > selectedCount) {\n" +
+        "        selected = candidate;\n" +
+        "        continue;\n" +
+        "      }\n" +
+        "      if (candidateCount === selectedCount && candidate.slotsLeft < selected.slotsLeft) {\n" +
+        "        selected = candidate;\n" +
+        "      }\n" +
+        "    }\n" +
+        "    return selected;\n" +
+        "  };\n" +
+        "  const apply = (queues) => {\n" +
+        "    const selected = selectQueue(queues);\n" +
+        "    if (!selected) {\n" +
+        "      state.lastJoinGameId = undefined;\n" +
+        "      state.lastJoinedGameId = undefined;\n" +
+        "      state.lastAppliedDisplayName = undefined;\n" +
+        "      return;\n" +
+        "    }\n" +
+        "    const { queue, best, teamSize, slotsLeft, slotThreshold } = selected;\n" +
+        "    if (state.lastJoinedGameId === queue.gameId) {\n" +
+        "      return;\n" +
+        "    }\n" +
+        "    if (inGame) {\n" +
+        '      logger.info("Already in an active game; skipping join.");\n' +
+        "      state.lastJoinGameId = undefined;\n" +
         "      return;\n" +
         "    }\n" +
         '    const currentName = (typeof lobby.getDisplayName === "function" && lobby.getDisplayName()) || "";\n' +
@@ -2956,16 +3051,16 @@ export class DataStore {
         "      const joined = lobby.join(queue.gameId);\n" +
         "      state.lastJoinGameId = queue.gameId;\n" +
         "      if (joined) {\n" +
-        "        logger.info(`Joining lobby ${queue.gameId} with ${nextName}`);\n" +
+        "        logger.info(`Joining lobby ${queue.gameId} (${queue.lobbyLabel || queue.modeName}) with ${nextName}`);\n" +
         "        state.lastJoinedGameId = queue.gameId;\n" +
         "      } else {\n" +
         '        logger.warn("Could not request lobby join (maybe already in-game?)");\n' +
         "      }\n" +
         "    }\n" +
         "  };\n" +
-        "  apply(snapshot.currentLobbyQueue);\n" +
-        '  events.on("lobbyUpdated", (queue) => {\n' +
-        "    apply(queue || lobby.queue);\n" +
+        "  apply(snapshot.currentLobbyQueues);\n" +
+        '  events.on("lobbiesUpdated", (queues) => {\n' +
+        "    apply(queues);\n" +
         "  });\n" +
         "};",
       runMode: "event",
@@ -4239,6 +4334,7 @@ export class DataStore {
   private buildActionLobbyApi(): SidebarLobbyApi {
     return {
       queue: this.snapshot.currentLobbyQueue,
+      queues: this.snapshot.currentLobbyQueues,
       extractClanTag,
       buildNameWithClanTag: (baseName, clanTag) =>
         this.buildDisplayNameWithClan(baseName, clanTag),
@@ -4256,30 +4352,102 @@ export class DataStore {
     return Array.from(candidate).slice(0, 27).join("");
   }
 
-  private readLobbyDisplayName(): string | undefined {
+  private splitLobbyDisplayName(displayName: string): {
+    baseName: string;
+    clanTag?: string;
+  } {
+    const trimmed = (displayName ?? "").trim();
+    const clanTag = extractClanTag(trimmed);
+    if (!clanTag) {
+      return {
+        baseName: trimmed,
+      };
+    }
+    return {
+      baseName: trimmed.replace(`[${clanTag}]`, "").trim(),
+      clanTag,
+    };
+  }
+
+  private isTextInputElement(value: unknown): value is HTMLInputElement {
+    if (!value || typeof value !== "object") {
+      return false;
+    }
+    const candidate = value as {
+      type?: unknown;
+      value?: unknown;
+      dispatchEvent?: unknown;
+    };
+    return (
+      candidate.type === "text" &&
+      typeof candidate.value === "string" &&
+      typeof candidate.dispatchEvent === "function"
+    );
+  }
+
+  private readLobbyDisplayNameParts(): LobbyDisplayNameParts {
     if (typeof window === "undefined") {
-      return undefined;
+      return {};
     }
 
-    const readFromInput = (): string | undefined => {
-      const usernameInput = document.querySelector(
-        "username-input",
-      ) as HTMLElement | null;
-      const input = usernameInput?.querySelector("input") as
-        | HTMLInputElement
-        | null
-        | undefined;
-      const value = input?.value?.trim();
-      return value && value.length > 0 ? value : undefined;
-    };
+    const usernameInput = document.querySelector(
+      "username-input",
+    ) as UsernameInputElement | null;
+    if (!usernameInput) {
+      const stored = readPersistedString(USERNAME_STORAGE_KEY);
+      const trimmed = stored?.trim();
+      if (!trimmed) {
+        return {};
+      }
+      const parts = this.splitLobbyDisplayName(trimmed);
+      return {
+        displayName: trimmed,
+        clanTag: parts.clanTag,
+      };
+    }
 
-    const liveValue = readFromInput();
-    if (liveValue) {
-      return liveValue;
+    const componentValue =
+      typeof usernameInput.getCurrentUsername === "function"
+        ? usernameInput.getCurrentUsername().trim()
+        : "";
+    const textInputs = Array.from(
+      usernameInput.querySelectorAll("input"),
+    ).filter((input): input is HTMLInputElement =>
+      this.isTextInputElement(input),
+    );
+    const tagInputValue = textInputs[0]?.value?.trim();
+    const baseInputValue = textInputs[1]?.value?.trim();
+    const combinedValue =
+      baseInputValue && baseInputValue.length > 0
+        ? this.buildDisplayNameWithClan(baseInputValue, tagInputValue)
+        : componentValue;
+    if (combinedValue && combinedValue.length > 0) {
+      const parts = this.splitLobbyDisplayName(combinedValue);
+      return {
+        displayName: combinedValue,
+        clanTag: tagInputValue || parts.clanTag,
+      };
     }
 
     const stored = readPersistedString(USERNAME_STORAGE_KEY);
     const trimmed = stored?.trim();
+    if (!trimmed) {
+      return {};
+    }
+    const parts = this.splitLobbyDisplayName(trimmed);
+    return {
+      displayName: trimmed,
+      clanTag: parts.clanTag,
+    };
+  }
+
+  private readLobbyDisplayName(): string | undefined {
+    return this.readLobbyDisplayNameParts().displayName;
+  }
+
+  private resolveCurrentLobbyClanTag(): string | undefined {
+    const clanTag = this.readLobbyDisplayNameParts().clanTag;
+    const trimmed = clanTag?.trim();
     return trimmed && trimmed.length > 0 ? trimmed : undefined;
   }
 
@@ -4293,12 +4461,11 @@ export class DataStore {
       );
       return false;
     }
-    const target = (gameId ?? this.snapshot.currentLobbyQueue?.gameId)?.trim();
+    const fallbackQueue =
+      this.snapshot.currentLobbyQueues?.[0] ?? this.snapshot.currentLobbyQueue;
+    const target = (gameId ?? fallbackQueue?.gameId)?.trim();
     if (!target) {
       return false;
-    }
-    if (this.tryJoinViaLobbyElement(target)) {
-      return true;
     }
     const clientID = this.generateLobbyClientId();
     try {
@@ -4314,36 +4481,6 @@ export class DataStore {
       return true;
     } catch (error) {
       sidebarLogger.error("Failed to dispatch lobby join request", error);
-      return false;
-    }
-  }
-
-  private tryJoinViaLobbyElement(target: string): boolean {
-    const element = this.hostDocument.querySelector(
-      "public-lobby",
-    ) as PublicLobbyElement | null;
-    if (!element) {
-      return false;
-    }
-    const lobbies = element.lobbies;
-    if (!Array.isArray(lobbies)) {
-      return false;
-    }
-    const match = lobbies.find(
-      (entry) => typeof entry?.gameID === "string" && entry.gameID === target,
-    );
-    const clickHandler = element.lobbyClicked;
-    if (!match || typeof clickHandler !== "function") {
-      return false;
-    }
-    try {
-      clickHandler.call(element, match);
-      sidebarLogger.info(
-        `Requested lobby join for ${target} via lobby component interaction.`,
-      );
-      return true;
-    } catch (error) {
-      console.warn("Failed to trigger lobby join via lobby component", error);
       return false;
     }
   }
@@ -4373,19 +4510,42 @@ export class DataStore {
       return false;
     }
     const normalized = Array.from(trimmed).slice(0, 27).join("");
+    const { baseName, clanTag } = this.splitLobbyDisplayName(normalized);
     writePersistedString(USERNAME_STORAGE_KEY, normalized);
     const usernameInput = document.querySelector(
       "username-input",
-    ) as HTMLElement | null;
-    const input = usernameInput?.querySelector("input") as
-      | HTMLInputElement
-      | null
-      | undefined;
-    if (input) {
-      input.value = normalized;
-      input.dispatchEvent(new Event("input", { bubbles: true }));
+    ) as UsernameInputElement | null;
+    const textInputs = Array.from(
+      usernameInput?.querySelectorAll("input") ?? [],
+    ).filter((input): input is HTMLInputElement =>
+      this.isTextInputElement(input),
+    );
+    if (textInputs.length >= 2) {
+      const tagInput = textInputs[0];
+      const baseInput = textInputs[1];
+      if (tagInput) {
+        tagInput.value = clanTag ?? "";
+        tagInput.dispatchEvent(new Event("input", { bubbles: true }));
+      }
+      if (baseInput) {
+        baseInput.value = baseName;
+        baseInput.dispatchEvent(new Event("input", { bubbles: true }));
+      }
+    } else {
+      const input = textInputs[0];
+      if (input) {
+        input.value = normalized;
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      }
     }
     sidebarLogger.info(`Updated lobby display name to "${normalized}".`);
+    const nextSnapshot = this.attachActionsState({ ...this.snapshot });
+    if (
+      nextSnapshot.currentLobbyClanTag !== this.snapshot.currentLobbyClanTag
+    ) {
+      this.snapshot = nextSnapshot;
+      this.notify();
+    }
     return true;
   }
 
@@ -6645,36 +6805,42 @@ export class DataStore {
       return;
     }
 
-    const lobby = await this.resolveFeaturedLobby();
+    const lobbies = await this.resolveFeaturedLobbies();
     if (this.game) {
       this.clearLobbyQueueSnapshot();
       return;
     }
-    if (!lobby) {
+    if (lobbies.length === 0) {
       this.clearLobbyQueueSnapshot();
       return;
     }
 
-    const queue = await this.buildLobbyQueueInfo(lobby);
+    const queueCandidates = await Promise.all(
+      lobbies.map((lobby) => this.buildLobbyQueueInfo(lobby)),
+    );
     if (this.game) {
       this.clearLobbyQueueSnapshot();
       return;
     }
-    if (!queue) {
+    const queues = queueCandidates.filter((queue): queue is LobbyQueueInfo =>
+      Boolean(queue),
+    );
+    if (queues.length === 0) {
       this.clearLobbyQueueSnapshot();
       return;
     }
 
-    this.applyLobbyQueue(queue);
+    this.applyLobbyQueues(queues);
   }
 
   private clearLobbyQueueSnapshot(): void {
     const hadQueue = Boolean(this.snapshot.currentLobbyQueue);
+    const hadQueues = (this.snapshot.currentLobbyQueues?.length ?? 0) > 0;
     const shouldDropLobbyPlayers = !this.game;
     const hadLobbyPlayers = shouldDropLobbyPlayers
       ? this.snapshot.players.some((player) => player.isLobbyPlayer)
       : false;
-    if (!hadQueue && !hadLobbyPlayers) {
+    if (!hadQueue && !hadQueues && !hadLobbyPlayers) {
       return;
     }
     this.lastLobbyTeamLogKey = null;
@@ -6689,35 +6855,35 @@ export class DataStore {
       ...this.snapshot,
       players,
       currentLobbyQueue: undefined,
+      currentLobbyQueues: undefined,
     });
-    if (hadQueue) {
-      this.emitActionEvent("lobbyUpdated", null);
+    if (hadQueue || hadQueues) {
+      this.emitActionEvent("lobbiesUpdated", []);
     }
     this.snapshot = next;
     this.notify();
   }
 
-  private async resolveFeaturedLobby(): Promise<LobbySummary | null> {
-    const fromElement = this.readLobbyFromElement();
-    if (fromElement) {
-      return fromElement;
+  private async resolveFeaturedLobbies(): Promise<LobbySummary[]> {
+    if (this.latestFeaturedLobbySummaries?.length) {
+      return this.latestFeaturedLobbySummaries;
+    }
+    const fromSelector = this.readFeaturedLobbiesFromSelector();
+    if (fromSelector.length > 0) {
+      return fromSelector;
     }
     const summaries = await this.fetchPublicLobbySummaries();
-    return summaries.length ? summaries[0] : null;
+    return summaries;
   }
 
-  private readLobbyFromElement(): LobbySummary | null {
+  private readFeaturedLobbiesFromSelector(): LobbySummary[] {
     const element = this.hostDocument.querySelector(
-      "public-lobby",
-    ) as PublicLobbyElement | null;
+      "game-mode-selector",
+    ) as GameModeSelectorElement | null;
     if (!element) {
-      return null;
+      return [];
     }
-    const lobbies = element.lobbies;
-    if (!Array.isArray(lobbies) || lobbies.length === 0) {
-      return null;
-    }
-    return this.normalizeLobbySummary(lobbies[0]);
+    return this.normalizePublicLobbyUpdatePayload(element.lobbies);
   }
 
   private normalizeLobbySummary(
@@ -6738,6 +6904,16 @@ export class DataStore {
     }
     if (typeof input.msUntilStart === "number") {
       summary.msUntilStart = input.msUntilStart;
+    }
+    if (typeof input.startsAt === "number" && Number.isFinite(input.startsAt)) {
+      summary.startsAt = input.startsAt;
+    }
+    if (
+      input.publicGameType === "ffa" ||
+      input.publicGameType === "team" ||
+      input.publicGameType === "special"
+    ) {
+      summary.publicGameType = input.publicGameType;
     }
     if (input.gameConfig) {
       summary.gameConfig = {
@@ -6763,6 +6939,83 @@ export class DataStore {
     return summary;
   }
 
+  private normalizePublicLobbyUpdatePayload(payload: unknown): LobbySummary[] {
+    if (!payload || typeof payload !== "object") {
+      return [];
+    }
+    const candidate = payload as PublicLobbyUpdatePayload;
+    const summaries: LobbySummary[] = [];
+    const serverTime =
+      typeof candidate.serverTime === "number" &&
+      Number.isFinite(candidate.serverTime)
+        ? candidate.serverTime
+        : undefined;
+    for (const publicGameType of FEATURED_PUBLIC_GAME_ORDER) {
+      const entries = candidate.games?.[publicGameType];
+      if (!Array.isArray(entries)) {
+        continue;
+      }
+      for (const entry of entries) {
+        const normalized = this.normalizeLobbySummary({
+          ...entry,
+          publicGameType,
+          startsAt:
+            typeof entry?.startsAt === "number" &&
+            Number.isFinite(entry.startsAt)
+              ? entry.startsAt
+              : typeof entry?.msUntilStart === "number" &&
+                  Number.isFinite(entry.msUntilStart) &&
+                  serverTime !== undefined
+                ? serverTime + Math.max(0, entry.msUntilStart)
+                : undefined,
+        });
+        if (normalized) {
+          summaries.push(normalized);
+        }
+      }
+    }
+    return this.prioritizeLobbySummaries(summaries);
+  }
+
+  private prioritizeLobbySummaries(
+    summaries: readonly LobbySummary[],
+  ): LobbySummary[] {
+    const unique = new Map<string, LobbySummary>();
+    for (const summary of summaries) {
+      if (!unique.has(summary.gameID)) {
+        unique.set(summary.gameID, summary);
+      }
+    }
+    const ordered = Array.from(unique.values());
+    const prioritized: LobbySummary[] = [];
+    for (const publicGameType of FEATURED_PUBLIC_GAME_ORDER) {
+      const match = ordered.find(
+        (summary) => summary.publicGameType === publicGameType,
+      );
+      if (match) {
+        prioritized.push(match);
+      }
+    }
+    for (const summary of ordered) {
+      if (prioritized.length >= FEATURED_PUBLIC_GAME_ORDER.length) {
+        break;
+      }
+      if (!prioritized.some((entry) => entry.gameID === summary.gameID)) {
+        prioritized.push(summary);
+      }
+    }
+    return prioritized;
+  }
+
+  private formatLobbyQueueLabel(mapName: string, modeName: string): string {
+    const safeMapName = mapName.trim();
+    const safeModeName = modeName.trim();
+    if (safeMapName && safeModeName) {
+      return `${safeMapName} • ${safeModeName}`;
+    }
+    return safeMapName || safeModeName || "Lobby queue";
+  }
+
   private async fetchPublicLobbySummaries(): Promise<LobbySummary[]> {
     if (typeof fetch !== "function") {
       return [];
@@ -6773,6 +7026,10 @@ export class DataStore {
         cache: "no-store",
       });
       if (!response.ok) {
+        return [];
+      }
+      const contentType = response.headers.get("content-type") ?? "";
+      if (!contentType.toLowerCase().includes("json")) {
         return [];
       }
       const payload = (await response.json()) as {
@@ -6788,7 +7045,7 @@ export class DataStore {
           summaries.push(normalized);
         }
       }
-      return summaries;
+      return this.prioritizeLobbySummaries(summaries);
     } catch (error) {
       console.warn("Failed to fetch public lobby list", error);
       return [];
@@ -6825,16 +7082,19 @@ export class DataStore {
         ? Math.max(inferredMaxPlayers, playerCount)
         : Math.max(playerCount, 0);
     const startsAtMs = this.getLobbyStartTime(summary, details);
+    const lobbyLabel = this.formatLobbyQueueLabel(mapName, modeName);
     return {
       gameId: summary.gameID,
       mapName,
       modeName,
+      lobbyLabel,
       playerCount,
       maxPlayers,
       startsAtMs,
       updatedAtMs: now,
       players,
       playerTeams,
+      publicGameType: summary.publicGameType,
     };
   }
 
@@ -6858,10 +7118,7 @@ export class DataStore {
 
   private createLobbyQueuePlayers(queue: LobbyQueueInfo): PlayerRecord[] {
     const now = Date.now();
-    const fallbackTeamName =
-      queue.modeName && queue.modeName !== "Unknown mode"
-        ? `${queue.modeName} lobby`
-        : "Lobby queue";
+    const fallbackTeamName = queue.lobbyLabel || "Lobby queue";
     const normalizedPlayers = queue.players.map((entry, index) => {
       const trimmedName = entry.name?.trim() ?? "Anonymous player";
       const safeName =
@@ -6891,7 +7148,9 @@ export class DataStore {
       const predictedTeam = predictedTeams.get(player.id);
       const wasKicked = predictedTeam === LOBBY_TEAM_KICKED;
       const teamLabel =
-        !predictedTeam || wasKicked ? fallbackTeamName : predictedTeam;
+        !predictedTeam || wasKicked
+          ? fallbackTeamName
+          : `${fallbackTeamName} • ${predictedTeam}`;
       return {
         id: player.id,
         name: player.name,
@@ -6918,6 +7177,8 @@ export class DataStore {
         alliances: [],
         lastUpdatedMs: now,
         isLobbyPlayer: true,
+        lobbyGameId: queue.gameId,
+        lobbyLabel: queue.lobbyLabel,
         lobbyPosition: player.lobbyPosition,
         wasKickedFromLobby: wasKicked,
       };
@@ -7024,25 +7285,38 @@ export class DataStore {
     }
   }
 
-  private applyLobbyQueue(queue: LobbyQueueInfo): void {
-    const players = this.createLobbyQueuePlayers(queue);
+  private applyLobbyQueues(queues: readonly LobbyQueueInfo[]): void {
+    const normalizedQueues = [...queues];
+    const players = normalizedQueues.flatMap((queue) =>
+      this.createLobbyQueuePlayers(queue),
+    );
+    const primaryQueue = normalizedQueues[0];
     const nextSnapshot = this.attachActionsState({
       ...this.snapshot,
       players,
-      currentLobbyQueue: queue,
+      currentLobbyQueue: primaryQueue,
+      currentLobbyQueues: normalizedQueues,
       currentTimeMs: Date.now(),
     });
-    const queueChanged = !this.areLobbyQueuesEqual(
-      this.snapshot.currentLobbyQueue,
-      queue,
+    const queuesChanged = !this.areLobbyQueueListsEqual(
+      this.snapshot.currentLobbyQueues,
+      normalizedQueues,
     );
     const timeChanged =
       Math.abs(nextSnapshot.currentTimeMs - this.snapshot.currentTimeMs) >=
       1000;
-    if (queueChanged || timeChanged) {
-      if (queueChanged) {
-        this.logLobbyTeamPredictions(queue, players);
-        this.emitActionEvent("lobbyUpdated", queue);
+    if (queuesChanged || timeChanged) {
+      if (queuesChanged) {
+        this.logLobbyTeamPredictions(normalizedQueues, players);
+        for (let index = 0; index < normalizedQueues.length; index += 1) {
+          const queue = normalizedQueues[index];
+          this.emitActionEvent("lobbyQueueUpdated", {
+            queue,
+            index,
+            total: normalizedQueues.length,
+          });
+        }
+        this.emitActionEvent("lobbiesUpdated", normalizedQueues);
       }
       this.snapshot = nextSnapshot;
       this.notify();
@@ -7050,13 +7324,14 @@ export class DataStore {
   }
 
   private logLobbyTeamPredictions(
-    queue: LobbyQueueInfo,
+    queues: readonly LobbyQueueInfo[],
     players: PlayerRecord[],
   ): void {
     if (players.length === 0) {
       return;
     }
-    const signature = this.buildPlayerTeamSignature(players, queue.gameId);
+    const scope = queues.map((queue) => queue.gameId).join(",");
+    const signature = this.buildPlayerTeamSignature(players, scope);
     if (this.lastLobbyTeamLogKey === signature) {
       return;
     }
@@ -7094,9 +7369,12 @@ export class DataStore {
       previous.gameId !== next.gameId ||
       previous.mapName !== next.mapName ||
       previous.modeName !== next.modeName ||
+      previous.lobbyLabel !== next.lobbyLabel ||
       previous.playerCount !== next.playerCount ||
       previous.maxPlayers !== next.maxPlayers ||
-      previous.startsAtMs !== next.startsAtMs
+      previous.startsAtMs !== next.startsAtMs ||
+      previous.playerTeams !== next.playerTeams ||
+      previous.publicGameType !== next.publicGameType
     ) {
       return false;
     }
@@ -7113,10 +7391,39 @@ export class DataStore {
     return true;
   }
 
+  private areLobbyQueueListsEqual(
+    previous?: readonly LobbyQueueInfo[],
+    next?: readonly LobbyQueueInfo[],
+  ): boolean {
+    const left = previous ?? [];
+    const right = next ?? [];
+    if (left.length !== right.length) {
+      return false;
+    }
+    for (let index = 0; index < left.length; index += 1) {
+      if (!this.areLobbyQueuesEqual(left[index], right[index])) {
+        return false;
+      }
+    }
+    return true;
+  }
+
   private getLobbyStartTime(
     summary: LobbySummary,
     details?: LobbyDetails,
   ): number | undefined {
+    if (
+      typeof summary.startsAt === "number" &&
+      Number.isFinite(summary.startsAt)
+    ) {
+      return summary.startsAt;
+    }
+    if (
+      typeof details?.startsAt === "number" &&
+      Number.isFinite(details.startsAt)
+    ) {
+      return details.startsAt;
+    }
     if (
       typeof details?.msUntilStart === "number" &&
       Number.isFinite(details.msUntilStart)

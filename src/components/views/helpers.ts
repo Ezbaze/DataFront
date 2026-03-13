@@ -304,6 +304,7 @@ export const OVERLAY_TABLE_HEADERS: ReadonlyArray<TableHeader<string>> = [
     sortKey: "label",
     hideable: false,
   },
+  { key: "scope", label: "Scope", align: "left", sortKey: "scope" },
   { key: "status", label: "Status", align: "right", sortKey: "status" },
 ];
 

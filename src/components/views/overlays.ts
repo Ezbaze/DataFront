@@ -51,7 +51,10 @@ export function renderOverlayView(options: {
     const overlays = snapshot.sidebarOverlays ?? [];
     const revision = snapshot.sidebarOverlayRevision ?? 0;
     const signature = `${revision}:${overlays
-      .map((overlay) => `${overlay.id}:${overlay.enabled ? 1 : 0}`)
+      .map(
+        (overlay) =>
+          `${overlay.id}:${overlay.enabled ? 1 : 0}:${overlay.scope}:${overlay.label}`,
+      )
       .join("|")}`;
     const sortSignature = `${sortState.key}:${sortState.direction}`;
     const isOverlayContainer =
@@ -111,6 +114,10 @@ export function renderOverlayView(options: {
           sortState.direction,
         ),
       );
+    } else if (sortState.key === "scope") {
+      sortedOverlays.sort((a, b) =>
+        compareSortValues(a.scope, b.scope, sortState.direction),
+      );
     } else if (sortState.key === "status") {
       sortedOverlays.sort((a, b) =>
         compareSortValues(
@@ -135,6 +142,9 @@ export function renderOverlayView(options: {
       );
       nameStack.appendChild(nameLabel);
       nameCell.appendChild(nameStack);
+
+      const scopeCell = createElement("td", `${cellBaseClass} text-left`);
+      scopeCell.textContent = overlay.scope === "lobby" ? "Lobby" : "Game";
 
       const statusCell = createElement("td", `${cellBaseClass} text-right`);
       const toggleWrapper = createElement("div", "flex justify-end");
@@ -177,11 +187,14 @@ export function renderOverlayView(options: {
       toggleWrapper.appendChild(toggleButton);
       statusCell.appendChild(toggleWrapper);
 
+      if (visibleKeys.has("name")) {
+        row.appendChild(nameCell);
+      }
+      if (visibleKeys.has("scope")) {
+        row.appendChild(scopeCell);
+      }
       if (visibleKeys.has("status")) {
         row.appendChild(statusCell);
-      }
-      if (visibleKeys.has("name")) {
-        row.insertBefore(nameCell, row.firstChild);
       }
       tbody.appendChild(row);
     }

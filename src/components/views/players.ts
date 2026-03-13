@@ -209,6 +209,10 @@ interface AggregatedRow {
   };
 }
 
+interface LobbyGroupRow extends AggregatedRow {
+  queueLabel: string;
+}
+
 interface PlayerContextTarget extends TradeStatusCarrier {
   id: string;
   publicId?: string;
@@ -410,6 +414,7 @@ function appendPlayerRows(options: {
   metricsCache: Map<string, Metrics>;
   actions: ViewActionHandlers;
   headers: ReadonlyArray<TableHeader>;
+  lobbyLabelHidden?: boolean;
 }) {
   const { player, indent, leaf, snapshot, tbody, metricsCache, actions } =
     options;
@@ -449,15 +454,21 @@ function appendPlayerRows(options: {
             "text-[0.65rem] uppercase tracking-wide text-rose-400";
           return "KICKED";
         }
-        const queue = snapshot.currentLobbyQueue;
+        const queue =
+          snapshot.currentLobbyQueues?.find(
+            (entry) => entry.gameId === player.lobbyGameId,
+          ) ?? snapshot.currentLobbyQueue;
         const hasPosition =
           typeof player.lobbyPosition === "number" &&
           Number.isFinite(player.lobbyPosition);
         const positionLabel = hasPosition
           ? `#${player.lobbyPosition}`
           : "Queued";
+        const queueLabel = player.lobbyLabel ?? queue?.lobbyLabel;
         if (!queue) {
-          return `Queue ${positionLabel}`;
+          return queueLabel
+            ? `${queueLabel} • Queue ${positionLabel}`
+            : `Queue ${positionLabel}`;
         }
         const totalSlots = queue.maxPlayers ?? queue.playerCount;
         const hasTotalSlots =
@@ -472,8 +483,12 @@ function appendPlayerRows(options: {
         } else {
           label = `Queue ${positionLabel}`;
         }
-        if (queue.playerTeams && player.team) {
-          label = `${label} • ${player.team}`;
+        if (queueLabel && !options.lobbyLabelHidden) {
+          label = `${queueLabel} • ${label}`;
+        }
+        const playerTeamLabel = getLobbyLocalTeamLabel(player);
+        if (queue.playerTeams && playerTeamLabel) {
+          label = `${label} • ${playerTeamLabel}`;
         }
         return label;
       }
@@ -512,34 +527,50 @@ function appendPlayerRows(options: {
 
 function appendGroupRows(options: {
   group: AggregatedRow;
+  groupKey: string;
+  subtitle: string;
   leaf: PanelLeafNode;
   snapshot: GameSnapshot;
   tbody: HTMLElement;
   requestRender: RequestRender;
-  groupType: "clan" | "team";
   metricsCache: Map<string, Metrics>;
   actions: ViewActionHandlers;
   headers: ReadonlyArray<TableHeader>;
   visiblePlayers?: PlayerRecord[];
   expandedOverride?: boolean;
   disableToggle?: boolean;
+  indent?: number;
+  childIndent?: number;
+  defaultExpanded?: boolean;
+  lobbyLabelHidden?: boolean;
+  renderExpandedContent?: (playersToRender: PlayerRecord[]) => void;
 }) {
   const {
     group,
+    groupKey,
+    subtitle,
     leaf,
     snapshot,
     tbody,
     requestRender,
-    groupType,
     metricsCache,
     actions,
     headers,
     visiblePlayers,
     expandedOverride,
     disableToggle,
+    indent,
+    childIndent,
+    defaultExpanded,
+    lobbyLabelHidden,
+    renderExpandedContent,
   } = options;
-  const groupKey = `${groupType}:${group.key}`;
-  const expanded = expandedOverride ?? leaf.expandedGroups.has(groupKey);
+  const isExpandedByDefault = defaultExpanded ?? false;
+  const expanded =
+    expandedOverride ??
+    (isExpandedByDefault
+      ? !leaf.expandedGroups.has(groupKey)
+      : leaf.expandedGroups.has(groupKey));
   const playersToRender = visiblePlayers ?? group.players;
 
   const row = createElement(
@@ -576,18 +607,26 @@ function appendGroupRows(options: {
     firstCell.appendChild(
       createLabelBlock({
         label: `${group.label} (${countLabel})`,
-        subtitle: groupType === "clan" ? "Clan summary" : "Team summary",
-        indent: 0,
+        subtitle,
+        indent: indent ?? 0,
         expanded,
         toggleAttribute,
         rowKey: groupKey,
         onToggle:
           toggleAttribute &&
           ((next) => {
-            if (next) {
-              leaf.expandedGroups.add(groupKey);
+            if (isExpandedByDefault) {
+              if (next) {
+                leaf.expandedGroups.delete(groupKey);
+              } else {
+                leaf.expandedGroups.add(groupKey);
+              }
             } else {
-              leaf.expandedGroups.delete(groupKey);
+              if (next) {
+                leaf.expandedGroups.add(groupKey);
+              } else {
+                leaf.expandedGroups.delete(groupKey);
+              }
             }
             requestRender();
           }),
@@ -614,17 +653,22 @@ function appendGroupRows(options: {
   tbody.appendChild(row);
 
   if (expanded) {
-    for (const player of playersToRender) {
-      appendPlayerRows({
-        player,
-        indent: 1,
-        leaf,
-        snapshot,
-        tbody,
-        metricsCache,
-        actions,
-        headers,
-      });
+    if (renderExpandedContent) {
+      renderExpandedContent(playersToRender);
+    } else {
+      for (const player of playersToRender) {
+        appendPlayerRows({
+          player,
+          indent: childIndent ?? 1,
+          leaf,
+          snapshot,
+          tbody,
+          metricsCache,
+          actions,
+          headers,
+          lobbyLabelHidden,
+        });
+      }
     }
   }
 }
@@ -964,9 +1008,11 @@ function groupPlayers(options: {
   snapshot: GameSnapshot;
   metricsCache: Map<string, Metrics>;
   getKey: (player: PlayerRecord) => string | undefined;
+  getLabel?: (player: PlayerRecord, key: string) => string | undefined;
   sortState: SortState;
 }): AggregatedRow[] {
-  const { players, snapshot, metricsCache, getKey, sortState } = options;
+  const { players, snapshot, metricsCache, getKey, getLabel, sortState } =
+    options;
   const map = new Map<string, AggregatedRow>();
 
   for (const player of players) {
@@ -974,7 +1020,7 @@ function groupPlayers(options: {
     if (!map.has(key)) {
       map.set(key, {
         key,
-        label: key,
+        label: getLabel?.(player, key) ?? key,
         players: [],
         metrics: {
           incoming: 0,
@@ -1027,6 +1073,179 @@ function groupPlayers(options: {
   return rows;
 }
 
+function getLobbyLocalTeamLabel(player: PlayerRecord): string | undefined {
+  if (!player.isLobbyPlayer) {
+    return player.team;
+  }
+  const team = player.team?.trim();
+  if (!team) {
+    return undefined;
+  }
+  const lobbyLabel = player.lobbyLabel?.trim();
+  if (!lobbyLabel) {
+    return team;
+  }
+  if (team === lobbyLabel) {
+    return undefined;
+  }
+  const prefix = `${lobbyLabel} • `;
+  return team.startsWith(prefix) ? team.slice(prefix.length) : team;
+}
+
+function isMultiLobbySnapshot(snapshot: GameSnapshot): boolean {
+  return (
+    !snapshot.players.some((player) => !player.isLobbyPlayer) &&
+    (snapshot.currentLobbyQueues?.length ?? 0) > 1
+  );
+}
+
+function buildLobbyGroups(options: {
+  snapshot: GameSnapshot;
+  players: PlayerRecord[];
+  metricsCache: Map<string, Metrics>;
+  sortState: SortState;
+}): LobbyGroupRow[] {
+  const { snapshot, players, metricsCache, sortState } = options;
+  const grouped = groupPlayers({
+    players,
+    snapshot,
+    metricsCache,
+    getKey: (player) => player.lobbyGameId ?? player.lobbyLabel ?? "Lobby",
+    getLabel: (player) => player.lobbyLabel ?? player.lobbyGameId ?? "Lobby",
+    sortState,
+  });
+  const groupedByKey = new Map(
+    grouped.map((group) => [group.key, group] as const),
+  );
+  const ordered: LobbyGroupRow[] = [];
+
+  for (const queue of snapshot.currentLobbyQueues ?? []) {
+    const key = queue.gameId;
+    const group = groupedByKey.get(key);
+    if (!group) {
+      continue;
+    }
+    ordered.push({
+      ...group,
+      queueLabel: queue.lobbyLabel,
+    });
+    groupedByKey.delete(key);
+  }
+
+  for (const group of groupedByKey.values()) {
+    ordered.push({
+      ...group,
+      queueLabel: group.label,
+    });
+  }
+
+  return ordered;
+}
+
+function createPlayerMatcher(
+  searchFilter: string | undefined,
+  extraFields?: (player: PlayerRecord) => Array<string | undefined>,
+): ((player: PlayerRecord) => boolean) & { filter: string } {
+  const filter = (searchFilter ?? "").trim().toLowerCase();
+  const compiled = filter ? compileSearchQuery(filter) : null;
+  const hasStructuredQuery = !!compiled && compiled.ok;
+  const matcher = ((player: PlayerRecord): boolean => {
+    if (!filter) {
+      return true;
+    }
+    if (hasStructuredQuery) {
+      return matchesSearchQuery(compiled!.ast, { kind: "player", player });
+    }
+    const clan = extractClanTag(player.name);
+    const fields = [
+      player.name,
+      player.id,
+      player.team ?? "",
+      clan ?? "",
+      ...(extraFields?.(player) ?? []),
+    ];
+    return fields.some((field) =>
+      String(field ?? "")
+        .toLowerCase()
+        .includes(filter),
+    );
+  }) as ((player: PlayerRecord) => boolean) & { filter: string };
+  matcher.filter = filter;
+  return matcher;
+}
+
+function appendLobbyGroupedView(options: {
+  lobbyGroups: LobbyGroupRow[];
+  leaf: PanelLeafNode;
+  snapshot: GameSnapshot;
+  tbody: HTMLElement;
+  requestRender: RequestRender;
+  metricsCache: Map<string, Metrics>;
+  actions: ViewActionHandlers;
+  headers: ReadonlyArray<TableHeader>;
+  filter: string;
+  renderLobbyContent: (
+    lobbyGroup: LobbyGroupRow,
+    lobbyPlayers: PlayerRecord[],
+  ) => void;
+}): void {
+  const {
+    lobbyGroups,
+    leaf,
+    snapshot,
+    tbody,
+    requestRender,
+    metricsCache,
+    actions,
+    headers,
+    filter,
+    renderLobbyContent,
+  } = options;
+
+  for (const lobbyGroup of lobbyGroups) {
+    const groupLabelMatches = filter
+      ? lobbyGroup.label.toLowerCase().includes(filter)
+      : false;
+    const matchedPlayers = filter
+      ? lobbyGroup.players.filter(
+          createPlayerMatcher(filter, (player) => [
+            player.lobbyLabel ?? "",
+            getLobbyLocalTeamLabel(player) ?? "",
+          ]),
+        )
+      : lobbyGroup.players;
+    const playersToRender = groupLabelMatches
+      ? lobbyGroup.players
+      : matchedPlayers;
+    if (filter && playersToRender.length === 0) {
+      continue;
+    }
+
+    appendGroupRows({
+      group: lobbyGroup,
+      groupKey: `lobby:${lobbyGroup.key}`,
+      subtitle: "Lobby queue",
+      leaf,
+      snapshot,
+      tbody,
+      requestRender,
+      metricsCache,
+      actions,
+      headers,
+      visiblePlayers: playersToRender,
+      expandedOverride: filter ? true : undefined,
+      defaultExpanded: true,
+      indent: 0,
+      childIndent: 1,
+      disableToggle: Boolean(filter),
+      lobbyLabelHidden: true,
+      renderExpandedContent: (visibleLobbyPlayers) => {
+        renderLobbyContent(lobbyGroup, visibleLobbyPlayers);
+      },
+    });
+  }
+}
+
 function computePlayerMetrics(player: PlayerRecord, snapshot: GameSnapshot) {
   const incoming = player.incomingAttacks.length;
   const outgoing = player.outgoingAttacks.length;
@@ -1071,8 +1290,16 @@ export { computePlayerMetrics, getActiveAlliances };
 
 export function renderPlayersView(options: ViewRenderOptions): HTMLElement {
   return withViewDocument(options.ui.document, () => {
-    const { leaf, snapshot, sortState, onSort, existingContainer, actions } =
-      options;
+    const {
+      leaf,
+      snapshot,
+      sortState,
+      onSort,
+      existingContainer,
+      actions,
+      requestRender,
+      searchFilter,
+    } = options;
     const metricsCache = new Map<string, Metrics>();
     const visibleHeaders = getVisibleHeaders(leaf, leaf.view, TABLE_HEADERS);
     const { container, tbody } = createTableShell({
@@ -1086,18 +1313,60 @@ export function renderPlayersView(options: ViewRenderOptions): HTMLElement {
     const players = [...snapshot.players].sort((a, b) =>
       comparePlayers({ a, b, sortState, snapshot, metricsCache }),
     );
+    const matchesPlayer = createPlayerMatcher(searchFilter, (player) => [
+      player.lobbyLabel ?? "",
+      getLobbyLocalTeamLabel(player) ?? "",
+    ]);
 
-    for (const player of players) {
-      appendPlayerRows({
-        player,
-        indent: 0,
+    if (isMultiLobbySnapshot(snapshot)) {
+      const lobbyGroups = buildLobbyGroups({
+        snapshot,
+        players,
+        metricsCache,
+        sortState,
+      });
+      appendLobbyGroupedView({
+        lobbyGroups,
         leaf,
         snapshot,
         tbody,
+        requestRender,
         metricsCache,
         actions,
         headers: visibleHeaders,
+        filter: matchesPlayer.filter,
+        renderLobbyContent: (_lobbyGroup, lobbyPlayers) => {
+          for (const player of lobbyPlayers) {
+            appendPlayerRows({
+              player,
+              indent: 1,
+              leaf,
+              snapshot,
+              tbody,
+              metricsCache,
+              actions,
+              headers: visibleHeaders,
+              lobbyLabelHidden: true,
+            });
+          }
+        },
       });
+    } else {
+      for (const player of players) {
+        if (matchesPlayer.filter && !matchesPlayer(player)) {
+          continue;
+        }
+        appendPlayerRows({
+          player,
+          indent: 0,
+          leaf,
+          snapshot,
+          tbody,
+          metricsCache,
+          actions,
+          headers: visibleHeaders,
+        });
+      }
     }
 
     registerContextMenuDelegation(container, actions);
@@ -1127,60 +1396,111 @@ export function renderClanView(options: ViewRenderOptions): HTMLElement {
       headers: visibleHeaders,
       document: viewDocument,
     });
-    const groups = groupPlayers({
-      players: snapshot.players,
-      snapshot,
-      metricsCache,
-      getKey: (player) => extractClanTag(player.name),
-      sortState,
-    });
+    const matchesPlayer = createPlayerMatcher(searchFilter, (player) => [
+      player.lobbyLabel ?? "",
+      getLobbyLocalTeamLabel(player) ?? "",
+    ]);
 
-    const filter = (searchFilter ?? "").trim().toLowerCase();
-    const compiled = filter ? compileSearchQuery(filter) : null;
-    const hasStructuredQuery = !!compiled && compiled.ok;
-    const matchesPlayer = (player: PlayerRecord): boolean => {
-      if (!filter) {
-        return true;
-      }
-      if (hasStructuredQuery) {
-        return matchesSearchQuery(compiled!.ast, { kind: "player", player });
-      }
-      const clan = extractClanTag(player.name);
-      const fields = [player.name, player.id, player.team ?? "", clan ?? ""];
-      return fields.some((field) =>
-        String(field ?? "")
-          .toLowerCase()
-          .includes(filter),
+    if (isMultiLobbySnapshot(snapshot)) {
+      const sortedPlayers = [...snapshot.players].sort((a, b) =>
+        comparePlayers({ a, b, sortState, snapshot, metricsCache }),
       );
-    };
-
-    for (const group of groups) {
-      const groupLabelMatches = filter
-        ? group.label.toLowerCase().includes(filter)
-        : false;
-      const matchedPlayers = filter
-        ? group.players.filter(matchesPlayer)
-        : group.players;
-      const playersToRender = groupLabelMatches
-        ? group.players
-        : matchedPlayers;
-      if (filter && playersToRender.length === 0) {
-        continue;
-      }
-      appendGroupRows({
-        group,
+      const lobbyGroups = buildLobbyGroups({
+        snapshot,
+        players: sortedPlayers,
+        metricsCache,
+        sortState,
+      });
+      appendLobbyGroupedView({
+        lobbyGroups,
         leaf,
         snapshot,
         tbody,
         requestRender,
-        groupType: "clan",
         metricsCache,
         actions,
         headers: visibleHeaders,
-        visiblePlayers: playersToRender,
-        expandedOverride: filter ? true : undefined,
-        disableToggle: Boolean(filter),
+        filter: matchesPlayer.filter,
+        renderLobbyContent: (lobbyGroup, lobbyPlayers) => {
+          const groups = groupPlayers({
+            players: lobbyPlayers,
+            snapshot,
+            metricsCache,
+            getKey: (player) => extractClanTag(player.name),
+            sortState,
+          });
+          for (const group of groups) {
+            const groupLabelMatches = matchesPlayer.filter
+              ? group.label.toLowerCase().includes(matchesPlayer.filter)
+              : false;
+            const matchedPlayers = matchesPlayer.filter
+              ? group.players.filter(matchesPlayer)
+              : group.players;
+            const playersToRender = groupLabelMatches
+              ? group.players
+              : matchedPlayers;
+            if (matchesPlayer.filter && playersToRender.length === 0) {
+              continue;
+            }
+            appendGroupRows({
+              group,
+              groupKey: `lobby:${lobbyGroup.key}:clan:${group.key}`,
+              subtitle: "Clan summary",
+              leaf,
+              snapshot,
+              tbody,
+              requestRender,
+              metricsCache,
+              actions,
+              headers: visibleHeaders,
+              visiblePlayers: playersToRender,
+              expandedOverride: matchesPlayer.filter ? true : undefined,
+              indent: 1,
+              childIndent: 2,
+              disableToggle: Boolean(matchesPlayer.filter),
+              lobbyLabelHidden: true,
+            });
+          }
+        },
       });
+    } else {
+      const groups = groupPlayers({
+        players: snapshot.players,
+        snapshot,
+        metricsCache,
+        getKey: (player) => extractClanTag(player.name),
+        sortState,
+      });
+
+      for (const group of groups) {
+        const groupLabelMatches = matchesPlayer.filter
+          ? group.label.toLowerCase().includes(matchesPlayer.filter)
+          : false;
+        const matchedPlayers = matchesPlayer.filter
+          ? group.players.filter(matchesPlayer)
+          : group.players;
+        const playersToRender = groupLabelMatches
+          ? group.players
+          : matchedPlayers;
+        if (matchesPlayer.filter && playersToRender.length === 0) {
+          continue;
+        }
+        appendGroupRows({
+          group,
+          groupKey: `clan:${group.key}`,
+          subtitle: "Clan summary",
+          leaf,
+          snapshot,
+          tbody,
+          requestRender,
+          metricsCache,
+          actions,
+          headers: visibleHeaders,
+          visiblePlayers: playersToRender,
+          expandedOverride: matchesPlayer.filter ? true : undefined,
+          disableToggle: Boolean(matchesPlayer.filter),
+        });
+      }
     }
 
     registerContextMenuDelegation(container, actions);
@@ -1210,60 +1530,113 @@ export function renderTeamView(options: ViewRenderOptions): HTMLElement {
       headers: visibleHeaders,
       document: viewDocument,
     });
-    const groups = groupPlayers({
-      players: snapshot.players,
-      snapshot,
-      metricsCache,
-      getKey: (player) => player.team ?? "Solo",
-      sortState,
-    });
+    const matchesPlayer = createPlayerMatcher(searchFilter, (player) => [
+      player.lobbyLabel ?? "",
+      getLobbyLocalTeamLabel(player) ?? "",
+    ]);
 
-    const filter = (searchFilter ?? "").trim().toLowerCase();
-    const compiled = filter ? compileSearchQuery(filter) : null;
-    const hasStructuredQuery = !!compiled && compiled.ok;
-    const matchesPlayer = (player: PlayerRecord): boolean => {
-      if (!filter) {
-        return true;
-      }
-      if (hasStructuredQuery) {
-        return matchesSearchQuery(compiled!.ast, { kind: "player", player });
-      }
-      const clan = extractClanTag(player.name);
-      const fields = [player.name, player.id, player.team ?? "", clan ?? ""];
-      return fields.some((field) =>
-        String(field ?? "")
-          .toLowerCase()
-          .includes(filter),
+    if (isMultiLobbySnapshot(snapshot)) {
+      const sortedPlayers = [...snapshot.players].sort((a, b) =>
+        comparePlayers({ a, b, sortState, snapshot, metricsCache }),
       );
-    };
-
-    for (const group of groups) {
-      const groupLabelMatches = filter
-        ? group.label.toLowerCase().includes(filter)
-        : false;
-      const matchedPlayers = filter
-        ? group.players.filter(matchesPlayer)
-        : group.players;
-      const playersToRender = groupLabelMatches
-        ? group.players
-        : matchedPlayers;
-      if (filter && playersToRender.length === 0) {
-        continue;
-      }
-      appendGroupRows({
-        group,
+      const lobbyGroups = buildLobbyGroups({
+        snapshot,
+        players: sortedPlayers,
+        metricsCache,
+        sortState,
+      });
+      appendLobbyGroupedView({
+        lobbyGroups,
         leaf,
         snapshot,
         tbody,
         requestRender,
-        groupType: "team",
         metricsCache,
         actions,
         headers: visibleHeaders,
-        visiblePlayers: playersToRender,
-        expandedOverride: filter ? true : undefined,
-        disableToggle: Boolean(filter),
+        filter: matchesPlayer.filter,
+        renderLobbyContent: (lobbyGroup, lobbyPlayers) => {
+          const groups = groupPlayers({
+            players: lobbyPlayers,
+            snapshot,
+            metricsCache,
+            getKey: (player) => getLobbyLocalTeamLabel(player) ?? "Solo",
+            getLabel: (player) => getLobbyLocalTeamLabel(player) ?? "Solo",
+            sortState,
+          });
+          for (const group of groups) {
+            const groupLabelMatches = matchesPlayer.filter
+              ? group.label.toLowerCase().includes(matchesPlayer.filter)
+              : false;
+            const matchedPlayers = matchesPlayer.filter
+              ? group.players.filter(matchesPlayer)
+              : group.players;
+            const playersToRender = groupLabelMatches
+              ? group.players
+              : matchedPlayers;
+            if (matchesPlayer.filter && playersToRender.length === 0) {
+              continue;
+            }
+            appendGroupRows({
+              group,
+              groupKey: `lobby:${lobbyGroup.key}:team:${group.key}`,
+              subtitle: "Team summary",
+              leaf,
+              snapshot,
+              tbody,
+              requestRender,
+              metricsCache,
+              actions,
+              headers: visibleHeaders,
+              visiblePlayers: playersToRender,
+              expandedOverride: matchesPlayer.filter ? true : undefined,
+              indent: 1,
+              childIndent: 2,
+              disableToggle: Boolean(matchesPlayer.filter),
+              lobbyLabelHidden: true,
+            });
+          }
+        },
       });
+    } else {
+      const groups = groupPlayers({
+        players: snapshot.players,
+        snapshot,
+        metricsCache,
+        getKey: (player) => player.team ?? "Solo",
+        getLabel: (player) => player.team ?? "Solo",
+        sortState,
+      });
+
+      for (const group of groups) {
+        const groupLabelMatches = matchesPlayer.filter
+          ? group.label.toLowerCase().includes(matchesPlayer.filter)
+          : false;
+        const matchedPlayers = matchesPlayer.filter
+          ? group.players.filter(matchesPlayer)
+          : group.players;
+        const playersToRender = groupLabelMatches
+          ? group.players
+          : matchedPlayers;
+        if (matchesPlayer.filter && playersToRender.length === 0) {
+          continue;
+        }
+        appendGroupRows({
+          group,
+          groupKey: `team:${group.key}`,
+          subtitle: "Team summary",
+          leaf,
+          snapshot,
+          tbody,
+          requestRender,
+          metricsCache,
+          actions,
+          headers: visibleHeaders,
+          visiblePlayers: playersToRender,
+          expandedOverride: matchesPlayer.filter ? true : undefined,
+          disableToggle: Boolean(matchesPlayer.filter),
+        });
+      }
     }
 
     registerContextMenuDelegation(container, actions);
