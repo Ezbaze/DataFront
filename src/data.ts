@@ -101,6 +101,9 @@ const ATTACK_BORDER_ZOOM_MIN_SCALE_TINY = 2.7;
 const ATTACK_BORDER_ZOOM_MIN_SCALE_SMALL = 2.3;
 const ATTACK_BORDER_ZOOM_MIN_SCALE_MEDIUM = 1.9;
 const ATTACK_BORDER_ZOOM_MIN_SCALE_LARGE = 1.45;
+// Disabled until the featured lobby queue flow can be reworked without
+// issuing its own background requests.
+const ENABLE_FEATURED_LOBBY_QUEUE_REQUESTS = false;
 const PUBLIC_LOBBY_POLL_INTERVAL_MS = 2000;
 const LOBBY_DETAILS_CACHE_MS = 1500;
 const DEFAULT_WORKER_COUNT = 20;
@@ -734,6 +737,10 @@ export class DataStore {
           : null;
     };
     this.publicLobbiesHandler = (event: Event) => {
+      if (!ENABLE_FEATURED_LOBBY_QUEUE_REQUESTS) {
+        this.latestFeaturedLobbySummaries = null;
+        return;
+      }
       const custom = event as CustomEvent<{ payload?: unknown }>;
       const payload = custom.detail?.payload;
       const summaries = this.normalizePublicLobbyUpdatePayload(payload);
@@ -6779,6 +6786,13 @@ export class DataStore {
     }
     if (this.lobbyQueueRefreshHandle !== undefined) {
       window.clearInterval(this.lobbyQueueRefreshHandle);
+      this.lobbyQueueRefreshHandle = undefined;
+    }
+    if (!ENABLE_FEATURED_LOBBY_QUEUE_REQUESTS) {
+      this.latestFeaturedLobbySummaries = null;
+      this.lobbyQueueRefreshPromise = null;
+      this.clearLobbyQueueSnapshot();
+      return;
     }
     const tick = () => this.enqueueLobbyQueueRefresh();
     tick();
@@ -6789,6 +6803,10 @@ export class DataStore {
   }
 
   private enqueueLobbyQueueRefresh(): void {
+    if (!ENABLE_FEATURED_LOBBY_QUEUE_REQUESTS) {
+      this.clearLobbyQueueSnapshot();
+      return;
+    }
     if (this.lobbyQueueRefreshPromise) {
       return;
     }
@@ -6800,6 +6818,10 @@ export class DataStore {
   }
 
   private async performLobbyQueueRefresh(): Promise<void> {
+    if (!ENABLE_FEATURED_LOBBY_QUEUE_REQUESTS) {
+      this.clearLobbyQueueSnapshot();
+      return;
+    }
     if (this.game) {
       this.clearLobbyQueueSnapshot();
       return;
@@ -6865,6 +6887,9 @@ export class DataStore {
   }
 
   private async resolveFeaturedLobbies(): Promise<LobbySummary[]> {
+    if (!ENABLE_FEATURED_LOBBY_QUEUE_REQUESTS) {
+      return [];
+    }
     if (this.latestFeaturedLobbySummaries?.length) {
       return this.latestFeaturedLobbySummaries;
     }
@@ -7017,7 +7042,7 @@ export class DataStore {
   }
 
   private async fetchPublicLobbySummaries(): Promise<LobbySummary[]> {
-    if (typeof fetch !== "function") {
+    if (!ENABLE_FEATURED_LOBBY_QUEUE_REQUESTS || typeof fetch !== "function") {
       return [];
     }
     try {
@@ -7055,6 +7080,9 @@ export class DataStore {
   private async buildLobbyQueueInfo(
     summary: LobbySummary,
   ): Promise<LobbyQueueInfo | null> {
+    if (!ENABLE_FEATURED_LOBBY_QUEUE_REQUESTS) {
+      return null;
+    }
     const details = await this.fetchLobbyDetails(summary.gameID);
     if (!details) {
       return null;
@@ -7188,6 +7216,9 @@ export class DataStore {
   private async fetchLobbyDetails(
     gameId: string,
   ): Promise<LobbyDetails | null> {
+    if (!ENABLE_FEATURED_LOBBY_QUEUE_REQUESTS) {
+      return null;
+    }
     const now = Date.now();
     const cached = this.lobbyDetailsCache.get(gameId);
     if (cached && cached.expiresAt > now) {
@@ -7264,7 +7295,7 @@ export class DataStore {
   }
 
   private async fetchLobbyWorkerInfo(): Promise<LobbyWorkerInfo> {
-    if (typeof fetch !== "function") {
+    if (!ENABLE_FEATURED_LOBBY_QUEUE_REQUESTS || typeof fetch !== "function") {
       return { workerCount: DEFAULT_WORKER_COUNT };
     }
     try {

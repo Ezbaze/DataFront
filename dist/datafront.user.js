@@ -2,7 +2,7 @@
 // ==UserScript==
 // @name			DataFront
 // @namespace		https://openfront.io/
-// @version			0.1.8
+// @version			0.1.9
 // @description		Adds a resizable, splittable strategic sidebar for OpenFront players, clans, and teams.
 // @author			ezbaze
 // @match			https://*.openfront.io/*
@@ -11900,16 +11900,9 @@
   const ATTACK_BORDER_ZOOM_MIN_SCALE_SMALL = 2.3;
   const ATTACK_BORDER_ZOOM_MIN_SCALE_MEDIUM = 1.9;
   const ATTACK_BORDER_ZOOM_MIN_SCALE_LARGE = 1.45;
-  const PUBLIC_LOBBY_POLL_INTERVAL_MS = 2000;
-  const LOBBY_DETAILS_CACHE_MS = 1500;
   const DEFAULT_WORKER_COUNT = 20;
   const USERNAME_STORAGE_KEY = "username";
   const SIDEBAR_STATE_STORAGE_KEY = "datafront:state";
-  const WORKER_COUNT_BY_ENV = {
-      prod: 20,
-      staging: 2,
-      dev: 2,
-  };
   function normalizePersistedOverlayMap(value) {
       if (!value || typeof value !== "object") {
           return undefined;
@@ -12134,12 +12127,10 @@
                       : null;
           };
           this.publicLobbiesHandler = (event) => {
-              const custom = event;
-              const payload = custom.detail?.payload;
-              const summaries = this.normalizePublicLobbyUpdatePayload(payload);
-              this.latestFeaturedLobbySummaries =
-                  summaries.length > 0 ? summaries : null;
-              this.enqueueLobbyQueueRefresh();
+              {
+                  this.latestFeaturedLobbySummaries = null;
+                  return;
+              }
           };
           this.hostDocument.addEventListener("userMeResponse", this.userMeHandler);
           this.hostDocument.addEventListener("public-lobbies-update", this.publicLobbiesHandler);
@@ -17115,44 +17106,26 @@
           }
           if (this.lobbyQueueRefreshHandle !== undefined) {
               window.clearInterval(this.lobbyQueueRefreshHandle);
+              this.lobbyQueueRefreshHandle = undefined;
           }
-          const tick = () => this.enqueueLobbyQueueRefresh();
-          tick();
-          this.lobbyQueueRefreshHandle = window.setInterval(tick, PUBLIC_LOBBY_POLL_INTERVAL_MS);
+          {
+              this.latestFeaturedLobbySummaries = null;
+              this.lobbyQueueRefreshPromise = null;
+              this.clearLobbyQueueSnapshot();
+              return;
+          }
       }
       enqueueLobbyQueueRefresh() {
-          if (this.lobbyQueueRefreshPromise) {
+          {
+              this.clearLobbyQueueSnapshot();
               return;
           }
-          this.lobbyQueueRefreshPromise = this.performLobbyQueueRefresh().finally(() => {
-              this.lobbyQueueRefreshPromise = null;
-          });
       }
       async performLobbyQueueRefresh() {
-          if (this.game) {
+          {
               this.clearLobbyQueueSnapshot();
               return;
           }
-          const lobbies = await this.resolveFeaturedLobbies();
-          if (this.game) {
-              this.clearLobbyQueueSnapshot();
-              return;
-          }
-          if (lobbies.length === 0) {
-              this.clearLobbyQueueSnapshot();
-              return;
-          }
-          const queueCandidates = await Promise.all(lobbies.map((lobby) => this.buildLobbyQueueInfo(lobby)));
-          if (this.game) {
-              this.clearLobbyQueueSnapshot();
-              return;
-          }
-          const queues = queueCandidates.filter((queue) => Boolean(queue));
-          if (queues.length === 0) {
-              this.clearLobbyQueueSnapshot();
-              return;
-          }
-          this.applyLobbyQueues(queues);
       }
       clearLobbyQueueSnapshot() {
           const hadQueue = Boolean(this.snapshot.currentLobbyQueue);
@@ -17184,15 +17157,9 @@
           this.notify();
       }
       async resolveFeaturedLobbies() {
-          if (this.latestFeaturedLobbySummaries?.length) {
-              return this.latestFeaturedLobbySummaries;
+          {
+              return [];
           }
-          const fromSelector = this.readFeaturedLobbiesFromSelector();
-          if (fromSelector.length > 0) {
-              return fromSelector;
-          }
-          const summaries = await this.fetchPublicLobbySummaries();
-          return summaries;
       }
       readFeaturedLobbiesFromSelector() {
           const element = this.hostDocument.querySelector("game-mode-selector");
@@ -17312,75 +17279,14 @@
           return safeMapName || safeModeName || "Lobby queue";
       }
       async fetchPublicLobbySummaries() {
-          if (typeof fetch !== "function") {
-              return [];
-          }
-          try {
-              const response = await fetch("/api/public_lobbies", {
-                  method: "GET",
-                  cache: "no-store",
-              });
-              if (!response.ok) {
-                  return [];
-              }
-              const contentType = response.headers.get("content-type") ?? "";
-              if (!contentType.toLowerCase().includes("json")) {
-                  return [];
-              }
-              const payload = (await response.json());
-              if (!payload || !Array.isArray(payload.lobbies)) {
-                  return [];
-              }
-              const summaries = [];
-              for (const entry of payload.lobbies) {
-                  const normalized = this.normalizeLobbySummary(entry);
-                  if (normalized) {
-                      summaries.push(normalized);
-                  }
-              }
-              return this.prioritizeLobbySummaries(summaries);
-          }
-          catch (error) {
-              console.warn("Failed to fetch public lobby list", error);
+          {
               return [];
           }
       }
       async buildLobbyQueueInfo(summary) {
-          const details = await this.fetchLobbyDetails(summary.gameID);
-          if (!details) {
+          {
               return null;
           }
-          const now = Date.now();
-          const players = this.deriveLobbyPlayerList(details);
-          const playerCount = players.length > 0
-              ? players.length
-              : (summary.numClients ?? details.numClients ?? 0);
-          const mapName = summary.gameConfig?.gameMap ??
-              details.gameConfig?.gameMap ??
-              "Unknown map";
-          const modeName = summary.gameConfig?.gameMode ??
-              details.gameConfig?.gameMode ??
-              "Unknown mode";
-          const playerTeams = summary.gameConfig?.playerTeams ?? details.gameConfig?.playerTeams;
-          const inferredMaxPlayers = summary.gameConfig?.maxPlayers ?? details.gameConfig?.maxPlayers;
-          const maxPlayers = typeof inferredMaxPlayers === "number"
-              ? Math.max(inferredMaxPlayers, playerCount)
-              : Math.max(playerCount, 0);
-          const startsAtMs = this.getLobbyStartTime(summary, details);
-          const lobbyLabel = this.formatLobbyQueueLabel(mapName, modeName);
-          return {
-              gameId: summary.gameID,
-              mapName,
-              modeName,
-              lobbyLabel,
-              playerCount,
-              maxPlayers,
-              startsAtMs,
-              updatedAtMs: now,
-              players,
-              playerTeams,
-              publicGameType: summary.publicGameType,
-          };
       }
       deriveLobbyPlayerList(details) {
           const players = [];
@@ -17456,37 +17362,9 @@
           });
       }
       async fetchLobbyDetails(gameId) {
-          const now = Date.now();
-          const cached = this.lobbyDetailsCache.get(gameId);
-          if (cached && cached.expiresAt > now) {
-              return cached.details;
-          }
-          const workerPath = await this.resolveWorkerPath(gameId);
-          if (!workerPath || typeof fetch !== "function") {
+          {
               return null;
           }
-          try {
-              const response = await fetch(`/${workerPath}/api/game/${gameId}`, {
-                  method: "GET",
-                  cache: "no-store",
-              });
-              if (!response.ok) {
-                  return null;
-              }
-              const payload = (await response.json());
-              const normalized = this.normalizeLobbyDetails(payload);
-              if (normalized) {
-                  this.lobbyDetailsCache.set(gameId, {
-                      expiresAt: now + LOBBY_DETAILS_CACHE_MS,
-                      details: normalized,
-                  });
-                  return normalized;
-              }
-          }
-          catch (error) {
-              console.warn(`Failed to fetch lobby ${gameId}`, error);
-          }
-          return null;
       }
       normalizeLobbyDetails(details) {
           const summary = this.normalizeLobbySummary(details);
@@ -17525,24 +17403,7 @@
           return this.lobbyWorkerInfoPromise;
       }
       async fetchLobbyWorkerInfo() {
-          if (typeof fetch !== "function") {
-              return { workerCount: DEFAULT_WORKER_COUNT };
-          }
-          try {
-              const response = await fetch("/api/env", {
-                  method: "GET",
-                  cache: "no-store",
-              });
-              if (!response.ok) {
-                  return { workerCount: DEFAULT_WORKER_COUNT };
-              }
-              const payload = (await response.json());
-              const env = typeof payload?.game_env === "string" ? payload.game_env : "";
-              const workerCount = WORKER_COUNT_BY_ENV[env] ?? DEFAULT_WORKER_COUNT;
-              return { workerCount };
-          }
-          catch (error) {
-              console.warn("Failed to resolve server environment", error);
+          {
               return { workerCount: DEFAULT_WORKER_COUNT };
           }
       }
