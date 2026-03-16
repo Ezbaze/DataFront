@@ -1,6 +1,17 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { extractClanTag } from "./utils";
+import { extractClanTag, focusTile } from "./utils";
+
+const originalDocument = globalThis.document;
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  if (originalDocument === undefined) {
+    Reflect.deleteProperty(globalThis, "document");
+    return;
+  }
+  globalThis.document = originalDocument;
+});
 
 describe("extractClanTag", () => {
   it("returns undefined when no bracketed tag exists", () => {
@@ -26,5 +37,30 @@ describe("extractClanTag", () => {
   it("normalizes to uppercase for matching", () => {
     expect(extractClanTag("[nu] Alice")).toBe("NU");
     expect(extractClanTag("[nU1] Alice")).toBe("NU1");
+  });
+});
+
+describe("focusTile", () => {
+  it("uses the OpenFront transform handler when present", () => {
+    const onGoToPosition = vi.fn();
+    const fakeDocument = {
+      querySelector: vi.fn((selector: string) => {
+        if (selector === "emoji-table") {
+          return {
+            transformHandler: {
+              onGoToPosition,
+            },
+          };
+        }
+        return null;
+      }),
+      contains: vi.fn(() => true),
+    } as unknown as Document;
+    globalThis.document = fakeDocument;
+
+    const focused = focusTile({ x: 12, y: 34 });
+
+    expect(focused).toBe(true);
+    expect(onGoToPosition).toHaveBeenCalledWith({ x: 12, y: 34 });
   });
 });

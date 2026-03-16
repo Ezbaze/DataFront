@@ -88,6 +88,22 @@ type GoToEmitter = ((x: number, y: number) => void) | null;
 let cachedGoToEmitter: GoToEmitter = null;
 let cachedEmitterElement: Element | null = null;
 
+interface TransformHandlerLike {
+  onGoToPosition?: (event: { x: number; y: number }) => void;
+}
+
+type TransformHandlerHost = Element & {
+  transformHandler?: TransformHandlerLike;
+  transform?: TransformHandlerLike;
+};
+
+const TRANSFORM_HANDLER_SELECTORS = [
+  "emoji-table",
+  "build-menu",
+  "spawn-timer",
+  "player-info-overlay",
+] as const;
+
 const GO_TO_SELECTORS = [
   "events-display",
   "control-panel",
@@ -105,6 +121,25 @@ function resolveGoToEmitter(): GoToEmitter {
 
   cachedGoToEmitter = null;
   cachedEmitterElement = null;
+
+  for (const selector of TRANSFORM_HANDLER_SELECTORS) {
+    const element = document.querySelector(
+      selector,
+    ) as TransformHandlerHost | null;
+    if (!element) {
+      continue;
+    }
+
+    const transformHandler = element.transformHandler ?? element.transform;
+    const onGoToPosition = transformHandler?.onGoToPosition;
+    if (typeof onGoToPosition === "function") {
+      cachedEmitterElement = element;
+      cachedGoToEmitter = (x: number, y: number) => {
+        onGoToPosition.call(transformHandler, { x, y });
+      };
+      return cachedGoToEmitter;
+    }
+  }
 
   for (const selector of GO_TO_SELECTORS) {
     const element = document.querySelector(selector) as

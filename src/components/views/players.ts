@@ -23,12 +23,10 @@ import {
 } from "../../trade";
 import {
   applyPersistentHover,
-  applyRowSelectionIndicator,
   cellClassForColumn,
   compareSortValues,
   createPlayerNameElement,
   createTableShell,
-  getColumnVisibilitySignature,
   getVisibleHeaders,
   TABLE_HEADERS,
 } from "./helpers";
@@ -422,6 +420,16 @@ function appendPlayerRows(options: {
   const metrics = getMetrics(player, snapshot, metricsCache);
   const rowKey = player.id;
   const isLobbyPlayer = Boolean(player.isLobbyPlayer);
+  const focusPlayer = () => {
+    if (typeof actions.focusPlayer === "function") {
+      actions.focusPlayer(player.id);
+      return;
+    }
+    actions.showPlayerDetails(player.id);
+    if (player.position) {
+      focusTile(player.position);
+    }
+  };
 
   const tr = createElement("tr", "hover:bg-slate-800/50 transition-colors");
   tr.dataset.rowKey = rowKey;
@@ -504,6 +512,7 @@ function appendPlayerRows(options: {
         subtitleClassName,
         indent,
         focus: focusTarget,
+        onFocus: isLobbyPlayer ? undefined : focusPlayer,
       }),
     );
     tr.appendChild(firstCell);
@@ -741,6 +750,7 @@ function createLabelBlock(options: {
   rowKey?: string;
   onToggle?: (expanded: boolean) => void;
   focus?: TileSummary;
+  onFocus?: () => void;
   persistHover?: boolean;
   onToggleHoverChange?: (hovered: boolean) => void;
 }): HTMLElement {
@@ -754,6 +764,7 @@ function createLabelBlock(options: {
     rowKey,
     onToggle,
     focus,
+    onFocus,
     persistHover,
     onToggleHoverChange,
   } = options;
@@ -766,6 +777,7 @@ function createLabelBlock(options: {
     className:
       "block font-semibold text-slate-100 transition-colors hover:text-sky-200",
     document: viewDocument,
+    onActivate: onFocus,
   });
   labelBlock.appendChild(labelEl);
   if (subtitle) {

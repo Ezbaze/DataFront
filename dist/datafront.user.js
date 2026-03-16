@@ -2,7 +2,7 @@
 // ==UserScript==
 // @name			DataFront
 // @namespace		https://openfront.io/
-// @version			0.1.9
+// @version			0.2.0
 // @description		Adds a resizable, splittable strategic sidebar for OpenFront players, clans, and teams.
 // @author			ezbaze
 // @match			https://*.openfront.io/*
@@ -495,6 +495,12 @@
   }
   let cachedGoToEmitter = null;
   let cachedEmitterElement = null;
+  const TRANSFORM_HANDLER_SELECTORS = [
+      "emoji-table",
+      "build-menu",
+      "spawn-timer",
+      "player-info-overlay",
+  ];
   const GO_TO_SELECTORS = [
       "events-display",
       "control-panel",
@@ -508,6 +514,21 @@
       }
       cachedGoToEmitter = null;
       cachedEmitterElement = null;
+      for (const selector of TRANSFORM_HANDLER_SELECTORS) {
+          const element = document.querySelector(selector);
+          if (!element) {
+              continue;
+          }
+          const transformHandler = element.transformHandler ?? element.transform;
+          const onGoToPosition = transformHandler?.onGoToPosition;
+          if (typeof onGoToPosition === "function") {
+              cachedEmitterElement = element;
+              cachedGoToEmitter = (x, y) => {
+                  onGoToPosition.call(transformHandler, { x, y });
+              };
+              return cachedGoToEmitter;
+          }
+      }
       for (const selector of GO_TO_SELECTORS) {
           const element = document.querySelector(selector);
           if (!element) {
@@ -858,11 +879,12 @@
       if (options?.className) {
           classNames.push(options.className);
       }
-      if (position) {
+      const isInteractive = typeof options?.onActivate === "function" || !!position;
+      if (isInteractive) {
           classNames.push("cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-500/60 rounded-sm transition-colors");
       }
       const className = classNames.filter(Boolean).join(" ").trim();
-      if (!position) {
+      if (!isInteractive) {
           const tag = options?.asBlock ? "div" : "span";
           return createElement$8(tag, className, label, doc);
       }
@@ -870,6 +892,10 @@
       button.type = "button";
       button.title = `Focus on ${label}`;
       attachImmediateTileFocus(button, () => {
+          if (typeof options?.onActivate === "function") {
+              options.onActivate();
+              return;
+          }
           focusTile(position);
       });
       return button;
@@ -2895,6 +2921,16 @@
       const metrics = getMetrics(player, snapshot, metricsCache);
       const rowKey = player.id;
       const isLobbyPlayer = Boolean(player.isLobbyPlayer);
+      const focusPlayer = () => {
+          if (typeof actions.focusPlayer === "function") {
+              actions.focusPlayer(player.id);
+              return;
+          }
+          actions.showPlayerDetails(player.id);
+          if (player.position) {
+              focusTile(player.position);
+          }
+      };
       const tr = createElement$7("tr", "hover:bg-slate-800/50 transition-colors");
       tr.dataset.rowKey = rowKey;
       applyPersistentHover(tr, leaf, rowKey, "bg-slate-800/50");
@@ -2965,6 +3001,7 @@
               subtitleClassName,
               indent,
               focus: focusTarget,
+              onFocus: isLobbyPlayer ? undefined : focusPlayer,
           }));
           tr.appendChild(firstCell);
       }
@@ -3120,7 +3157,7 @@
       }
   }
   function createLabelBlock(options) {
-      const { label, subtitle, subtitleClassName, indent, expanded, toggleAttribute, rowKey, onToggle, focus, persistHover, onToggleHoverChange, } = options;
+      const { label, subtitle, subtitleClassName, indent, expanded, toggleAttribute, rowKey, onToggle, focus, onFocus, persistHover, onToggleHoverChange, } = options;
       const container = createElement$7("div", "flex items-start gap-3");
       container.style.marginLeft = `${indent * 1.5}rem`;
       const labelBlock = createElement$7("div", "space-y-1");
@@ -3128,6 +3165,7 @@
           asBlock: true,
           className: "block font-semibold text-slate-100 transition-colors hover:text-sky-200",
           document: viewDocument$7,
+          onActivate: onFocus,
       });
       labelBlock.appendChild(labelEl);
       if (subtitle) {
@@ -4316,7 +4354,7 @@
   }
   function renderPlayerPanelView(options) {
       return withViewDocument$4(options.ui.document, () => {
-          const { leaf, snapshot, existingContainer } = options;
+          const { leaf, snapshot, existingContainer, actions } = options;
           const containerClass = "relative flex-1 overflow-auto border border-slate-900/70 bg-slate-950/60 backdrop-blur-sm";
           const canReuse = !!existingContainer &&
               existingContainer.dataset.sidebarRole === SidebarRole.PlayerPanel &&
@@ -4340,10 +4378,18 @@
               else {
                   const header = createElement$4("div", "space-y-3");
                   const title = createElement$4("div", "flex flex-wrap items-baseline justify-between gap-3");
+                  const focusPlayer = actions.focusPlayer;
                   const name = createPlayerNameElement(player.name, player.position, {
                       asBlock: true,
                       className: "text-lg font-semibold text-slate-100 transition-colors hover:text-sky-200",
                       document: viewDocument$4,
+                      onActivate: typeof focusPlayer === "function"
+                          ? () => focusPlayer(player.id)
+                          : player.position
+                              ? () => {
+                                  focusTile(player.position);
+                              }
+                              : undefined,
                   });
                   title.appendChild(name);
                   const meta = [player.clan, player.team].filter(Boolean).join(" • ");

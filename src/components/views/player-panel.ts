@@ -1,6 +1,7 @@
 import type { GameSnapshot, PlayerRecord } from "../../types";
 import {
   createElement as createElementBase,
+  focusTile,
   formatCountdown,
   formatNumber,
   formatTroopCount,
@@ -33,7 +34,7 @@ function createElement<K extends keyof HTMLElementTagNameMap>(
 
 export function renderPlayerPanelView(options: ViewRenderOptions): HTMLElement {
   return withViewDocument(options.ui.document, () => {
-    const { leaf, snapshot, existingContainer } = options;
+    const { leaf, snapshot, existingContainer, actions } = options;
     const containerClass =
       "relative flex-1 overflow-auto border border-slate-900/70 bg-slate-950/60 backdrop-blur-sm";
     const canReuse =
@@ -77,11 +78,20 @@ export function renderPlayerPanelView(options: ViewRenderOptions): HTMLElement {
           "div",
           "flex flex-wrap items-baseline justify-between gap-3",
         );
+        const focusPlayer = actions.focusPlayer;
         const name = createPlayerNameElement(player.name, player.position, {
           asBlock: true,
           className:
             "text-lg font-semibold text-slate-100 transition-colors hover:text-sky-200",
           document: viewDocument,
+          onActivate:
+            typeof focusPlayer === "function"
+              ? () => focusPlayer(player.id)
+              : player.position
+                ? () => {
+                    focusTile(player.position);
+                  }
+                : undefined,
         });
         title.appendChild(name);
 

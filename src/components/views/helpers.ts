@@ -89,21 +89,27 @@ export function applyPersistentHover(
 export function createPlayerNameElement(
   label: string,
   position: TileSummary | undefined,
-  options?: { className?: string; asBlock?: boolean; document?: Document },
+  options?: {
+    className?: string;
+    asBlock?: boolean;
+    document?: Document;
+    onActivate?: () => void;
+  },
 ): HTMLElement {
   const doc = options?.document ?? document;
   const classNames: string[] = [];
   if (options?.className) {
     classNames.push(options.className);
   }
-  if (position) {
+  const isInteractive = typeof options?.onActivate === "function" || !!position;
+  if (isInteractive) {
     classNames.push(
       "cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-500/60 rounded-sm transition-colors",
     );
   }
   const className = classNames.filter(Boolean).join(" ").trim();
 
-  if (!position) {
+  if (!isInteractive) {
     const tag = options?.asBlock ? "div" : "span";
     return createElement(tag as "div" | "span", className, label, doc);
   }
@@ -112,6 +118,10 @@ export function createPlayerNameElement(
   button.type = "button";
   button.title = `Focus on ${label}`;
   attachImmediateTileFocus(button, () => {
+    if (typeof options?.onActivate === "function") {
+      options.onActivate();
+      return;
+    }
     focusTile(position);
   });
   return button;
